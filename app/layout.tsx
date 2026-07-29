@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     url: "https://luma-studio-preview.armonon.chatgpt.site",
     images: [
       {
-        url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
+        url: "https://luma-studio-preview.armonon.chatgpt.site/og.jpg",
         width: 1200,
         height: 630,
         alt: "Luma Studio professional image editor",
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Luma Studio",
     description: "Creative imaging, reimagined.",
-    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
+    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.jpg"],
   },
   icons: {
     icon: "/favicon.svg",
