@@ -13,17 +13,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Luma Studio — Creative imaging, beautifully reimagined",
+  title: "Luma Studio — Make anything. Stay in flow.",
   description:
-    "A fast, focused and beautifully designed professional image editor.",
+    "The depth of a professional image editor, reimagined around speed, clarity and creative intelligence.",
   openGraph: {
     title: "Luma Studio",
-    description: "Creative imaging, reimagined.",
+    description: "Make anything. Stay in flow.",
     type: "website",
     url: "https://luma-studio-preview.armonon.chatgpt.site",
     images: [
       {
-        url: "https://luma-studio-preview.armonon.chatgpt.site/og.jpg",
+        url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
         width: 1200,
         height: 630,
         alt: "Luma Studio professional image editor",
@@ -33,8 +33,8 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Luma Studio",
-    description: "Creative imaging, reimagined.",
-    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.jpg"],
+    description: "Make anything. Stay in flow.",
+    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
   },
   icons: {
     icon: "/favicon.svg",
