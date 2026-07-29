@@ -18,22 +18,22 @@ export const metadata: Metadata = {
     "The depth of a professional image editor, reimagined around speed, clarity and creative intelligence.",
   openGraph: {
     title: "Luma Studio",
-    description: "Creative power, beautifully simple.",
+    description: "One studio. Every kind of imagination.",
     type: "website",
     url: "https://luma-studio-preview.armonon.chatgpt.site",
     images: [
       {
         url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
-        width: 720,
-        height: 378,
-        alt: "Luma Studio professional image editor",
+        width: 1200,
+        height: 630,
+        alt: "Luma Studio unified Edit, Mask, Develop and 3D workspace",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Luma Studio",
-    description: "Creative power, beautifully simple.",
+    description: "One studio. Every kind of imagination.",
     images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
   },
   icons: {
