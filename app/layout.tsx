@@ -16,6 +16,26 @@ export const metadata: Metadata = {
   title: "Luma Studio — Creative imaging, beautifully reimagined",
   description:
     "A fast, focused and beautifully designed professional image editor.",
+  openGraph: {
+    title: "Luma Studio",
+    description: "Creative imaging, reimagined.",
+    type: "website",
+    url: "https://luma-studio-preview.armonon.chatgpt.site",
+    images: [
+      {
+        url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
+        width: 1731,
+        height: 909,
+        alt: "Luma Studio professional image editor",
+      },
+    ],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Luma Studio",
+    description: "Creative imaging, reimagined.",
+    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
+  },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
