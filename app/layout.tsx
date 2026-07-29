@@ -24,8 +24,8 @@ export const metadata: Metadata = {
     images: [
       {
         url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
-        width: 1200,
-        height: 630,
+        width: 720,
+        height: 378,
         alt: "Luma Studio professional image editor",
       },
     ],
