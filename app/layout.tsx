@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     "The depth of a professional image editor, reimagined around speed, clarity and creative intelligence.",
   openGraph: {
     title: "Luma Studio",
-    description: "Make anything. Stay in flow.",
+    description: "Creative power, beautifully simple.",
     type: "website",
     url: "https://luma-studio-preview.armonon.chatgpt.site",
     images: [
@@ -33,7 +33,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Luma Studio",
-    description: "Make anything. Stay in flow.",
+    description: "Creative power, beautifully simple.",
     images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
   },
   icons: {
