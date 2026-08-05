@@ -180,6 +180,13 @@ export type AiProvenance = {
   createdAt: string;
   sourceLayerIds: string[];
   usedSelection: boolean;
+  requestId?: string;
+  inputSha256?: string;
+  maskSha256?: string;
+  parameters?: {
+    quality: "low" | "medium" | "high";
+    size: string;
+  };
 };
 
 export type LayerEffect = {
@@ -246,6 +253,14 @@ let idCounter = 0;
 export function nextId(prefix: string) {
   idCounter += 1;
   return `${prefix}-${idCounter.toString(36)}`;
+}
+
+/** Keep generated ids collision-free when a v2 project restores stable ids. */
+export function reserveId(id: string) {
+  const suffix = id.match(/-([0-9a-z]+)$/i)?.[1];
+  if (!suffix) return;
+  const value = Number.parseInt(suffix, 36);
+  if (Number.isFinite(value)) idCounter = Math.max(idCounter, value);
 }
 
 export function newCanvas(width: number, height: number): HTMLCanvasElement {

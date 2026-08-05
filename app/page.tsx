@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image from "next/image";
 
 const showcaseModes = [
   {
@@ -317,7 +318,13 @@ export default function MarketingHome() {
               </div>
               <div className={`mode-visual mode-${currentMode.name.toLowerCase()}`}>
                 <div className="mode-canvas">
-                  <img src="/desert.jpg" alt="" />
+                  <Image
+                    src="/desert.jpg"
+                    alt=""
+                    width={2200}
+                    height={1467}
+                    sizes="(max-width: 900px) 100vw, 55vw"
+                  />
                   <div className="mode-overlay" />
                   <span className="mode-selection" />
                 </div>
@@ -346,7 +353,13 @@ export default function MarketingHome() {
         </div>
         <div className="neural-product reveal">
           <div className="neural-image">
-            <img src="/desert.jpg" alt="Desert image with AI depth mapping" />
+            <Image
+              src="/desert.jpg"
+              alt="Desert image with AI depth mapping"
+              width={2200}
+              height={1467}
+              sizes="(max-width: 900px) 100vw, 70vw"
+            />
             <span className="depth-tag sky-tag">Sky · 0.9</span>
             <span className="depth-tag dune-tag">Dunes · 0.6</span>
             <span className="depth-tag foreground-tag">Foreground · 0.2</span>

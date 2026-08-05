@@ -1,0 +1,228 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import JSZip from "jszip";
+import { createDocument, createRasterLayer, newCanvas } from "../app/engine/document.ts";
+import { OperationHistory } from "../app/engine/operation-history.ts";
+import { decodeLumaProject, encodeLumaProject, LUMA_PROJECT_VERSION } from "../app/engine/project.ts";
+import type { HistoryEntry } from "../app/engine/studio.ts";
+
+class TestImageData {
+  readonly data: Uint8ClampedArray;
+  readonly width: number;
+  readonly height: number;
+
+  constructor(dataOrWidth: Uint8ClampedArray | number, widthOrHeight: number, height?: number) {
+    if (typeof dataOrWidth === "number") {
+      this.width = dataOrWidth;
+      this.height = widthOrHeight;
+      this.data = new Uint8ClampedArray(this.width * this.height * 4);
+    } else {
+      this.data = dataOrWidth;
+      this.width = widthOrHeight;
+      this.height = height ?? Math.floor(dataOrWidth.length / widthOrHeight / 4);
+    }
+  }
+}
+
+class TestCanvasContext {
+  constructor(private readonly canvas: TestCanvas) {}
+
+  drawImage(source: TestCanvas | { pixels?: number[] }) {
+    const pixels = source instanceof TestCanvas ? source.pixels : source.pixels;
+    if (pixels) this.canvas.pixels.set(pixels.slice(0, this.canvas.pixels.length));
+  }
+
+  putImageData(image: TestImageData, x: number, y: number) {
+    for (let row = 0; row < image.height; row += 1) {
+      for (let column = 0; column < image.width; column += 1) {
+        const source = (row * image.width + column) * 4;
+        const target = ((row + y) * this.canvas.width + column + x) * 4;
+        this.canvas.pixels.set(image.data.subarray(source, source + 4), target);
+      }
+    }
+  }
+
+  getImageData(x: number, y: number, width: number, height: number) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const source = ((row + y) * this.canvas.width + column + x) * 4;
+        const target = (row * width + column) * 4;
+        data.set(this.canvas.pixels.subarray(source, source + 4), target);
+      }
+    }
+    return new TestImageData(data, width, height);
+  }
+}
+
+class TestCanvas {
+  private context = new TestCanvasContext(this);
+  pixels = new Uint8ClampedArray();
+  private storedWidth = 0;
+  private storedHeight = 0;
+
+  get width() { return this.storedWidth; }
+  set width(value: number) { this.storedWidth = value; this.resize(); }
+  get height() { return this.storedHeight; }
+  set height(value: number) { this.storedHeight = value; this.resize(); }
+
+  getContext(kind: string) { return kind === "2d" ? this.context : null; }
+
+  toBlob(callback: (blob: Blob) => void, type = "image/png") {
+    const bytes = new TextEncoder().encode(JSON.stringify({
+      width: this.width,
+      height: this.height,
+      pixels: [...this.pixels],
+      type,
+    }));
+    callback(bytes as unknown as Blob);
+  }
+
+  private resize() {
+    this.pixels = new Uint8ClampedArray(this.width * this.height * 4);
+  }
+}
+
+const originalDocument = globalThis.document;
+const originalImageData = globalThis.ImageData;
+const originalCreateImageBitmap = globalThis.createImageBitmap;
+
+globalThis.document = {
+  createElement: (name: string) => {
+    if (name !== "canvas") throw new Error(`Unexpected element: ${name}`);
+    return new TestCanvas();
+  },
+} as unknown as Document;
+globalThis.ImageData = TestImageData as unknown as typeof ImageData;
+globalThis.createImageBitmap = (async (blob: Blob) => {
+  const decoded = JSON.parse(await blob.text()) as { width: number; height: number; pixels: number[] };
+  return {
+    ...decoded,
+    close() {},
+  };
+}) as unknown as typeof createImageBitmap;
+
+test.after(() => {
+  globalThis.document = originalDocument;
+  globalThis.ImageData = originalImageData;
+  globalThis.createImageBitmap = originalCreateImageBitmap;
+});
+
+test("v2 projects round-trip stable ids, pixels, and nonlinear history", async () => {
+  const doc = createDocument(4, 4);
+  const bitmap = newCanvas(4, 4);
+  const pixels = new TestImageData(4, 4);
+  pixels.data.set([18, 52, 86, 255], 0);
+  bitmap.getContext("2d")!.putImageData(pixels as unknown as ImageData, 0, 0);
+  const layer = createRasterLayer("Source", bitmap);
+  layer.ai = {
+    id: "ai-proof",
+    operation: "harmonize",
+    provider: "openai",
+    model: "gpt-image-2",
+    prompt: "Match the dusk lighting",
+    createdAt: "2026-08-05T00:00:00.000Z",
+    sourceLayerIds: [layer.id],
+    usedSelection: true,
+    requestId: "req_fixture",
+    inputSha256: "a".repeat(64),
+    maskSha256: "b".repeat(64),
+    parameters: { quality: "medium", size: "auto" },
+  };
+  doc.layers.push(layer);
+  doc.guides.push({ id: "guide-z", orientation: "vertical", position: 2 });
+  const selectionMask = newCanvas(4, 4);
+
+  const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
+  const warm = graph.commit("Warm", {
+    label: "Warm",
+    before: [{ layerId: layer.id, opacity: 1 }],
+    after: [{ layerId: layer.id, opacity: 0.6 }],
+    selectionBefore: null,
+    selectionAfter: { mask: selectionMask, bounds: { x: 1, y: 1, w: 2, h: 2 } },
+  });
+  graph.undo();
+  const beforePatch = new TestImageData(2, 2);
+  const afterPatch = new TestImageData(2, 2);
+  beforePatch.data[0] = 3;
+  afterPatch.data[0] = 211;
+  graph.commit("Cool", {
+    label: "Cool",
+    before: [{ layerId: layer.id, opacity: 1 }],
+    after: [{ layerId: layer.id, opacity: 0.8 }],
+    pixelPatches: [{
+      layerId: layer.id,
+      target: "bitmap",
+      x: 0,
+      y: 0,
+      before: beforePatch as unknown as ImageData,
+      after: afterPatch as unknown as ImageData,
+    }],
+  });
+  layer.opacity = 0.8;
+
+  const blob = await encodeLumaProject(doc, [], "History fixture", graph.snapshot());
+  const decoded = await decodeLumaProject(await blob.arrayBuffer());
+
+  assert.equal(LUMA_PROJECT_VERSION, 2);
+  assert.equal(decoded.name, "History fixture");
+  assert.equal(decoded.doc.layers[0].id, layer.id);
+  assert.equal(decoded.doc.layers[0].opacity, 0.8);
+  assert.equal(decoded.doc.layers[0].ai?.requestId, "req_fixture");
+  assert.equal(decoded.doc.layers[0].ai?.inputSha256, "a".repeat(64));
+  assert.equal(decoded.doc.guides[0].id, "guide-z");
+  assert.equal(decoded.doc.layers[0].bitmap!.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 18);
+  assert.equal(decoded.history?.summary().branchPoints, 1);
+  assert.equal(decoded.history?.summary().operations, 2);
+
+  const restoredWarm = decoded.history!.checkout(warm.id);
+  assert.deepEqual(restoredWarm.undo.map((node) => node.label), ["Cool"]);
+  assert.deepEqual(restoredWarm.redo.map((node) => node.label), ["Warm"]);
+  assert.deepEqual(restoredWarm.redo[0].value?.selectionAfter?.bounds, { x: 1, y: 1, w: 2, h: 2 });
+  const restoredCool = decoded.history!.tree().find((node) => node.label === "Cool")!;
+  decoded.history!.checkout(restoredCool.id);
+  const coolPayload = decoded.history!.lineage().at(-1)!.value!;
+  assert.equal(coolPayload.pixelPatches?.[0].before.data[0], 3);
+  assert.equal(coolPayload.pixelPatches?.[0].after.data[0], 211);
+});
+
+test("legacy v1 projects remain readable and receive safe generated ids", async () => {
+  const zip = new JSZip();
+  zip.file("assets/legacy.png", new TextEncoder().encode(JSON.stringify({
+    width: 2,
+    height: 2,
+    pixels: new Array(16).fill(42),
+  })));
+  zip.file("manifest.json", JSON.stringify({
+    format: "luma-project",
+    version: 1,
+    name: "Legacy",
+    savedAt: "2025-01-01T00:00:00.000Z",
+    document: {
+      width: 2,
+      height: 2,
+      colorSpace: "srgb",
+      bitDepth: 8,
+      resolution: { x: 72, y: 72, unit: "ppi" },
+      layers: [{
+        id: "raster-legacy",
+        name: "Legacy layer",
+        kind: "raster",
+        visible: true,
+        opacity: 1,
+        blend: "source-over",
+        transform: { tx: 0, ty: 0, sx: 1, sy: 1, rotation: 0 },
+        bitmapAsset: "assets/legacy.png",
+      }],
+    },
+    actions: [],
+  }));
+
+  const archive = await zip.generateAsync({ type: "uint8array" });
+  const decoded = await decodeLumaProject(archive);
+  assert.equal(decoded.name, "Legacy");
+  assert.equal(decoded.doc.layers[0].name, "Legacy layer");
+  assert.notEqual(decoded.doc.layers[0].id, "raster-legacy");
+  assert.equal(decoded.doc.guides.length, 0);
+  assert.equal(decoded.history, undefined);
+});

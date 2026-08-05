@@ -32,6 +32,16 @@ export type HistoryTransition<T> = {
   redo: OperationNode<T>[];
 };
 
+export type OperationHistorySnapshot<T> = {
+  format: "luma-operation-history";
+  version: 1;
+  rootId: string;
+  currentId: string;
+  sequence: number;
+  preferredChildren: Array<[parentId: string, childId: string]>;
+  nodes: OperationNode<T>[];
+};
+
 export type OperationHistoryOptions = {
   maxNodes?: number;
   idFactory?: () => string;
@@ -46,7 +56,7 @@ function defaultIdFactory() {
 }
 
 export class OperationHistory<T> {
-  readonly rootId: string;
+  rootId: string;
 
   private readonly nodes = new Map<string, OperationNode<T>>();
   private readonly preferredChildren = new Map<string, string>();
@@ -71,6 +81,46 @@ export class OperationHistory<T> {
       sequence: this.sequence,
       value: null,
     });
+  }
+
+  static fromSnapshot<T>(
+    snapshot: OperationHistorySnapshot<T>,
+    options: OperationHistoryOptions = {},
+  ) {
+    if (!snapshot || snapshot.format !== "luma-operation-history" || snapshot.version !== 1) {
+      throw new Error("Unsupported Luma operation history");
+    }
+    if (!Array.isArray(snapshot.nodes) || !snapshot.nodes.length) {
+      throw new Error("Operation history has no root node");
+    }
+
+    const graph = new OperationHistory<T>({
+      ...options,
+      maxNodes: options.maxNodes ?? Math.max(500, snapshot.nodes.length - 1),
+    });
+    graph.nodes.clear();
+    graph.preferredChildren.clear();
+    graph.rootId = snapshot.rootId;
+    graph.currentId = snapshot.currentId;
+    graph.sequence = snapshot.sequence;
+
+    for (const source of snapshot.nodes) {
+      if (!source || typeof source.id !== "string" || graph.nodes.has(source.id)) {
+        throw new Error("Operation history contains an invalid or duplicate node");
+      }
+      graph.nodes.set(source.id, {
+        ...source,
+        childIds: [...source.childIds],
+      });
+    }
+    for (const pair of snapshot.preferredChildren ?? []) {
+      if (Array.isArray(pair) && typeof pair[0] === "string" && typeof pair[1] === "string") {
+        graph.preferredChildren.set(pair[0], pair[1]);
+      }
+    }
+    graph.validateTopology();
+    graph.trim();
+    return graph;
   }
 
   get current() { return this.currentId; }
@@ -189,6 +239,21 @@ export class OperationHistory<T> {
     };
   }
 
+  snapshot(): OperationHistorySnapshot<T> {
+    return {
+      format: "luma-operation-history",
+      version: 1,
+      rootId: this.rootId,
+      currentId: this.currentId,
+      sequence: this.sequence,
+      preferredChildren: [...this.preferredChildren.entries()],
+      nodes: [...this.nodes.values()].map((node) => ({
+        ...node,
+        childIds: [...node.childIds],
+      })),
+    };
+  }
+
   private currentNode() { return this.requireNode(this.currentId); }
 
   private requireNode(id: string) {
@@ -224,6 +289,51 @@ export class OperationHistory<T> {
     let id = fallback ?? this.idFactory();
     while (this.nodes.has(id)) id = this.idFactory();
     return id;
+  }
+
+  private validateTopology() {
+    const root = this.nodes.get(this.rootId);
+    if (!root || root.parentId !== null || root.value !== null) {
+      throw new Error("Operation history root is invalid");
+    }
+    if (!this.nodes.has(this.currentId)) {
+      throw new Error("Operation history current node is missing");
+    }
+
+    for (const node of this.nodes.values()) {
+      if (!Array.isArray(node.childIds) || new Set(node.childIds).size !== node.childIds.length) {
+        throw new Error(`Operation history children are invalid: ${node.id}`);
+      }
+      if (node.id !== this.rootId) {
+        const parent = node.parentId ? this.nodes.get(node.parentId) : undefined;
+        if (!parent || !parent.childIds.includes(node.id)) {
+          throw new Error(`Operation history parent is invalid: ${node.id}`);
+        }
+      }
+      for (const childId of node.childIds) {
+        const child = this.nodes.get(childId);
+        if (!child || child.parentId !== node.id) {
+          throw new Error(`Operation history child is invalid: ${childId}`);
+        }
+      }
+    }
+
+    const visited = new Set<string>();
+    const visit = (id: string) => {
+      if (visited.has(id)) throw new Error("Operation history contains a cycle");
+      visited.add(id);
+      for (const childId of this.requireNode(id).childIds) visit(childId);
+    };
+    visit(this.rootId);
+    if (visited.size !== this.nodes.size) {
+      throw new Error("Operation history contains unreachable nodes");
+    }
+
+    for (const [parentId, childId] of this.preferredChildren) {
+      const parent = this.nodes.get(parentId);
+      if (!parent?.childIds.includes(childId)) this.preferredChildren.delete(parentId);
+    }
+    this.sequence = Math.max(this.sequence, ...[...this.nodes.values()].map((node) => node.sequence));
   }
 
   private trim() {

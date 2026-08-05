@@ -15,6 +15,7 @@ import {
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
   PathStyle,
+  Selection,
   ShapeStyle,
   SmartFilter,
   TextStyle,
@@ -60,10 +61,11 @@ import {
 import { Action, ActionRecorder, ActionStep } from "./actions";
 import { exportPsd, importPsd } from "./psd";
 import { OperationHistory } from "./operation-history";
+import { DEFAULT_TILE_SIZE, TileGrid } from "./tile-store";
 
 type SubscribeFn = () => void;
 
-type LayerSnapshot = {
+export type LayerSnapshot = {
   layerId: string;
   bitmap?: HTMLCanvasElement;
   mask?: HTMLCanvasElement;
@@ -87,14 +89,14 @@ type LayerSnapshot = {
   effects?: LayerEffect[];
 };
 
-type HistoryEntry = {
+export type HistoryEntry = {
   label: string;
   before: LayerSnapshot[];
   after: LayerSnapshot[];
   layersBefore?: Layer[];
   layersAfter?: Layer[];
-  selectionBefore?: HTMLCanvasElement | null;
-  selectionAfter?: HTMLCanvasElement | null;
+  selectionBefore?: Selection | null;
+  selectionAfter?: Selection | null;
   pixelPatches?: PixelPatch[];
   guidesBefore?: Guide[];
   guidesAfter?: Guide[];
@@ -102,7 +104,7 @@ type HistoryEntry = {
   documentAfter?: Document;
 };
 
-type PixelPatch = {
+export type PixelPatch = {
   layerId: string;
   target: "bitmap" | "mask";
   x: number;
@@ -120,7 +122,7 @@ type DocumentSession = {
   history: OperationHistory<HistoryEntry>;
 };
 
-const HISTORY_LIMIT = 80;
+export const HISTORY_LIMIT = 80;
 
 export type LumaPlugin = {
   id: string;
@@ -223,6 +225,28 @@ export class Studio {
       redoBranches: this.history.branches(),
     };
   }
+  engineState() {
+    const surfaces = this.doc.layers.flatMap((layer) => [layer.bitmap, layer.mask]).filter(Boolean) as HTMLCanvasElement[];
+    if (this.doc.selection) surfaces.push(this.doc.selection.mask);
+    let tiles = 0;
+    let workingSetBytes = 0;
+    for (const surface of surfaces) {
+      const grid = new TileGrid(surface.width, surface.height, DEFAULT_TILE_SIZE);
+      tiles += grid.totalTiles;
+      workingSetBytes += grid.estimatedBytes("rgba8");
+    }
+    return {
+      renderer: this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
+      tileSize: DEFAULT_TILE_SIZE,
+      tiles,
+      surfaces: surfaces.length,
+      workingSetBytes,
+      layers: this.doc.layers.length,
+      colorSpace: this.doc.colorSpace,
+      bitDepth: this.doc.bitDepth,
+      history: this.history.summary(),
+    };
+  }
 
   undo() {
     const node = this.history.undo();
@@ -265,9 +289,7 @@ export class Studio {
     const selectionKey = side === "before" ? "selectionBefore" : "selectionAfter";
     if (selectionKey in entry) {
       const selection = entry[selectionKey];
-      this.doc.selection = selection
-        ? { mask: cloneCanvas(selection), bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } }
-        : null;
+      this.doc.selection = cloneSelection(selection);
     }
     if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
     const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
@@ -288,7 +310,11 @@ export class Studio {
       if (snap.locked !== undefined) layer.locked = snap.locked;
       if (snap.clipping !== undefined) layer.clipping = snap.clipping;
       if (snap.filters) layer.filters = cloneFilters(snap.filters);
-      if (snap.ai) layer.ai = { ...snap.ai, sourceLayerIds: [...snap.ai.sourceLayerIds] };
+      if (snap.ai) layer.ai = {
+        ...snap.ai,
+        sourceLayerIds: [...snap.ai.sourceLayerIds],
+        parameters: snap.ai.parameters ? { ...snap.ai.parameters } : undefined,
+      };
       if (snap.effects) layer.effects = cloneEffects(snap.effects);
       if (snap.opacity !== undefined) layer.opacity = snap.opacity;
       if (snap.blend) layer.blend = snap.blend;
@@ -984,28 +1010,26 @@ export class Studio {
     to: { x: number; y: number },
   ) {
     if (!this.strokeTiles) return;
-    const tileSize = 256;
     const radius = params.size * 0.55 + 2;
-    const left = Math.max(0, Math.floor((Math.min(from.x, to.x) - radius) / tileSize) * tileSize);
-    const top = Math.max(0, Math.floor((Math.min(from.y, to.y) - radius) / tileSize) * tileSize);
-    const right = Math.min(canvas.width, Math.ceil((Math.max(from.x, to.x) + radius) / tileSize) * tileSize);
-    const bottom = Math.min(canvas.height, Math.ceil((Math.max(from.y, to.y) + radius) / tileSize) * tileSize);
     const target: PixelPatch["target"] = params.mode === "mask-add" || params.mode === "mask-remove" ? "mask" : "bitmap";
     const ctx = canvas.getContext("2d")!;
-    for (let y = top; y < bottom; y += tileSize) {
-      for (let x = left; x < right; x += tileSize) {
-        const key = `${target}:${x}:${y}`;
-        if (this.strokeTiles.has(key)) continue;
-        const width = Math.min(tileSize, canvas.width - x);
-        const height = Math.min(tileSize, canvas.height - y);
-        this.strokeTiles.set(key, {
-          layerId: layer.id,
-          target,
-          x,
-          y,
-          before: ctx.getImageData(x, y, width, height),
-        });
-      }
+    const grid = new TileGrid(canvas.width, canvas.height, DEFAULT_TILE_SIZE);
+    const tiles = grid.tilesIntersecting({
+      x: Math.min(from.x, to.x) - radius,
+      y: Math.min(from.y, to.y) - radius,
+      width: Math.abs(to.x - from.x) + radius * 2,
+      height: Math.abs(to.y - from.y) + radius * 2,
+    });
+    for (const tile of tiles) {
+      const key = `${target}:${tile.key}`;
+      if (this.strokeTiles.has(key)) continue;
+      this.strokeTiles.set(key, {
+        layerId: layer.id,
+        target,
+        x: tile.x,
+        y: tile.y,
+        before: ctx.getImageData(tile.x, tile.y, tile.width, tile.height),
+      });
     }
   }
 
@@ -1138,6 +1162,7 @@ export class Studio {
     body.append("image", image, "source.png");
     body.append("prompt", prompt);
     body.append("operation", operation);
+    let maskBlob: Blob | undefined;
     if (this.doc.selection) {
       const mask = newCanvas(this.doc.width, this.doc.height);
       const input = this.doc.selection.mask.getContext("2d")!.getImageData(0, 0, this.doc.width, this.doc.height);
@@ -1149,8 +1174,13 @@ export class Studio {
         output.data[i + 3] = 255 - input.data[i + 3];
       }
       mask.getContext("2d")!.putImageData(output, 0, 0);
-      body.append("mask", await canvasToBlob(mask), "mask.png");
+      maskBlob = await canvasToBlob(mask);
+      body.append("mask", maskBlob, "mask.png");
     }
+    const [inputSha256, maskSha256] = await Promise.all([
+      sha256Blob(image),
+      maskBlob ? sha256Blob(maskBlob) : Promise.resolve(undefined),
+    ]);
     const response = await fetch("/api/ai/edit", { method: "POST", body });
     if (!response.ok) {
       const payload = await response.json().catch(() => null) as { error?: string } | null;
@@ -1162,11 +1192,18 @@ export class Studio {
       id: nextId("ai"),
       operation,
       provider: "openai",
-      model: "gpt-image-2",
+      model: response.headers.get("x-luma-model") ?? "gpt-image-2",
       prompt,
       createdAt: new Date().toISOString(),
       sourceLayerIds: [layerId],
       usedSelection: !!this.doc.selection,
+      requestId: response.headers.get("x-openai-request-id") ?? undefined,
+      inputSha256,
+      maskSha256,
+      parameters: {
+        quality: (response.headers.get("x-luma-quality") as "low" | "medium" | "high" | null) ?? "medium",
+        size: response.headers.get("x-luma-size") ?? "auto",
+      },
     };
     this.commitStructural(`AI ${operation}`, () => this.doc.layers.unshift(layer));
     this.requestRender();
@@ -1190,7 +1227,7 @@ export class Studio {
     try {
       const { samClickMask } = await import("./neural");
       const mask = await samClickMask(layer.bitmap, x, y, onProgress);
-      const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+      const before = cloneSelection(this.doc.selection);
       if (mode === "replace" || !this.doc.selection) {
         this.doc.selection = { mask, bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } };
       } else {
@@ -1200,7 +1237,7 @@ export class Studio {
         cctx.drawImage(mask, 0, 0);
         cctx.globalCompositeOperation = "source-over";
       }
-      const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+      const after = cloneSelection(this.doc.selection);
       this.commit({ label: "SAM click select", before: [], after: [], selectionBefore: before, selectionAfter: after });
       this.requestRender();
       return { used: "sam" };
@@ -1240,63 +1277,63 @@ export class Studio {
 
   // --- selection ---
   selectRect(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     selectRect(this.doc, x, y, w, h, mode, feather);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Selection", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.requestRender();
   }
   selectEllipse(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     selectEllipse(this.doc, x, y, w, h, mode, feather);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Selection (ellipse)", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.requestRender();
   }
   selectLasso(points: Array<{ x: number; y: number }>, mode: SelectionMode = "replace", feather = 0) {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     selectLasso(this.doc, points, mode, feather);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Selection (lasso)", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.requestRender();
   }
   selectByColor(layerId: string, x: number, y: number, tolerance: number, mode: SelectionMode = "replace", contiguous = true) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     selectByColor(this.doc, layer.bitmap, x, y, tolerance, mode, contiguous);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Magic wand", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.requestRender();
   }
   selectAll() {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     selectAll(this.doc);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Select all", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.actions.push({ op: "selectAll" });
     this.requestRender();
   }
   deselect() {
     if (!this.doc.selection) return;
-    const before = cloneCanvas(this.doc.selection.mask);
+    const before = cloneSelection(this.doc.selection);
     deselect(this.doc);
     this.commit({ label: "Deselect", before: [], after: [], selectionBefore: before, selectionAfter: null });
     this.actions.push({ op: "deselect" });
     this.requestRender();
   }
   invertSelectionArea() {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     invertSelection(this.doc);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: "Invert selection", before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.actions.push({ op: "invertSelection" });
     this.requestRender();
   }
   featherSelection(radius: number) {
-    const before = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const before = cloneSelection(this.doc.selection);
     featherSelection(this.doc, radius);
-    const after = this.doc.selection ? cloneCanvas(this.doc.selection.mask) : null;
+    const after = cloneSelection(this.doc.selection);
     this.commit({ label: `Feather ${radius}px`, before: [], after: [], selectionBefore: before, selectionAfter: after });
     this.actions.push({ op: "featherSelection", radius });
     this.requestRender();
@@ -1388,14 +1425,14 @@ export class Studio {
 
   async exportProject(name = "Untitled") {
     const { encodeLumaProject } = await import("./project");
-    return encodeLumaProject(this.doc, this.actions.list(), name);
+    return encodeLumaProject(this.doc, this.actions.list(), name, this.history.snapshot());
   }
 
   async importProject(blob: Blob) {
     const { decodeLumaProject } = await import("./project");
     const project = await decodeLumaProject(blob);
     this.installDocument(project.doc, project.name);
-    this.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+    this.history = project.history ?? new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session) session.history = this.history;
     this.actions.fromJSON(JSON.stringify(project.actions));
@@ -1442,7 +1479,11 @@ function shallowCloneLayer(layer: Layer): Layer {
     shape: layer.shape ? { ...layer.shape } : undefined,
     path: layer.path ? deepClonePath(layer.path) : undefined,
     filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? { ...layer.ai, sourceLayerIds: [...layer.ai.sourceLayerIds] } : undefined,
+    ai: layer.ai ? {
+      ...layer.ai,
+      sourceLayerIds: [...layer.ai.sourceLayerIds],
+      parameters: layer.ai.parameters ? { ...layer.ai.parameters } : undefined,
+    } : undefined,
     effects: layer.effects ? cloneEffects(layer.effects) : undefined,
   };
 }
@@ -1462,6 +1503,13 @@ function cloneDocument(doc: Document): Document {
       bounds: { ...doc.selection.bounds },
     } : null,
   };
+}
+
+function cloneSelection(selection: Selection | null | undefined): Selection | null {
+  return selection ? {
+    mask: cloneCanvas(selection.mask),
+    bounds: { ...selection.bounds },
+  } : null;
 }
 
 function deepClonePath(p: PathStyle): PathStyle {
@@ -1492,7 +1540,11 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
     locked: layer.locked,
     clipping: layer.clipping,
     filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? { ...layer.ai, sourceLayerIds: [...layer.ai.sourceLayerIds] } : undefined,
+    ai: layer.ai ? {
+      ...layer.ai,
+      sourceLayerIds: [...layer.ai.sourceLayerIds],
+      parameters: layer.ai.parameters ? { ...layer.ai.parameters } : undefined,
+    } : undefined,
     effects: layer.effects ? cloneEffects(layer.effects) : undefined,
   };
 }
@@ -1519,6 +1571,12 @@ async function blobToCanvas(blob: Blob, width: number, height: number) {
   return canvas;
 }
 
+async function sha256Blob(blob: Blob) {
+  if (!globalThis.crypto?.subtle) return undefined;
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function paintTarget(layer: Layer, params: BrushParams, width: number, height: number): HTMLCanvasElement | null {
   if (params.mode === "mask-add" || params.mode === "mask-remove") {
     return ensureMask(layer, width, height);
@@ -1535,6 +1593,7 @@ export type LumaAPI = {
   select(id: string | null): void;
   documents(): ReturnType<Studio["listDocuments"]>;
   history(): ReturnType<Studio["historyState"]>;
+  engine(): ReturnType<Studio["engineState"]>;
   checkoutHistory(nodeId: string): boolean;
   registerPlugin(plugin: LumaPlugin): () => void;
   plugins(): ReturnType<Studio["listPlugins"]>;

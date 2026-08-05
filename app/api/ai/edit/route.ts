@@ -70,6 +70,9 @@ export async function POST(request: Request) {
     headers: {
       "content-type": "image/png",
       "cache-control": "no-store",
+      "x-luma-model": MODEL,
+      "x-luma-quality": "medium",
+      "x-luma-size": "auto",
       ...(requestId ? { "x-openai-request-id": requestId } : {}),
     },
   });

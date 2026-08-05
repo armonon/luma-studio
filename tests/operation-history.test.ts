@@ -85,3 +85,40 @@ test("unknown checkout targets fail without changing the current version", () =>
   assert.throws(() => graph.checkout("missing"), /Unknown history operation/);
   assert.equal(graph.current, current.id);
 });
+
+test("history topology and preferred branches survive snapshot restore", () => {
+  const graph = history();
+  graph.commit("Base", "base");
+  const warm = graph.commit("Warm", "warm");
+  graph.undo();
+  const cool = graph.commit("Cool", "cool");
+  graph.checkout(warm.id);
+
+  const restored = OperationHistory.fromSnapshot(graph.snapshot(), { maxNodes: 20 });
+  assert.deepEqual(restored.summary(), graph.summary());
+  assert.deepEqual(
+    restored.tree().map(({ id, parentId, label, childCount, isCurrent }) => ({ id, parentId, label, childCount, isCurrent })),
+    graph.tree().map(({ id, parentId, label, childCount, isCurrent }) => ({ id, parentId, label, childCount, isCurrent })),
+  );
+  restored.undo();
+  assert.equal(restored.redo(cool.id)?.value, "cool");
+});
+
+test("snapshot restore rejects disconnected or cyclic topology", () => {
+  const graph = history();
+  graph.commit("Base", "base");
+  const snapshot = graph.snapshot();
+  snapshot.nodes.push({
+    id: "orphan",
+    parentId: "orphan",
+    childIds: ["orphan"],
+    label: "Orphan",
+    createdAt: 0,
+    sequence: 99,
+    value: "orphan",
+  });
+  assert.throws(
+    () => OperationHistory.fromSnapshot(snapshot),
+    /parent is invalid|unreachable|cycle/,
+  );
+});

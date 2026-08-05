@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import NextImage from "next/image";
 import { LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
@@ -32,6 +33,7 @@ import {
 } from "@/app/engine/document";
 import { BrushParams } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
+import { CoalescedSaveQueue } from "@/app/engine/save-queue";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "select" | "mask" | "develop" | "vector";
@@ -355,6 +357,11 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
 export default function SpatialStudio() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -454,6 +461,7 @@ export default function SpatialStudio() {
       select: (id: string | null) => setActiveLayerId(id),
       documents: () => s.listDocuments(),
       history: () => s.historyState(),
+      engine: () => s.engineState(),
       checkoutHistory: (nodeId) => s.checkoutHistory(nodeId),
       registerPlugin: (plugin) => s.registerPlugin(plugin),
       plugins: () => s.listPlugins(),
@@ -528,9 +536,9 @@ export default function SpatialStudio() {
   const snapLayerTranslation = (layer: Layer, tx: number, ty: number) => {
     if (!doc || !snapGuides) return { tx, ty };
     const candidate: Layer = { ...layer, transform: { ...layer.transform, tx, ty } };
-    const corners = layerCorners(doc, candidate);
-    const xs = [corners.tl[0], corners.tr[0], corners.br[0], corners.bl[0]];
-    const ys = [corners.tl[1], corners.tr[1], corners.br[1], corners.bl[1]];
+    const [topLeft, topRight, bottomRight, bottomLeft] = layerCorners(candidate, doc.width, doc.height);
+    const xs = [topLeft[0], topRight[0], bottomRight[0], bottomLeft[0]];
+    const ys = [topLeft[1], topRight[1], bottomRight[1], bottomLeft[1]];
     const anchorsX = [Math.min(...xs), (Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...xs)];
     const anchorsY = [Math.min(...ys), (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...ys)];
     const targetsX = [0, doc.width / 2, doc.width, ...doc.guides.filter((guide) => guide.orientation === "vertical").map((guide) => guide.position)];
@@ -820,7 +828,7 @@ export default function SpatialStudio() {
       setTimeout(() => URL.revokeObjectURL(url), 5000);
       await writeRecovery(blob);
       setSaveState("saved");
-      notify("Luma project saved");
+      notify("Project + version history saved");
     } catch {
       setSaveState("error");
       notify("Project save failed");
@@ -835,9 +843,10 @@ export default function SpatialStudio() {
       setActiveLayerId(project.doc.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
       setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
-      await writeRecovery(file);
+      await writeRecovery(await studio.exportProject(project.name));
       setSaveState("saved");
-      notify(`${project.name} opened`);
+      const restoredOperations = project.history?.summary().operations ?? 0;
+      notify(`${project.name} opened · ${restoredOperations} versions restored`);
     } catch {
       notify("Luma project could not be opened");
     } finally {
@@ -848,27 +857,22 @@ export default function SpatialStudio() {
   useEffect(() => {
     if (!studio) return;
     let timer = 0;
-    let cancelled = false;
-    const persist = async () => {
-      if (cancelled) return;
-      setSaveState("saving");
-      try {
-        const blob = await studio.exportProject(projectName);
-        if (!cancelled) {
-          await writeRecovery(blob);
-          setSaveState("saved");
-        }
-      } catch {
-        if (!cancelled) setSaveState("error");
-      }
-    };
+    const queue = new CoalescedSaveQueue<Blob>({
+      produce: () => studio.exportProject(projectName),
+      commit: (blob) => writeRecovery(blob),
+      onState: (state) => {
+        if (state === "producing" || state === "committing") setSaveState("saving");
+        else if (state === "idle") setSaveState("saved");
+        else if (state === "error") setSaveState("error");
+      },
+    });
     const unsubscribe = studio.subscribe(() => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(persist, 1600);
+      timer = window.setTimeout(() => queue.request(), 1600);
     });
     return () => {
-      cancelled = true;
       window.clearTimeout(timer);
+      queue.cancel();
       unsubscribe();
     };
   }, [studio, projectName]);
@@ -1055,6 +1059,7 @@ export default function SpatialStudio() {
 
   const currentTools = modeTools[workspace];
   const historyState = studio?.historyState();
+  const engineState = studio?.engineState();
   const canvasCursor = useMemo(() => {
     if (paintingTool || marqueeTool || lassoTool || wandTool || vectorDragTool) return "crosshair";
     if (activeTool === "pen" || activeTool === "sel-sam") return "crosshair";
@@ -1457,7 +1462,11 @@ export default function SpatialStudio() {
                   />
                 ))}
                 <div className="canvas-status">
-                  <span>{doc ? `${doc.width}×${doc.height} · sRGB · ${useGL ? "GPU RGBA16F" : "CPU 8-bit"}` : "Loading…"}</span>
+                  <span title={engineState ? `${engineState.surfaces} pixel surfaces · ${engineState.tiles} addressable tiles · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
+                    {doc
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${useGL ? "GPU RGBA16F" : "CPU 8-bit"} · ${engineState?.tiles ?? 0} tiles · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      : "Loading…"}
+                  </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
                 </div>
                 {recordingName && (
@@ -1480,7 +1489,7 @@ export default function SpatialStudio() {
                   onClick={() => openPreset(index)}
                   aria-label={`Open ${photo.name}`}
                 >
-                  <img src={photo.src} alt="" /><span>{photo.name}</span>
+                  <NextImage src={photo.src} alt="" width={80} height={52} sizes="80px" unoptimized /><span>{photo.name}</span>
                 </button>
               ))}
               <button className="film-add" onClick={() => fileInput.current?.click()} aria-label="Add photo">＋</button>
@@ -1516,6 +1525,9 @@ export default function SpatialStudio() {
                     key={layer.id}
                     className={`spatial-layer ${activeLayerId === layer.id ? "active" : ""}`}
                     style={{ marginLeft: layer.parentId ? 14 : 0 }}
+                    title={layer.ai
+                      ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}${layer.ai.inputSha256 ? ` · input ${layer.ai.inputSha256.slice(0, 12)}…` : ""}`
+                      : undefined}
                     onClick={() => {
                       setActiveLayerId(layer.id);
                       if (layer.kind === "adjustment-tone") {
