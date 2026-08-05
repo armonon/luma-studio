@@ -386,6 +386,7 @@ export default function SpatialStudio() {
   const [textDraft, setTextDraft] = useState("WANDER FARTHER");
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [blurRadius, setBlurRadius] = useState(8);
   const [sharpAmount, setSharpAmount] = useState(0.6);
   const [neural, setNeural] = useState<{ msg: string; pct: number } | null>(null);
@@ -446,12 +447,14 @@ export default function SpatialStudio() {
     const s = new Studio(1600, 1067, target);
     const unsub = s.subscribe(forceUpdate);
     const api: LumaAPI = {
-      version: "0.2",
+      version: "0.3",
       studio: s,
       layers: () => s.doc.layers,
       active: () => (activeLayerIdRef.current ? s.findLayer(activeLayerIdRef.current) ?? null : null),
       select: (id: string | null) => setActiveLayerId(id),
       documents: () => s.listDocuments(),
+      history: () => s.historyState(),
+      checkoutHistory: (nodeId) => s.checkoutHistory(nodeId),
       registerPlugin: (plugin) => s.registerPlugin(plugin),
       plugins: () => s.listPlugins(),
       export: (type, quality) => s.exportImage(type, quality),
@@ -1025,6 +1028,7 @@ export default function SpatialStudio() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); studio?.selectAll(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); studio?.deselect(); return; }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); studio?.invertSelectionArea(); return; }
+      if (e.key === "Escape" && showHistory) { setShowHistory(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
       if (e.code === "Space" && !e.repeat) { spaceHeld.current = true; document.body.style.cursor = "grab"; }
@@ -1047,9 +1051,10 @@ export default function SpatialStudio() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath]);
+  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory]);
 
   const currentTools = modeTools[workspace];
+  const historyState = studio?.historyState();
   const canvasCursor = useMemo(() => {
     if (paintingTool || marqueeTool || lassoTool || wandTool || vectorDragTool) return "crosshair";
     if (activeTool === "pen" || activeTool === "sel-sam") return "crosshair";
@@ -1861,11 +1866,73 @@ export default function SpatialStudio() {
               <button onClick={() => studio?.redo()} title="Redo" disabled={!studio?.canRedo()}>↷</button>
               <button onClick={() => studio?.selectAll()} title="Select all">▭</button>
               <span />
-              <button onClick={() => notify(`${studio?.historyLabels().length ?? 0} states`)} title="History">◴</button>
+              <button
+                onClick={() => setShowHistory(true)}
+                title={`${historyState?.operations ?? 0} operations · ${historyState?.branchPoints ?? 0} branch points`}
+                aria-label="Open version history"
+              >
+                ◴{historyState?.branchPoints ? <sup>{historyState.branchPoints + 1}</sup> : null}
+              </button>
             </div>
           </aside>
         </div>
       </section>
+
+      {showHistory && (
+        <div className="spatial-modal" onMouseDown={() => setShowHistory(false)}>
+          <section
+            className="spatial-command"
+            onMouseDown={(event) => event.stopPropagation()}
+            aria-label="Version history"
+            style={{ width: "min(560px, calc(100vw - 32px))" }}
+          >
+            <div>
+              <span>⑂</span>
+              <strong style={{ padding: "0 8px", flex: 1 }}>Version history</strong>
+              <small style={{ opacity: 0.6 }}>
+                {historyState?.operations ?? 0} operations · {historyState?.branchPoints ?? 0} branch points
+              </small>
+              <button onClick={() => setShowHistory(false)} aria-label="Close version history">×</button>
+            </div>
+            <p>Undo, explore another direction, and return to either version. Alternate work is retained as a branch.</p>
+            <div role="tree" style={{ maxHeight: "min(56vh, 520px)", overflowY: "auto", padding: "2px 0" }}>
+              {historyState?.nodes.map((node) => (
+                <button
+                  key={node.id}
+                  role="treeitem"
+                  aria-current={node.isCurrent ? "step" : undefined}
+                  aria-selected={node.isCurrent}
+                  onClick={() => {
+                    if (!studio || node.isCurrent) return;
+                    studio.checkoutHistory(node.id);
+                    notify(`Restored ${node.label}`);
+                  }}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "20px minmax(0,1fr) auto",
+                    alignItems: "center",
+                    width: "100%",
+                    paddingLeft: 10 + node.depth * 16,
+                    background: node.isCurrent
+                      ? "linear-gradient(90deg,rgba(124,92,231,.3),rgba(35,133,244,.16))"
+                      : node.isOnCurrentPath ? "rgba(255,255,255,.055)" : "rgba(255,255,255,.025)",
+                    borderColor: node.isCurrent ? "rgba(154,126,255,.55)" : "rgba(255,255,255,.08)",
+                    opacity: node.isOnCurrentPath || node.isCurrent ? 1 : 0.72,
+                  }}
+                >
+                  <i aria-hidden="true">{node.isCurrent ? "●" : node.childCount > 1 ? "⑂" : "○"}</i>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
+                    {node.label}
+                  </span>
+                  <small style={{ opacity: 0.58 }}>
+                    {node.childCount > 1 ? `${node.childCount} branches` : new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </small>
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      )}
 
       {showFilters && (
         <div className="spatial-modal" onMouseDown={() => setShowFilters(false)}>

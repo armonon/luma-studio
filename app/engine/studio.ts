@@ -59,6 +59,7 @@ import {
 } from "./filters";
 import { Action, ActionRecorder, ActionStep } from "./actions";
 import { exportPsd, importPsd } from "./psd";
+import { OperationHistory } from "./operation-history";
 
 type SubscribeFn = () => void;
 
@@ -116,8 +117,7 @@ type DocumentSession = {
   id: string;
   name: string;
   doc: Document;
-  history: HistoryEntry[];
-  historyIndex: number;
+  history: OperationHistory<HistoryEntry>;
 };
 
 const HISTORY_LIMIT = 80;
@@ -135,8 +135,7 @@ export class Studio {
   actions = new ActionRecorder();
   useGL = false; // GPU compositing (RGBA16F) when true and supported
   private subscribers = new Set<SubscribeFn>();
-  private history: HistoryEntry[] = [];
-  private historyIndex = -1;
+  private history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
   private renderScheduled = false;
   private disposed = false;
   private strokeTiles: Map<string, StrokeTile> | null = null;
@@ -154,7 +153,6 @@ export class Studio {
       name: "Untitled",
       doc: this.doc,
       history: this.history,
-      historyIndex: this.historyIndex,
     };
     this.sessions = [session];
     this.activeSessionId = session.id;
@@ -211,54 +209,69 @@ export class Studio {
   }
 
   private commit(entry: HistoryEntry) {
-    if (this.historyIndex < this.history.length - 1) {
-      this.history = this.history.slice(0, this.historyIndex + 1);
-    }
-    this.history.push(entry);
-    if (this.history.length > HISTORY_LIMIT) this.history.shift();
-    this.historyIndex = this.history.length - 1;
+    this.history.commit(entry.label, entry);
     this.emit();
   }
 
-  canUndo() { return this.historyIndex >= 0; }
-  canRedo() { return this.historyIndex < this.history.length - 1; }
-  historyLabels() { return this.history.map((h) => h.label); }
+  canUndo() { return this.history.canUndo(); }
+  canRedo() { return this.history.canRedo(); }
+  historyLabels() { return this.history.lineage().map((node) => node.label); }
+  historyState() {
+    return {
+      ...this.history.summary(),
+      nodes: this.history.tree(),
+      redoBranches: this.history.branches(),
+    };
+  }
 
   undo() {
-    if (!this.canUndo()) return;
-    const entry = this.history[this.historyIndex];
-    if (entry.documentBefore) this.doc = cloneDocument(entry.documentBefore);
-    this.applySnapshots(entry.before);
-    if (entry.layersBefore) this.doc.layers = entry.layersBefore.map(shallowCloneLayer);
-    if ("selectionBefore" in entry) {
-      this.doc.selection = entry.selectionBefore
-        ? { mask: cloneCanvas(entry.selectionBefore), bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } }
-        : null;
-    }
-    if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, "before");
-    if (entry.guidesBefore) this.doc.guides = entry.guidesBefore.map((guide) => ({ ...guide }));
+    const node = this.history.undo();
+    if (!node?.value) return;
+    this.applyHistoryEntry(node.value, "before");
     this.liveSnapshots.clear();
-    this.historyIndex -= 1;
     this.requestRender();
     this.emit();
   }
-  redo() {
-    if (!this.canRedo()) return;
-    const entry = this.history[this.historyIndex + 1];
-    if (entry.documentAfter) this.doc = cloneDocument(entry.documentAfter);
-    this.applySnapshots(entry.after);
-    if (entry.layersAfter) this.doc.layers = entry.layersAfter.map(shallowCloneLayer);
-    if ("selectionAfter" in entry) {
-      this.doc.selection = entry.selectionAfter
-        ? { mask: cloneCanvas(entry.selectionAfter), bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } }
-        : null;
-    }
-    if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, "after");
-    if (entry.guidesAfter) this.doc.guides = entry.guidesAfter.map((guide) => ({ ...guide }));
+  redo(branchId?: string) {
+    const node = this.history.redo(branchId);
+    if (!node?.value) return;
+    this.applyHistoryEntry(node.value, "after");
     this.liveSnapshots.clear();
-    this.historyIndex += 1;
     this.requestRender();
     this.emit();
+  }
+
+  checkoutHistory(nodeId: string) {
+    const transition = this.history.checkout(nodeId);
+    if (!transition.undo.length && !transition.redo.length) return false;
+    for (const node of transition.undo) {
+      if (node.value) this.applyHistoryEntry(node.value, "before");
+    }
+    for (const node of transition.redo) {
+      if (node.value) this.applyHistoryEntry(node.value, "after");
+    }
+    this.liveSnapshots.clear();
+    this.requestRender();
+    this.emit();
+    return true;
+  }
+
+  private applyHistoryEntry(entry: HistoryEntry, side: "before" | "after") {
+    const document = side === "before" ? entry.documentBefore : entry.documentAfter;
+    if (document) this.doc = cloneDocument(document);
+    this.applySnapshots(side === "before" ? entry.before : entry.after);
+    const layers = side === "before" ? entry.layersBefore : entry.layersAfter;
+    if (layers) this.doc.layers = layers.map(shallowCloneLayer);
+    const selectionKey = side === "before" ? "selectionBefore" : "selectionAfter";
+    if (selectionKey in entry) {
+      const selection = entry[selectionKey];
+      this.doc.selection = selection
+        ? { mask: cloneCanvas(selection), bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } }
+        : null;
+    }
+    if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
+    const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
+    if (guides) this.doc.guides = guides.map((guide) => ({ ...guide }));
   }
   private applySnapshots(snaps: LayerSnapshot[]) {
     for (const snap of snaps) {
@@ -315,7 +328,6 @@ export class Studio {
     this.activeSessionId = next.id;
     this.doc = next.doc;
     this.history = next.history;
-    this.historyIndex = next.historyIndex;
     this.requestRender();
     this.emit();
   }
@@ -331,7 +343,6 @@ export class Studio {
       this.activeSessionId = next.id;
       this.doc = next.doc;
       this.history = next.history;
-      this.historyIndex = next.historyIndex;
       this.requestRender();
     }
     this.emit();
@@ -342,7 +353,6 @@ export class Studio {
     if (!session) return;
     session.doc = this.doc;
     session.history = this.history;
-    session.historyIndex = this.historyIndex;
   }
 
   private installDocument(doc: Document, name: string) {
@@ -351,32 +361,29 @@ export class Studio {
     if (current && current.doc.layers.length === 0) {
       current.name = name;
       current.doc = doc;
-      current.history = [];
-      current.historyIndex = -1;
+      current.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
       this.doc = doc;
       this.history = current.history;
-      this.historyIndex = -1;
       return;
     }
     const session: DocumentSession = {
       id: nextId("doc"),
       name,
       doc,
-      history: [],
-      historyIndex: -1,
+      history: new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT }),
     };
     this.sessions.push(session);
     this.activeSessionId = session.id;
     this.doc = doc;
     this.history = session.history;
-    this.historyIndex = -1;
   }
 
   resetDocument(width: number, height: number) {
     const next = createDocument(width, height);
     this.installDocument(next, "Untitled");
-    this.history = [];
-    this.historyIndex = -1;
+    this.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+    if (session) session.history = this.history;
     this.requestRender();
     this.emit();
   }
@@ -1388,8 +1395,9 @@ export class Studio {
     const { decodeLumaProject } = await import("./project");
     const project = await decodeLumaProject(blob);
     this.installDocument(project.doc, project.name);
-    this.history = [];
-    this.historyIndex = -1;
+    this.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+    if (session) session.history = this.history;
     this.actions.fromJSON(JSON.stringify(project.actions));
     this.requestRender();
     this.emit();
@@ -1520,12 +1528,14 @@ function paintTarget(layer: Layer, params: BrushParams, width: number, height: n
 
 // Scripting surface — installed on window as `window.luma` in the studio page.
 export type LumaAPI = {
-  version: "0.2";
+  version: "0.3";
   studio: Studio;
   layers(): Layer[];
   active(): Layer | null;
   select(id: string | null): void;
   documents(): ReturnType<Studio["listDocuments"]>;
+  history(): ReturnType<Studio["historyState"]>;
+  checkoutHistory(nodeId: string): boolean;
   registerPlugin(plugin: LumaPlugin): () => void;
   plugins(): ReturnType<Studio["listPlugins"]>;
   export(type?: "image/png" | "image/jpeg" | "image/webp", quality?: number): Promise<Blob>;
