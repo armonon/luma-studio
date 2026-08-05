@@ -115,6 +115,11 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   pixels.data.set([18, 52, 86, 255], 0);
   bitmap.getContext("2d")!.putImageData(pixels as unknown as ImageData, 0, 0);
   const layer = createRasterLayer("Source", bitmap);
+  layer.blend = "multiply";
+  layer.blendStack = [
+    { id: "blend-primary", mode: "multiply", opacity: 0.72, enabled: true },
+    { id: "blend-highlight", mode: "linear-dodge", opacity: 0.18, enabled: true },
+  ];
   layer.ai = {
     id: "ai-proof",
     operation: "harmonize",
@@ -136,8 +141,8 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
   const warm = graph.commit("Warm", {
     label: "Warm",
-    before: [{ layerId: layer.id, opacity: 1 }],
-    after: [{ layerId: layer.id, opacity: 0.6 }],
+    before: [{ layerId: layer.id, opacity: 1, blendStack: null }],
+    after: [{ layerId: layer.id, opacity: 0.6, blendStack: layer.blendStack.map((pass) => ({ ...pass })) }],
     selectionBefore: null,
     selectionAfter: { mask: selectionMask, bounds: { x: 1, y: 1, w: 2, h: 2 } },
   });
@@ -168,6 +173,8 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
+  assert.equal(decoded.doc.layers[0].blend, "multiply");
+  assert.deepEqual(decoded.doc.layers[0].blendStack, layer.blendStack);
   assert.equal(decoded.doc.layers[0].ai?.requestId, "req_fixture");
   assert.equal(decoded.doc.layers[0].ai?.inputSha256, "a".repeat(64));
   assert.equal(decoded.doc.guides[0].id, "guide-z");
@@ -179,6 +186,7 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.deepEqual(restoredWarm.undo.map((node) => node.label), ["Cool"]);
   assert.deepEqual(restoredWarm.redo.map((node) => node.label), ["Warm"]);
   assert.deepEqual(restoredWarm.redo[0].value?.selectionAfter?.bounds, { x: 1, y: 1, w: 2, h: 2 });
+  assert.deepEqual(restoredWarm.redo[0].value?.after[0].blendStack, layer.blendStack);
   const restoredCool = decoded.history!.tree().find((node) => node.label === "Cool")!;
   decoded.history!.checkout(restoredCool.id);
   const coolPayload = decoded.history!.lineage().at(-1)!.value!;

@@ -26,6 +26,7 @@ uniform sampler2D u_mask;
 uniform bool u_hasMask;
 uniform float u_opacity;
 uniform int u_mode;
+uniform float u_seed;
 uniform bool u_linear;
 
 // ---- color space (piecewise sRGB transfer) ----
@@ -64,6 +65,9 @@ float b_colorBurn(float b, float s) {
   if (s <= 0.0) return 0.0;
   return 1.0 - min(1.0, (1.0 - b) / s);
 }
+float b_vividLight(float b, float s) {
+  return s <= 0.5 ? b_colorBurn(b, 2.0 * s) : b_colorDodge(b, 2.0 * (s - 0.5));
+}
 
 // ---- non-separable (HSL) helpers ----
 float sat(vec3 c) { return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
@@ -89,23 +93,32 @@ vec3 setSat(vec3 c, float s) {
 }
 
 vec3 blend(vec3 b, vec3 s, int mode) {
-  if (mode == 0) return s;                                   // normal
-  if (mode == 1) return b * s;                                // multiply
-  if (mode == 2) return b + s - b * s;                        // screen
-  if (mode == 3) return vec3(b_overlay(b.r,s.r), b_overlay(b.g,s.g), b_overlay(b.b,s.b));
-  if (mode == 4) return vec3(b_softLight(b.r,s.r), b_softLight(b.g,s.g), b_softLight(b.b,s.b));
-  if (mode == 5) return vec3(b_colorDodge(b.r,s.r), b_colorDodge(b.g,s.g), b_colorDodge(b.b,s.b));
-  if (mode == 6) return vec3(b_colorBurn(b.r,s.r), b_colorBurn(b.g,s.g), b_colorBurn(b.b,s.b));
-  // hard-light == overlay(swap)
-  if (mode == 7) return vec3(b_overlay(s.r,b.r), b_overlay(s.g,b.g), b_overlay(s.b,b.b));
-  if (mode == 8) return min(b, s);                            // darken
-  if (mode == 9) return max(b, s);                            // lighten
-  if (mode == 10) return abs(b - s);                          // difference
-  if (mode == 11) return b + s - 2.0 * b * s;                 // exclusion
-  if (mode == 12) return setLum(setSat(s, sat(b)), lum(b));   // hue
-  if (mode == 13) return setLum(setSat(b, sat(s)), lum(b));   // saturation
-  if (mode == 14) return setLum(s, lum(b));                   // color
-  if (mode == 15) return setLum(b, lum(s));                   // luminosity
+  if (mode <= 1) return s;                                    // normal, dissolve
+  if (mode == 2) return min(b, s);                            // darken
+  if (mode == 3) return b * s;                                // multiply
+  if (mode == 4) return vec3(b_colorBurn(b.r,s.r), b_colorBurn(b.g,s.g), b_colorBurn(b.b,s.b));
+  if (mode == 5) return max(vec3(0.0), b + s - 1.0);           // linear burn
+  if (mode == 6) return lum(s) < lum(b) ? s : b;               // darker color
+  if (mode == 7) return max(b, s);                             // lighten
+  if (mode == 8) return b + s - b * s;                         // screen
+  if (mode == 9) return vec3(b_colorDodge(b.r,s.r), b_colorDodge(b.g,s.g), b_colorDodge(b.b,s.b));
+  if (mode == 10) return min(vec3(1.0), b + s);                // linear dodge
+  if (mode == 11) return lum(s) > lum(b) ? s : b;              // lighter color
+  if (mode == 12) return vec3(b_overlay(b.r,s.r), b_overlay(b.g,s.g), b_overlay(b.b,s.b));
+  if (mode == 13) return vec3(b_softLight(b.r,s.r), b_softLight(b.g,s.g), b_softLight(b.b,s.b));
+  if (mode == 14) return vec3(b_overlay(s.r,b.r), b_overlay(s.g,b.g), b_overlay(s.b,b.b));
+  if (mode == 15) return vec3(b_vividLight(b.r,s.r), b_vividLight(b.g,s.g), b_vividLight(b.b,s.b));
+  if (mode == 16) return clamp(b + 2.0 * s - 1.0, vec3(0.0), vec3(1.0));
+  if (mode == 17) return mix(min(b, 2.0 * s), max(b, 2.0 * (s - 0.5)), step(vec3(0.5), s));
+  if (mode == 18) return step(vec3(0.5), vec3(b_vividLight(b.r,s.r), b_vividLight(b.g,s.g), b_vividLight(b.b,s.b)));
+  if (mode == 19) return abs(b - s);                           // difference
+  if (mode == 20) return b + s - 2.0 * b * s;                 // exclusion
+  if (mode == 21) return max(vec3(0.0), b - s);                // subtract
+  if (mode == 22) return min(vec3(1.0), b / max(s, vec3(0.00001))); // divide
+  if (mode == 23) return setLum(setSat(s, sat(b)), lum(b));    // hue
+  if (mode == 24) return setLum(setSat(b, sat(s)), lum(b));    // saturation
+  if (mode == 25) return setLum(s, lum(b));                    // color
+  if (mode == 26) return setLum(b, lum(s));                    // luminosity
   return s;
 }
 
@@ -114,6 +127,10 @@ void main() {
   vec4 layer = texture(u_layer, v_uv);
   float m = u_hasMask ? texture(u_mask, v_uv).a : 1.0;
   float alpha = layer.a * u_opacity * m;
+  if (u_mode == 1) {
+    float randomValue = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + u_seed) * 43758.5453);
+    alpha = randomValue < alpha ? 1.0 : 0.0;
+  }
 
   // Unpremultiply for blend math, and optionally convert to linear light.
   vec3 baseColor = base.a > 0.0 ? base.rgb / base.a : vec3(0.0);
@@ -131,9 +148,10 @@ void main() {
   float srcA = alpha;
   float dstA = base.a;
   float outA = srcA + dstA * (1.0 - srcA);
-  vec3 outC = (1.0 - srcA) * baseColor + srcA * ((1.0 - dstA) * layerColor + dstA * blended);
-  if (u_linear) outC = linearToSrgb(outC);
-  outColor = vec4(outC * outA, outA);
+  vec3 outPremult = (1.0 - srcA) * dstA * baseColor
+    + srcA * ((1.0 - dstA) * layerColor + dstA * blended);
+  if (u_linear && outA > 0.0) outPremult = linearToSrgb(outPremult / outA) * outA;
+  outColor = vec4(outPremult, outA);
 }`;
 
 // Adjustment pass: samples the current composite and applies tone params in
@@ -352,19 +370,30 @@ void main() {
 // Ordered blend modes exactly matching the shader's int enum above.
 export const GL_BLEND_ORDER = [
   "source-over",   // 0
-  "multiply",      // 1
-  "screen",        // 2
-  "overlay",       // 3
-  "soft-light",    // 4
-  "color-dodge",   // 5
-  "color-burn",    // 6
-  "hard-light",    // 7
-  "darken",        // 8
-  "lighten",       // 9
-  "difference",    // 10
-  "exclusion",     // 11
-  "hue",           // 12
-  "saturation",    // 13
-  "color",         // 14
-  "luminosity",    // 15
+  "dissolve",      // 1
+  "darken",        // 2
+  "multiply",      // 3
+  "color-burn",    // 4
+  "linear-burn",   // 5
+  "darker-color",  // 6
+  "lighten",       // 7
+  "screen",        // 8
+  "color-dodge",   // 9
+  "linear-dodge",  // 10
+  "lighter-color", // 11
+  "overlay",       // 12
+  "soft-light",    // 13
+  "hard-light",    // 14
+  "vivid-light",   // 15
+  "linear-light",  // 16
+  "pin-light",     // 17
+  "hard-mix",      // 18
+  "difference",    // 19
+  "exclusion",     // 20
+  "subtract",      // 21
+  "divide",        // 22
+  "hue",           // 23
+  "saturation",    // 24
+  "color",         // 25
+  "luminosity",    // 26
 ] as const;

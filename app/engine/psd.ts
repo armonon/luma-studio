@@ -5,29 +5,42 @@
 import { readPsd, writePsd, Psd, Layer as PsdLayer, BlendMode as PsdBlend } from "ag-psd";
 import {
   BlendMode,
+  BLEND_LABELS,
   Document,
   Layer,
   createRasterLayer,
   createGroupLayer,
   drawLayerContent,
   newCanvas,
+  resolvedBlendPasses,
 } from "./document";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
 // "multiply". Map to our canvas GlobalCompositeOperation names.
 const PSD_TO_BLEND: Record<string, BlendMode> = {
   "normal": "source-over",
+  "dissolve": "dissolve",
+  "darken": "darken",
   "multiply": "multiply",
+  "color burn": "color-burn",
+  "linear burn": "linear-burn",
+  "darker color": "darker-color",
+  "lighten": "lighten",
   "screen": "screen",
+  "color dodge": "color-dodge",
+  "linear dodge": "linear-dodge",
+  "lighter color": "lighter-color",
   "overlay": "overlay",
   "soft light": "soft-light",
   "hard light": "hard-light",
-  "color dodge": "color-dodge",
-  "color burn": "color-burn",
-  "darken": "darken",
-  "lighten": "lighten",
+  "vivid light": "vivid-light",
+  "linear light": "linear-light",
+  "pin light": "pin-light",
+  "hard mix": "hard-mix",
   "difference": "difference",
   "exclusion": "exclusion",
+  "subtract": "subtract",
+  "divide": "divide",
   "hue": "hue",
   "saturation": "saturation",
   "color": "color",
@@ -36,17 +49,28 @@ const PSD_TO_BLEND: Record<string, BlendMode> = {
 
 const BLEND_TO_PSD: Record<BlendMode, PsdBlend> = {
   "source-over": "normal",
+  "dissolve": "dissolve",
+  "darken": "darken",
   "multiply": "multiply",
+  "color-burn": "color burn",
+  "linear-burn": "linear burn",
+  "darker-color": "darker color",
+  "lighten": "lighten",
   "screen": "screen",
+  "color-dodge": "color dodge",
+  "linear-dodge": "linear dodge",
+  "lighter-color": "lighter color",
   "overlay": "overlay",
   "soft-light": "soft light",
   "hard-light": "hard light",
-  "color-dodge": "color dodge",
-  "color-burn": "color burn",
-  "darken": "darken",
-  "lighten": "lighten",
+  "vivid-light": "vivid light",
+  "linear-light": "linear light",
+  "pin-light": "pin light",
+  "hard-mix": "hard mix",
   "difference": "difference",
   "exclusion": "exclusion",
+  "subtract": "subtract",
+  "divide": "divide",
   "hue": "hue",
   "saturation": "saturation",
   "color": "color",
@@ -106,31 +130,33 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
 }
 
 export function exportPsd(doc: Document): ArrayBuffer {
-  const serializeLayer = (layer: Layer): PsdLayer | null => {
-    if (layer.kind.startsWith("adjustment-")) return null;
+  // One Luma blend stack exports as repeated PSD layers, preserving the same
+  // bottom-to-top pass order and per-pass opacity in Photoshop.
+  const serializeLayer = (layer: Layer): PsdLayer[] => {
+    if (layer.kind.startsWith("adjustment-")) return [];
     if (layer.kind === "group") {
       const children = doc.layers
         .filter((candidate) => candidate.parentId === layer.id)
-        .map(serializeLayer)
-        .filter((candidate): candidate is PsdLayer => !!candidate)
+        .flatMap(serializeLayer)
         .reverse();
-      return {
+      return [{
         name: layer.name,
         children,
         opened: true,
         opacity: Math.round(layer.opacity * 255),
         hidden: !layer.visible,
         blendMode: BLEND_TO_PSD[layer.blend],
-      };
+      }];
     }
     const canvas = flattenLayerBitmap(doc, layer);
-    if (!canvas) return null;
-    return {
-      name: layer.name,
+    if (!canvas) return [];
+    const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
+    return passes.map((pass) => ({
+      name: passes.length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
       canvas,
-      opacity: Math.round(layer.opacity * 255),
+      opacity: Math.round(layer.opacity * pass.opacity * 255),
       hidden: !layer.visible,
-      blendMode: BLEND_TO_PSD[layer.blend],
+      blendMode: BLEND_TO_PSD[pass.mode],
       clipping: layer.clipping,
       mask: layer.mask ? {
         canvas: layer.mask,
@@ -142,13 +168,12 @@ export function exportPsd(doc: Document): ArrayBuffer {
       } : undefined,
       left: 0,
       top: 0,
-    };
+    })).reverse();
   };
   // ag-psd expects bottom-to-top; our stack is top-to-bottom.
   const children = doc.layers
     .filter((layer) => !layer.parentId)
-    .map(serializeLayer)
-    .filter((layer): layer is PsdLayer => !!layer)
+    .flatMap(serializeLayer)
     .reverse();
   const psd: Psd = {
     width: doc.width,

@@ -13,6 +13,7 @@ import NextImage from "next/image";
 import { LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
+  BLEND_MODE_GROUPS,
   BLEND_LABELS,
   BlendMode,
   Curves,
@@ -23,6 +24,7 @@ import {
   NEUTRAL_HSL,
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
+  MAX_LAYER_BLEND_PASSES,
   PathAnchor,
   PathStyle,
   ToneParams,
@@ -30,6 +32,7 @@ import {
   cloneCurves,
   curveToLut,
   layerCorners,
+  resolvedBlendPasses,
 } from "@/app/engine/document";
 import { BrushParams } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
@@ -109,11 +112,66 @@ const filmstrip = [
   { name: "Lake", src: "/film-lake.jpg" },
 ] as const;
 
-const blendModes: BlendMode[] = [
-  "source-over", "multiply", "screen", "overlay", "soft-light", "color-dodge",
-  "color-burn", "hard-light", "darken", "lighten", "difference", "exclusion",
-  "hue", "saturation", "color", "luminosity",
-];
+function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
+  const passes = resolvedBlendPasses(layer);
+  return (
+    <div className="blend-stack-editor">
+      <div className="blend-stack-heading">
+        <span><strong>Blend stack</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} passes</small></span>
+        <button
+          type="button"
+          onClick={() => studio.addBlendPass(layer.id)}
+          disabled={passes.length >= MAX_LAYER_BLEND_PASSES}
+          title="Add another blend pass"
+        >＋ Pass</button>
+      </div>
+      <p>Pass 1 is applied first. Every pass blends this layer again with its own mode and opacity.</p>
+      <div className="blend-pass-list">
+        {passes.map((pass, index) => (
+          <div className={`blend-pass ${pass.enabled ? "" : "disabled"}`} key={pass.id}>
+            <div className="blend-pass-topline">
+              <button
+                type="button"
+                className="blend-pass-toggle"
+                onClick={() => studio.updateBlendPass(layer.id, pass.id, { enabled: !pass.enabled })}
+                aria-label={`${pass.enabled ? "Disable" : "Enable"} blend pass ${index + 1}`}
+                title={pass.enabled ? "Disable pass" : "Enable pass"}
+              >{pass.enabled ? "◉" : "○"}</button>
+              <span>Pass {index + 1}</span>
+              <div className="blend-pass-order">
+                <button type="button" onClick={() => studio.moveBlendPass(layer.id, pass.id, -1)} disabled={index === 0} aria-label="Move pass earlier">↑</button>
+                <button type="button" onClick={() => studio.moveBlendPass(layer.id, pass.id, 1)} disabled={index === passes.length - 1} aria-label="Move pass later">↓</button>
+                <button type="button" onClick={() => studio.removeBlendPass(layer.id, pass.id)} disabled={passes.length === 1} aria-label="Remove blend pass">×</button>
+              </div>
+            </div>
+            <select
+              value={pass.mode}
+              onChange={(event) => studio.updateBlendPass(layer.id, pass.id, { mode: event.target.value as BlendMode })}
+              aria-label={`Blend mode for pass ${index + 1}`}
+            >
+              {BLEND_MODE_GROUPS.map((group) => (
+                <optgroup key={group.label} label={group.label}>
+                  {group.modes.map((mode) => <option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <label>
+              <span>Pass opacity</span>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={Math.round(pass.opacity * 100)}
+                onChange={(event) => studio.updateBlendPass(layer.id, pass.id, { opacity: Number(event.target.value) / 100 })}
+              />
+              <output>{Math.round(pass.opacity * 100)}%</output>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 type CurveChannel = "rgb" | "r" | "g" | "b";
 
@@ -879,7 +937,6 @@ export default function SpatialStudio() {
 
   const setLayerVisible = (id: string, v: boolean) => studio?.setLayerProp(id, "visible", v, v ? "Layer shown" : "Layer hidden");
   const setLayerOpacity = (id: string, o: number) => studio?.setLayerProp(id, "opacity", o, "Opacity");
-  const setLayerBlend = (id: string, b: BlendMode) => studio?.setLayerProp(id, "blend", b, "Blend");
   const addAdjust = () => {
     if (!studio) return;
     const layer = studio.addAdjustmentLayer("Tone", NEUTRAL_TONE);
@@ -1549,7 +1606,7 @@ export default function SpatialStudio() {
                     </span>
                     <span className="layer-name">
                       <strong>{layer.name}</strong>
-                      <small>{layer.kind}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
+                      <small>{layer.kind}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
                     </span>
                     <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
                       {layer.visible ? "◉" : "○"}
@@ -1559,14 +1616,14 @@ export default function SpatialStudio() {
               </div>
               {activeLayer && (
                 <div className="layer-controls">
-                  <select value={activeLayer.blend} onChange={(e) => setLayerBlend(activeLayer.id, e.target.value as BlendMode)}>
-                    {blendModes.map((mode) => (<option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>))}
-                  </select>
                   <label>
-                    <span>Opacity</span>
+                    <span>Master</span>
                     <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(e) => setLayerOpacity(activeLayer.id, Number(e.target.value) / 100)} />
                     <output>{Math.round(activeLayer.opacity * 100)}%</output>
                   </label>
+                  {activeLayer.kind === "group"
+                    ? <div className="blend-group-note">Group opacity · children pass through</div>
+                    : studio && <BlendStackEditor layer={activeLayer} studio={studio} />}
                   <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
                     <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
                       {activeLayer.locked ? "🔒 Locked" : "◇ Lock"}

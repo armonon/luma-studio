@@ -3793,6 +3793,114 @@ body:has(.spatial-studio) {
   font-size: 7.5px;
 }
 
+.blend-stack-editor {
+  display: grid;
+  gap: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+
+.blend-stack-heading,
+.blend-pass-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.blend-stack-heading > span {
+  display: grid;
+  gap: 1px;
+  color: #555960;
+  font-size: 9px;
+}
+
+.blend-stack-heading small {
+  color: #9599a1;
+  font-size: 7px;
+  font-weight: 500;
+}
+
+.blend-stack-heading button,
+.blend-pass-order button,
+.blend-pass-toggle {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  background: #f2f3f5;
+  color: #62666d;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.blend-stack-heading button:disabled,
+.blend-pass-order button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.blend-stack-editor > p {
+  margin: 0;
+  color: #92969e;
+  font-size: 7px;
+  line-height: 1.4;
+}
+
+.blend-pass-list {
+  display: grid;
+  gap: 6px;
+  max-height: 294px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.blend-pass {
+  display: grid;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 9px;
+  background: rgba(248, 249, 250, 0.8);
+  transition: opacity 150ms ease, border-color 150ms ease;
+}
+
+.blend-pass.disabled { opacity: 0.48; }
+.blend-pass:focus-within { border-color: rgba(35, 133, 244, 0.34); }
+
+.blend-pass-topline > span {
+  margin-right: auto;
+  color: #6d7178;
+  font-size: 7.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.blend-pass-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  font-size: 10px;
+}
+
+.blend-pass-order { display: flex; gap: 3px; }
+.blend-pass-order button { padding: 0; }
+
+.blend-pass label {
+  grid-template-columns: 55px 1fr 28px;
+}
+
+.blend-group-note {
+  padding: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 7px;
+  background: #f4f5f7;
+  color: #858990;
+  font-size: 7.5px;
+}
+
 .effects-panel {
   overflow-x: hidden;
 }

@@ -1,5 +1,6 @@
 import {
   BlendMode,
+  BlendPass,
   AiProvenance,
   Curves,
   Document,
@@ -9,6 +10,7 @@ import {
   Layer,
   LayerKind,
   LayerEffect,
+  MAX_LAYER_BLEND_PASSES,
   LevelsParams,
   NEUTRAL_CURVES,
   NEUTRAL_HSL,
@@ -36,6 +38,7 @@ import {
   ensureMask,
   newCanvas,
   nextId,
+  resolvedBlendPasses,
 } from "./document";
 import { BrushParams, paintSegment } from "./brush";
 import { render, renderClean } from "./renderer";
@@ -75,6 +78,7 @@ export type LayerSnapshot = {
   hsl?: HslParams;
   opacity?: number;
   blend?: BlendMode;
+  blendStack?: BlendPass[] | null;
   visible?: boolean;
   name?: string;
   transform?: Transform;
@@ -318,6 +322,7 @@ export class Studio {
       if (snap.effects) layer.effects = cloneEffects(snap.effects);
       if (snap.opacity !== undefined) layer.opacity = snap.opacity;
       if (snap.blend) layer.blend = snap.blend;
+      if (snap.blendStack !== undefined) layer.blendStack = snap.blendStack ? cloneBlendStack(snap.blendStack) : undefined;
       if (snap.visible !== undefined) layer.visible = snap.visible;
       if (snap.name) layer.name = snap.name;
       if (snap.transform) layer.transform = { ...snap.transform };
@@ -856,9 +861,88 @@ export class Studio {
       (before as Record<string, unknown>)[key as string] = layer[key];
       (after as Record<string, unknown>)[key as string] = value;
     }
+    if (key === "blend") {
+      before.blendStack = layer.blendStack ? cloneBlendStack(layer.blendStack) : null;
+      const passes = resolvedBlendPasses(layer);
+      passes[0] = { ...passes[0], mode: value as BlendMode };
+      layer.blendStack = cloneBlendStack(passes);
+      after.blendStack = cloneBlendStack(passes);
+    }
     layer[key] = value;
     this.commit({ label: label || `${String(key)} changed`, before: [before], after: [after] });
     this.requestRender();
+  }
+
+  setBlendStack(id: string, passes: ReadonlyArray<BlendPass>, label = "Blend stack changed") {
+    const layer = this.findLayer(id);
+    if (!layer || layer.kind === "group") return false;
+    const ids = new Set<string>();
+    const next = passes.slice(0, MAX_LAYER_BLEND_PASSES).map((pass) => {
+      let passId = pass.id || nextId("blend");
+      while (ids.has(passId)) passId = nextId("blend");
+      ids.add(passId);
+      return {
+        id: passId,
+        mode: pass.mode,
+        opacity: Math.max(0, Math.min(1, Number.isFinite(pass.opacity) ? pass.opacity : 1)),
+        enabled: pass.enabled !== false,
+      };
+    });
+    if (!next.length) return false;
+    const before: LayerSnapshot = {
+      layerId: id,
+      blend: layer.blend,
+      blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
+    };
+    layer.blendStack = cloneBlendStack(next);
+    layer.blend = next[0].mode;
+    const after: LayerSnapshot = {
+      layerId: id,
+      blend: layer.blend,
+      blendStack: cloneBlendStack(next),
+    };
+    this.commit({ label, before: [before], after: [after] });
+    this.requestRender();
+    return true;
+  }
+
+  addBlendPass(id: string, mode: BlendMode = "source-over") {
+    const layer = this.findLayer(id);
+    if (!layer) return false;
+    const passes = resolvedBlendPasses(layer);
+    if (passes.length >= MAX_LAYER_BLEND_PASSES) return false;
+    passes.push({ id: nextId("blend"), mode, opacity: 1, enabled: true });
+    return this.setBlendStack(id, passes, "Blend pass added");
+  }
+
+  updateBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
+    const layer = this.findLayer(id);
+    if (!layer) return false;
+    const passes = resolvedBlendPasses(layer);
+    const index = passes.findIndex((pass) => pass.id === passId);
+    if (index < 0) return false;
+    passes[index] = { ...passes[index], ...patch };
+    return this.setBlendStack(id, passes, patch.mode ? "Blend mode changed" : patch.opacity !== undefined ? "Blend pass opacity" : "Blend pass toggled");
+  }
+
+  removeBlendPass(id: string, passId: string) {
+    const layer = this.findLayer(id);
+    if (!layer) return false;
+    const passes = resolvedBlendPasses(layer);
+    if (passes.length <= 1) return false;
+    return this.setBlendStack(id, passes.filter((pass) => pass.id !== passId), "Blend pass removed");
+  }
+
+  moveBlendPass(id: string, passId: string, delta: number) {
+    const layer = this.findLayer(id);
+    if (!layer) return false;
+    const passes = resolvedBlendPasses(layer);
+    const index = passes.findIndex((pass) => pass.id === passId);
+    const nextIndex = Math.max(0, Math.min(passes.length - 1, index + delta));
+    if (index < 0 || index === nextIndex) return false;
+    const [pass] = passes.splice(index, 1);
+    passes.splice(nextIndex, 0, pass);
+    return this.setBlendStack(id, passes, "Blend passes reordered");
   }
 
   updateTransform(id: string, patch: Partial<Transform>) {
@@ -1470,6 +1554,7 @@ export class Studio {
 function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
+    blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
     transform: { ...layer.transform },
     tone: layer.tone ? { ...layer.tone } : undefined,
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
@@ -1530,6 +1615,7 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
     hsl: layer.hsl ? { ...layer.hsl } : undefined,
     opacity: layer.opacity,
     blend: layer.blend,
+    blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
     visible: layer.visible,
     name: layer.name,
     transform: { ...layer.transform },
@@ -1555,6 +1641,10 @@ function cloneFilters(filters: SmartFilter[]): SmartFilter[] {
 
 function cloneEffects(effects: LayerEffect[]): LayerEffect[] {
   return effects.map((effect) => ({ ...effect }));
+}
+
+function cloneBlendStack(passes: ReadonlyArray<BlendPass>): BlendPass[] {
+  return passes.map((pass) => ({ ...pass }));
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {

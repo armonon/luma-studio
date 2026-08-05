@@ -8,8 +8,10 @@ import {
   effectiveLayerVisible,
   findClippingBase,
   newCanvas,
+  resolvedBlendPasses,
 } from "./document";
 import { applySmartFilters } from "./filters";
+import { blendPassSeed } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, VS } from "./gl-shaders";
 
 // A single-doc-size WebGL2 float compositor.
@@ -83,7 +85,7 @@ function ensureCache(width: number, height: number): Cache | null {
   );
 
   const comp = compileProgram(gl, VS, COMPOSITE_FS, [
-    "u_base", "u_layer", "u_mask", "u_hasMask", "u_opacity", "u_mode", "u_linear",
+    "u_base", "u_layer", "u_mask", "u_hasMask", "u_opacity", "u_mode", "u_seed", "u_linear",
   ], ["a_pos", "a_uv"]);
   const adj = compileProgram(gl, VS, ADJUST_FS, [
     "u_src", "u_mask", "u_hasMask", "u_opacity", "u_linear",
@@ -375,6 +377,13 @@ export function setLinearCompositing(on: boolean) { linearCompositing = on; }
 export function isLinearCompositing() { return linearCompositing; }
 
 export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
+  // Adjustment programs transform the current composite directly. Route
+  // adjustment layers with custom blend passes through the exact CPU path.
+  if (doc.layers.some((layer) => {
+    if (!layer.kind.startsWith("adjustment-")) return false;
+    const enabled = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
+    return enabled.length !== 1 || enabled[0].mode !== "source-over" || enabled[0].opacity !== 1;
+  })) return false;
   const c = ensureCache(doc.width, doc.height);
   if (!c) return false;
   const { gl } = c;
@@ -475,23 +484,35 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
     } else {
       const layerTex = ensureLayerTex(gl, c, doc, layer);
       const maskTex = ensureMaskTex(gl, c, layer);
-      gl.useProgram(c.comp.program);
-      bindQuad(gl, c, c.comp);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, composite.tex);
-      gl.uniform1i(c.comp.uniforms["u_base"], 0);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, layerTex);
-      gl.uniform1i(c.comp.uniforms["u_layer"], 1);
-      gl.activeTexture(gl.TEXTURE2);
-      gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
-      gl.uniform1i(c.comp.uniforms["u_mask"], 2);
-      gl.uniform1i(c.comp.uniforms["u_hasMask"], maskTex ? 1 : 0);
-      gl.uniform1f(c.comp.uniforms["u_opacity"], layer.opacity);
-      gl.uniform1i(c.comp.uniforms["u_linear"], linearCompositing ? 1 : 0);
-      const modeIndex = Math.max(0, GL_BLEND_ORDER.indexOf(layer.blend as BlendMode));
-      gl.uniform1i(c.comp.uniforms["u_mode"], modeIndex);
-      drawFullscreen(gl);
+      for (const pass of resolvedBlendPasses(layer)) {
+        if (!pass.enabled || pass.opacity <= 0) continue;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, scratch.fb);
+        gl.viewport(0, 0, doc.width, doc.height);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(c.comp.program);
+        bindQuad(gl, c, c.comp);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, composite.tex);
+        gl.uniform1i(c.comp.uniforms["u_base"], 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, layerTex);
+        gl.uniform1i(c.comp.uniforms["u_layer"], 1);
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
+        gl.uniform1i(c.comp.uniforms["u_mask"], 2);
+        gl.uniform1i(c.comp.uniforms["u_hasMask"], maskTex ? 1 : 0);
+        gl.uniform1f(c.comp.uniforms["u_opacity"], layer.opacity * pass.opacity);
+        gl.uniform1i(c.comp.uniforms["u_linear"], linearCompositing ? 1 : 0);
+        const modeIndex = Math.max(0, GL_BLEND_ORDER.indexOf(pass.mode as BlendMode));
+        gl.uniform1i(c.comp.uniforms["u_mode"], modeIndex);
+        gl.uniform1f(c.comp.uniforms["u_seed"], blendPassSeed(pass.id) / 4294967296);
+        drawFullscreen(gl);
+        const tmp = composite;
+        composite = scratch;
+        scratch = tmp;
+      }
+      continue;
     }
 
     // Swap composite <-> scratch.

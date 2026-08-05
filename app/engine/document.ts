@@ -1,16 +1,27 @@
 export type BlendMode =
   | "source-over"
+  | "dissolve"
+  | "darken"
   | "multiply"
+  | "color-burn"
+  | "linear-burn"
+  | "darker-color"
+  | "lighten"
   | "screen"
+  | "color-dodge"
+  | "linear-dodge"
+  | "lighter-color"
   | "overlay"
   | "soft-light"
-  | "color-dodge"
-  | "color-burn"
   | "hard-light"
-  | "darken"
-  | "lighten"
+  | "vivid-light"
+  | "linear-light"
+  | "pin-light"
+  | "hard-mix"
   | "difference"
   | "exclusion"
+  | "subtract"
+  | "divide"
   | "hue"
   | "saturation"
   | "color"
@@ -18,22 +29,56 @@ export type BlendMode =
 
 export const BLEND_LABELS: Record<BlendMode, string> = {
   "source-over": "Normal",
+  dissolve: "Dissolve",
+  darken: "Darken",
   multiply: "Multiply",
+  "color-burn": "Color Burn",
+  "linear-burn": "Linear Burn",
+  "darker-color": "Darker Color",
+  lighten: "Lighten",
   screen: "Screen",
+  "color-dodge": "Color Dodge",
+  "linear-dodge": "Linear Dodge (Add)",
+  "lighter-color": "Lighter Color",
   overlay: "Overlay",
   "soft-light": "Soft Light",
-  "color-dodge": "Color Dodge",
-  "color-burn": "Color Burn",
   "hard-light": "Hard Light",
-  darken: "Darken",
-  lighten: "Lighten",
+  "vivid-light": "Vivid Light",
+  "linear-light": "Linear Light",
+  "pin-light": "Pin Light",
+  "hard-mix": "Hard Mix",
   difference: "Difference",
   exclusion: "Exclusion",
+  subtract: "Subtract",
+  divide: "Divide",
   hue: "Hue",
   saturation: "Saturation",
   color: "Color",
   luminosity: "Luminosity",
 };
+
+export const BLEND_MODE_GROUPS: ReadonlyArray<{
+  label: string;
+  modes: ReadonlyArray<BlendMode>;
+}> = [
+  { label: "Normal", modes: ["source-over", "dissolve"] },
+  { label: "Darken", modes: ["darken", "multiply", "color-burn", "linear-burn", "darker-color"] },
+  { label: "Lighten", modes: ["lighten", "screen", "color-dodge", "linear-dodge", "lighter-color"] },
+  { label: "Contrast", modes: ["overlay", "soft-light", "hard-light", "vivid-light", "linear-light", "pin-light", "hard-mix"] },
+  { label: "Inversion", modes: ["difference", "exclusion", "subtract", "divide"] },
+  { label: "Component", modes: ["hue", "saturation", "color", "luminosity"] },
+];
+
+export const BLEND_MODES: ReadonlyArray<BlendMode> = BLEND_MODE_GROUPS.flatMap((group) => group.modes);
+
+export type BlendPass = {
+  id: string;
+  mode: BlendMode;
+  opacity: number;
+  enabled: boolean;
+};
+
+export const MAX_LAYER_BLEND_PASSES = 8;
 
 export type ToneParams = {
   exposure: number;
@@ -207,6 +252,8 @@ export type Layer = {
   visible: boolean;
   opacity: number;
   blend: BlendMode;
+  /** Ordered blend passes. Missing means one legacy pass using `blend`. */
+  blendStack?: BlendPass[];
   transform: Transform;
   parentId?: string;
   locked?: boolean;
@@ -224,6 +271,16 @@ export type Layer = {
   shape?: ShapeStyle;
   path?: PathStyle;
 };
+
+export function resolvedBlendPasses(layer: Pick<Layer, "id" | "blend" | "blendStack">): BlendPass[] {
+  if (layer.blendStack?.length) {
+    return layer.blendStack.map((pass) => ({
+      ...pass,
+      opacity: Math.max(0, Math.min(1, Number.isFinite(pass.opacity) ? pass.opacity : 1)),
+    }));
+  }
+  return [{ id: `${layer.id}-blend-0`, mode: layer.blend, opacity: 1, enabled: true }];
+}
 
 export type Selection = {
   // Grayscale mask; alpha 255 = fully selected.

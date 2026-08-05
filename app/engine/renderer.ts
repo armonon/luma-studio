@@ -10,8 +10,10 @@ import {
   effectiveLayerVisible,
   findClippingBase,
   newCanvas,
+  resolvedBlendPasses,
 } from "./document";
 import { applySmartFilters } from "./filters";
+import { compositeBlendStack } from "./blend";
 import { drawSelectionOutline } from "./selection";
 import { getDisplayCtx } from "./gl-renderer";
 
@@ -174,11 +176,7 @@ function drawContentLayer(
   }
   bctx.restore();
 
-  composite.save();
-  composite.globalCompositeOperation = layer.blend;
-  composite.globalAlpha = layer.opacity;
-  composite.drawImage(layerBuf, 0, 0);
-  composite.restore();
+  compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity);
 }
 
 function drawAdjustment(
@@ -214,19 +212,11 @@ function drawAdjustment(
     bctx.drawImage(layer.mask, 0, 0);
     bctx.restore();
 
-    composite.save();
-    composite.globalCompositeOperation = layer.blend;
-    composite.globalAlpha = layer.opacity;
-    composite.drawImage(s.layerBuf, 0, 0);
-    composite.restore();
+    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity);
     return;
   }
 
-  composite.save();
-  composite.globalCompositeOperation = layer.blend;
-  composite.globalAlpha = layer.opacity;
-  composite.drawImage(snap, 0, 0);
-  composite.restore();
+  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity);
 }
 
 function drawPixelAdjustment(
@@ -260,18 +250,10 @@ function drawPixelAdjustment(
     bctx.globalCompositeOperation = "destination-in";
     bctx.drawImage(layer.mask, 0, 0);
     bctx.restore();
-    composite.save();
-    composite.globalCompositeOperation = layer.blend;
-    composite.globalAlpha = layer.opacity;
-    composite.drawImage(s.layerBuf, 0, 0);
-    composite.restore();
+    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity);
     return;
   }
-  composite.save();
-  composite.globalCompositeOperation = layer.blend;
-  composite.globalAlpha = layer.opacity;
-  composite.drawImage(snap, 0, 0);
-  composite.restore();
+  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity);
 }
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
