@@ -45,8 +45,21 @@ test("renders the unified interactive studio route", async () => {
   assert.match(html, />Edit</);
   assert.match(html, />Mask</);
   assert.match(html, />Develop</);
-  assert.match(html, />3D</);
+  assert.match(html, />Type</);
   assert.match(html, /Batch/);
   assert.match(html, /Neural Lab/);
   assert.match(html, /Layers/);
+});
+
+test("protects the generative image endpoint", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-ai`);
+  const { default: worker } = await import(workerUrl.href);
+  const response = await worker.fetch(
+    new Request("http://localhost/api/ai/edit", { method: "POST", body: new FormData() }),
+    { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
+    { waitUntil() {}, passThroughOnException() {} },
+  );
+  assert.equal(response.status, 401);
+  assert.match(await response.text(), /Sign in with ChatGPT/);
 });

@@ -26,7 +26,7 @@ export const metadata: Metadata = {
         url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
         width: 1200,
         height: 630,
-        alt: "Luma Studio unified Edit, Mask, Develop and 3D workspace",
+        alt: "Luma Studio unified Edit, Select, Mask, Develop and Type workspace",
       },
     ],
   },

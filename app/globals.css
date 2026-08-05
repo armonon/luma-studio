@@ -2425,7 +2425,7 @@ body:has(.spatial-studio) {
 
 .spatial-canvas-column {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 88px;
+  grid-template-rows: auto minmax(0, 1fr) 88px;
   gap: 10px;
   min-width: 0;
   min-height: 0;
@@ -3351,7 +3351,7 @@ body:has(.spatial-studio) {
   }
 
   .spatial-canvas-column {
-    grid-template-rows: minmax(0, 1fr) 76px;
+    grid-template-rows: auto minmax(0, 1fr) 76px;
   }
 
   .spatial-filmstrip button {
