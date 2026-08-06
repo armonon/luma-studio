@@ -42,6 +42,40 @@ function combine(
   doc.selection = { mask: current, bounds: boundsOf(current) };
 }
 
+export function selectMask(doc: Document, mask: HTMLCanvasElement, mode: SelectionMode = "replace") {
+  if (mode === "replace" || !doc.selection) {
+    doc.selection = { mask, bounds: boundsOf(mask) };
+  } else {
+    combine(doc, (context) => context.drawImage(mask, 0, 0), mode);
+  }
+}
+
+export function selectText(
+  doc: Document,
+  text: string,
+  x: number,
+  y: number,
+  font: string,
+  mode: SelectionMode = "replace",
+  vertical = false,
+) {
+  const mask = newCanvas(doc.width, doc.height);
+  const context = mask.getContext("2d")!;
+  context.fillStyle = "white";
+  context.font = font;
+  context.textBaseline = "alphabetic";
+  if (vertical) {
+    const size = Number(/([\d.]+)px/.exec(font)?.[1] ?? 16);
+    [...text].forEach((character, index) => context.fillText(character, x, y + index * size));
+  } else {
+    text.split("\n").forEach((line, index) => {
+      const size = Number(/([\d.]+)px/.exec(font)?.[1] ?? 16);
+      context.fillText(line, x, y + index * size * 1.2);
+    });
+  }
+  selectMask(doc, mask, mode);
+}
+
 export function selectRect(
   doc: Document,
   x: number,

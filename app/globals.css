@@ -2346,7 +2346,16 @@ body:has(.spatial-studio) {
   align-items: center;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
 }
+
+.spatial-toolbar > div::-webkit-scrollbar { display: none; }
+
+.spatial-toolbar > div > button { flex: 0 0 42px; }
 
 .spatial-toolbar button {
   position: relative;

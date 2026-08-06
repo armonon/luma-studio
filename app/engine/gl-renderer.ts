@@ -339,7 +339,7 @@ function layerVersion(layer: Layer): string {
   }
   if (layer.kind === "text" && layer.text) {
     const s = layer.text;
-    return `text:${s.text}|${s.font}|${s.color}|${s.align}|${s.x}|${s.y}|${s.lineHeight}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
+    return `text:${s.text}|${s.font}|${s.color}|${s.align}|${s.x}|${s.y}|${s.lineHeight}|${s.layout ?? "point"}|${s.boxWidth ?? ""}|${s.boxHeight ?? ""}|${JSON.stringify(s.path ?? null)}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "shape" && layer.shape) {
     const sh = layer.shape;

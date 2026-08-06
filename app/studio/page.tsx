@@ -49,6 +49,13 @@ import type { RawDevelopSettings } from "@/app/engine/raw-develop";
 import { extractAndParseEmbeddedColorProfile } from "@/app/engine/embedded-color-profile";
 import { defaultColorProfileRegistry } from "@/app/engine/color-management";
 import type { AiEditQuality, AiOperationControls } from "@/app/engine/ai-edit";
+import type { RetouchMode } from "@/app/engine/retouch";
+import {
+  snapPointToEdge,
+  type PatternKind,
+  type Point,
+  type Quad,
+} from "@/app/engine/advanced-tools";
 import {
   calculateDisplayViewport,
   viewportPointToDocument,
@@ -56,51 +63,107 @@ import {
 } from "@/app/engine/viewport";
 
 type ToneKey = keyof ToneParams;
-type WorkspaceMode = "edit" | "select" | "mask" | "develop" | "vector";
+type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
 type Tool =
   | "move"
   | "brush"
+  | "pencil"
+  | "mixer"
   | "erase"
+  | "gradient"
+  | "pattern"
   | "clone"
   | "heal"
+  | "spot-heal"
+  | "patch"
+  | "remove"
   | "dodge"
   | "burn"
+  | "blur-brush"
+  | "sharpen-brush"
+  | "smudge"
+  | "sponge"
+  | "liquify"
   | "fill"
   | "text"
+  | "paragraph-text"
+  | "vertical-text"
+  | "path-text"
+  | "type-mask"
   | "rect"
   | "ellipse"
+  | "triangle"
+  | "polygon"
+  | "line"
+  | "custom-shape"
+  | "frame"
   | "pen"
+  | "path-select"
+  | "direct-select"
   | "mask-add"
   | "mask-remove"
   | "sel-rect"
   | "sel-ellipse"
   | "sel-lasso"
+  | "sel-polygon"
+  | "sel-magnetic"
+  | "sel-quick"
   | "sel-wand"
-  | "sel-sam";
+  | "sel-sam"
+  | "tone"
+  | "crop"
+  | "perspective-crop"
+  | "straighten"
+  | "content-move"
+  | "perspective-warp"
+  | "puppet-warp"
+  | "eyedropper"
+  | "color-sampler"
+  | "ruler";
 
 const workspaces: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
   ["edit", "Edit", "Pixel + vector"],
+  ["retouch", "Retouch", "Repair + paint"],
   ["select", "Select", "Marquee, lasso, wand"],
   ["mask", "Mask", "Selection intelligence"],
   ["develop", "Develop", "Nondestructive color"],
   ["vector", "Type", "Text + shapes"],
+  ["transform", "Transform", "Crop + deform"],
+  ["measure", "Measure", "Color + dimensions"],
 ];
 
 const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, string, string]>> = {
   edit: [
     ["move", "↖", "Move", "V"],
     ["brush", "╱", "Brush", "B"],
+    ["pencil", "⌁", "Pencil", "N"],
+    ["mixer", "≈", "Mixer brush", "X"],
     ["erase", "⌫", "Erase", "E"],
+    ["gradient", "◩", "Gradient", "G"],
+    ["pattern", "▦", "Pattern", "P"],
+    ["fill", "▣", "Fill", "F"],
+  ],
+  retouch: [
     ["clone", "⌘", "Clone stamp", "S"],
     ["heal", "✚", "Healing brush", "J"],
+    ["spot-heal", "✣", "Spot healing", "Q"],
+    ["patch", "⬡", "Patch", "A"],
+    ["remove", "◇", "Remove", "R"],
     ["dodge", "◌", "Dodge", "O"],
     ["burn", "●", "Burn", "U"],
-    ["fill", "▣", "Fill", "F"],
+    ["blur-brush", "◍", "Blur", "L"],
+    ["sharpen-brush", "◆", "Sharpen", "H"],
+    ["smudge", "〰", "Smudge", "M"],
+    ["sponge", "◉", "Sponge", "D"],
+    ["liquify", "≋", "Liquify", "Y"],
   ],
   select: [
     ["sel-rect", "▭", "Rect marquee", "M"],
     ["sel-ellipse", "◯", "Ellipse marquee", "N"],
     ["sel-lasso", "⌁", "Lasso", "L"],
+    ["sel-polygon", "⬠", "Polygonal lasso", "P"],
+    ["sel-magnetic", "⌁", "Magnetic lasso", "G"],
+    ["sel-quick", "◒", "Quick selection", "Q"],
     ["sel-wand", "✣", "Magic wand", "W"],
     ["sel-sam", "✦", "SAM click-select", "K"],
   ],
@@ -109,13 +172,37 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["mask-remove", "−", "Hide", "E"],
   ],
   develop: [
-    ["move", "◐", "Tone", "T"],
+    ["tone", "◐", "Tone", "T"],
   ],
   vector: [
     ["text", "T", "Text", "T"],
+    ["paragraph-text", "¶", "Paragraph text", "A"],
+    ["vertical-text", "↧", "Vertical text", "V"],
+    ["path-text", "⌒", "Type on path", "Y"],
+    ["type-mask", "T⃞", "Type mask", "M"],
     ["rect", "▭", "Rect", "R"],
     ["ellipse", "◯", "Ellipse", "O"],
+    ["triangle", "△", "Triangle", "I"],
+    ["polygon", "⬡", "Polygon", "G"],
+    ["line", "╱", "Line", "L"],
+    ["custom-shape", "★", "Custom shape", "C"],
+    ["frame", "▣", "Frame", "F"],
     ["pen", "✎", "Pen", "P"],
+    ["path-select", "↖", "Path selection", "S"],
+    ["direct-select", "△", "Direct selection", "D"],
+  ],
+  transform: [
+    ["crop", "⌗", "Crop", "C"],
+    ["perspective-crop", "▱", "Perspective crop", "K"],
+    ["straighten", "／", "Straighten", "S"],
+    ["content-move", "⇥", "Content-aware move", "M"],
+    ["perspective-warp", "◇", "Perspective warp", "W"],
+    ["puppet-warp", "⌘", "Puppet warp", "P"],
+  ],
+  measure: [
+    ["eyedropper", "⌁", "Eyedropper", "I"],
+    ["color-sampler", "⊕", "Color sampler", "S"],
+    ["ruler", "╱", "Ruler", "R"],
   ],
 };
 
@@ -136,6 +223,31 @@ const filmstrip = [
   { name: "Peaks", src: "/film-mountain.jpg" },
   { name: "Lake", src: "/film-lake.jpg" },
 ] as const;
+
+function geometricPath(kind: "triangle" | "polygon" | "line" | "custom-shape", x: number, y: number, width: number, height: number, color: string): PathStyle {
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  let points: Point[];
+  if (kind === "line") points = [{ x, y }, { x: x + width, y: y + height }];
+  else {
+    const sides = kind === "triangle" ? 3 : kind === "polygon" ? 6 : 10;
+    points = Array.from({ length: sides }, (_, index) => {
+      const angle = -Math.PI / 2 + index / sides * Math.PI * 2;
+      const starScale = kind === "custom-shape" && index % 2 ? 0.42 : 1;
+      return {
+        x: centerX + Math.cos(angle) * width / 2 * starScale,
+        y: centerY + Math.sin(angle) * height / 2 * starScale,
+      };
+    });
+  }
+  return {
+    anchors: points.map((point) => ({ ...point, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } })),
+    closed: kind !== "line",
+    fill: kind === "line" ? "transparent" : color,
+    stroke: kind === "line" ? color : "#000000",
+    strokeWidth: kind === "line" ? Math.max(2, Math.min(width, height) * 0.04) : 0,
+  };
+}
 
 function BlendIfRangeEditor({
   label,
@@ -586,6 +698,13 @@ export default function SpatialStudio() {
   const [brushBlendMode, setBrushBlendMode] = useState<NonNullable<BrushParams["blendMode"]>>("normal");
   const [brushSymmetry, setBrushSymmetry] = useState<"none" | "horizontal" | "vertical" | "radial">("none");
   const [brushColor, setBrushColor] = useState("#ffffff");
+  const [secondaryColor, setSecondaryColor] = useState("#10131d");
+  const [gradientType, setGradientType] = useState<"linear" | "radial">("linear");
+  const [patternKind, setPatternKind] = useState<PatternKind>("checker");
+  const [patternScale, setPatternScale] = useState(24);
+  const [warpRadius, setWarpRadius] = useState(180);
+  const [colorSamples, setColorSamples] = useState<Array<Point & { color: string }>>([]);
+  const [measurement, setMeasurement] = useState<{ start: Point; end: Point } | null>(null);
   const [retouchSample, setRetouchSample] = useState<{ x: number; y: number } | null>(null);
   const retouchActive = useRef(false);
   const [feather, setFeather] = useState(0);
@@ -636,7 +755,7 @@ export default function SpatialStudio() {
   // Draft state for pending vector/marquee shapes.
   type Drag = {
     x0: number; y0: number; x1: number; y1: number;
-    kind: "sel-rect" | "sel-ellipse" | "rect" | "ellipse" | "sel-lasso" | "move-layer";
+    kind: "sel-rect" | "sel-ellipse" | "rect" | "ellipse" | "triangle" | "polygon" | "line" | "custom-shape" | "frame" | "paragraph-text" | "sel-lasso" | "move-layer" | "gradient" | "crop" | "straighten" | "content-move" | "puppet-warp" | "ruler";
     path?: Array<{ x: number; y: number }>;
     moveStart?: { tx: number; ty: number };
   };
@@ -656,6 +775,8 @@ export default function SpatialStudio() {
   // current anchor while the mouse is down.
   const [penDraft, setPenDraft] = useState<PathAnchor[]>([]);
   const [penDragging, setPenDragging] = useState<{ index: number } | null>(null);
+  const [pointDraft, setPointDraft] = useState<Point[]>([]);
+  const directAnchorRef = useRef<{ layerId: string; index: number; original: PathStyle; next: PathStyle } | null>(null);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -791,18 +912,18 @@ export default function SpatialStudio() {
 
   const brushParams = (): BrushParams => ({
     size: brushSize,
-    hardness,
+    hardness: activeTool === "pencil" ? 1 : hardness,
     opacity: brushOpacity,
     flow: brushFlow,
-    spacing: brushSpacing,
-    roundness: brushRoundness,
+    spacing: activeTool === "pencil" ? Math.min(0.08, brushSpacing) : brushSpacing,
+    roundness: activeTool === "pencil" ? 1 : brushRoundness,
     angle: brushAngle,
     pressureSize,
     pressureOpacity,
-    smoothing: brushSmoothing,
+    smoothing: activeTool === "pencil" ? 0 : brushSmoothing,
     tiltInfluence: brushTilt,
     scatter: brushScatter,
-    texture: brushTexture > 0 ? { strength: brushTexture, scale: 0.35, seed: 917 } : undefined,
+    texture: activeTool !== "pencil" && brushTexture > 0 ? { strength: brushTexture, scale: 0.35, seed: 917 } : undefined,
     buildUp: brushBuildUp,
     blendMode: brushBlendMode,
     pressureCurve: 1.15,
@@ -819,13 +940,21 @@ export default function SpatialStudio() {
     mode: currentBrushMode(),
   });
 
-  const paintingTool = activeTool === "brush" || activeTool === "erase" || activeTool === "mask-add" || activeTool === "mask-remove";
-  const retouchTool = activeTool === "clone" || activeTool === "heal" || activeTool === "dodge" || activeTool === "burn";
+  const paintingTool = activeTool === "brush" || activeTool === "pencil" || activeTool === "erase" || activeTool === "mask-add" || activeTool === "mask-remove";
+  const retouchMode: RetouchMode | null = ({
+    mixer: "mixer", clone: "clone", heal: "heal", "spot-heal": "spot-heal", patch: "patch", remove: "remove",
+    dodge: "dodge", burn: "burn", "blur-brush": "blur", "sharpen-brush": "sharpen", smudge: "smudge",
+    sponge: "sponge", liquify: "liquify",
+  } as Partial<Record<Tool, RetouchMode>>)[activeTool] ?? null;
+  const retouchTool = retouchMode !== null;
   const marqueeTool = activeTool === "sel-rect" || activeTool === "sel-ellipse";
   const lassoTool = activeTool === "sel-lasso";
-  const wandTool = activeTool === "sel-wand";
-  const vectorDragTool = activeTool === "rect" || activeTool === "ellipse";
-  const moveTool = activeTool === "move";
+  const wandTool = activeTool === "sel-wand" || activeTool === "sel-quick";
+  const pointSelectionTool = activeTool === "sel-polygon" || activeTool === "sel-magnetic";
+  const vectorDragTool = ["rect", "ellipse", "triangle", "polygon", "line", "custom-shape", "frame", "paragraph-text"].includes(activeTool);
+  const transformDragTool = ["gradient", "crop", "straighten", "content-move", "puppet-warp", "ruler"].includes(activeTool);
+  const quadTool = activeTool === "perspective-crop" || activeTool === "perspective-warp";
+  const moveTool = activeTool === "move" || activeTool === "path-select";
 
   const snapLayerTranslation = (layer: Layer, tx: number, ty: number) => {
     if (!doc || !snapGuides) return { tx, ty };
@@ -869,18 +998,19 @@ export default function SpatialStudio() {
         notify("Retouching needs a raster precision layer");
         return;
       }
-      if ((activeTool === "clone" || activeTool === "heal") && e.altKey) {
+      const sourceTool = retouchMode === "clone" || retouchMode === "heal" || retouchMode === "patch";
+      if (sourceTool && e.altKey) {
         setRetouchSample({ x: p.x, y: p.y });
-        notify(activeTool === "clone" ? "Clone source sampled" : "Healing source sampled");
+        notify(`${retouchMode === "clone" ? "Clone" : retouchMode === "patch" ? "Patch" : "Healing"} source sampled`);
         return;
       }
-      if ((activeTool === "clone" || activeTool === "heal") && !retouchSample) {
+      if (sourceTool && !retouchSample) {
         notify("Alt-click to choose a source");
         return;
       }
       retouchActive.current = studio.beginRetouchStroke(
         activeLayer.id,
-        activeTool,
+        retouchMode!,
         retouchSample,
         p,
         { ...brushParams(), mode: "paint" },
@@ -901,7 +1031,16 @@ export default function SpatialStudio() {
       return;
     }
 
-    if (marqueeTool || vectorDragTool) {
+    if (activeTool === "pattern" || activeTool === "fill") {
+      if (!activeLayer || activeLayer.kind !== "raster") { notify("Fill needs a raster layer"); return; }
+      const changed = activeTool === "pattern"
+        ? studio.patternFill(activeLayer.id, patternKind, brushColor, secondaryColor, patternScale)
+        : !activeLayer.locked;
+      if (activeTool === "fill" && changed) studio.fillLayer(activeLayer.id, brushColor);
+      notify(changed ? (activeTool === "pattern" ? "Pattern applied" : "Selection filled") : "Layer is locked");
+      return;
+    }
+    if (marqueeTool || vectorDragTool || transformDragTool) {
       setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: activeTool as Drag["kind"] });
       return;
     }
@@ -911,8 +1050,36 @@ export default function SpatialStudio() {
     }
     if (wandTool) {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("Wand needs a raster layer"); return; }
-      studio.selectByColor(activeLayer.id, p.x, p.y, wandTolerance, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace", !e.metaKey);
-      notify("Selection updated");
+      studio.selectByColor(activeLayer.id, p.x, p.y, activeTool === "sel-quick" ? Math.max(6, wandTolerance / 2) : wandTolerance, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace", activeTool === "sel-quick" ? true : !e.metaKey);
+      notify(activeTool === "sel-quick" ? "Quick selection painted" : "Selection updated");
+      return;
+    }
+    if (pointSelectionTool) {
+      if (!activeLayer || activeLayer.kind !== "raster" || !activeLayer.bitmap) { notify("Lasso needs a raster layer"); return; }
+      let nextPoint: Point = p;
+      if (activeTool === "sel-magnetic") {
+        const image = activeLayer.bitmap.getContext("2d")!.getImageData(0, 0, activeLayer.bitmap.width, activeLayer.bitmap.height);
+        nextPoint = snapPointToEdge({ width: image.width, height: image.height, data: image.data }, p, Math.max(6, brushSize / 4));
+      }
+      if (pointDraft.length >= 2 && Math.hypot(nextPoint.x - pointDraft[0].x, nextPoint.y - pointDraft[0].y) < Math.max(8, (doc?.width ?? 1000) * 0.008)) {
+        studio.selectLasso(pointDraft, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace", feather);
+        setPointDraft([]);
+        notify("Polygon selection committed");
+      } else setPointDraft((points) => [...points, nextPoint]);
+      return;
+    }
+    if (quadTool) {
+      if (activeTool === "perspective-warp" && (!activeLayer || activeLayer.kind !== "raster")) { notify("Perspective warp needs a raster layer"); return; }
+      const next = [...pointDraft, p];
+      if (next.length === 4) {
+        if (activeTool === "perspective-crop") studio.perspectiveCrop(next as unknown as Quad);
+        else studio.perspectiveWarpLayer(activeLayer!.id, next as unknown as Quad);
+        setPointDraft([]);
+        notify(activeTool === "perspective-crop" ? "Perspective crop applied" : "Perspective warp applied");
+      } else {
+        setPointDraft(next);
+        notify(`Corner ${next.length}/4 placed`);
+      }
       return;
     }
     if (activeTool === "sel-sam") {
@@ -947,9 +1114,33 @@ export default function SpatialStudio() {
       setPenDragging({ index: penDraft.length });
       return;
     }
-    if (activeTool === "text") {
-      studio.addTextLayer(textDraft, { x: p.x, y: p.y });
-      notify("Text added");
+    if (["text", "vertical-text", "path-text", "type-mask"].includes(activeTool)) {
+      if (activeTool === "type-mask") studio.selectTextMask(textDraft, p.x, p.y, "700 96px 'Inter', system-ui, sans-serif", false);
+      else if (activeTool === "path-text") {
+        if (!activeLayer?.path) { notify("Select a path layer first"); return; }
+        studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: "path", path: activeLayer.path, color: brushColor });
+      } else studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor });
+      notify(activeTool === "type-mask" ? "Type selection created" : "Text added");
+      return;
+    }
+    if (activeTool === "eyedropper" || activeTool === "color-sampler") {
+      if (!activeLayer || activeLayer.kind !== "raster") { notify("Choose a raster layer"); return; }
+      const color = studio.sampleLayerColor(activeLayer.id, p.x, p.y);
+      if (!color) return;
+      if (activeTool === "eyedropper") { setBrushColor(color); notify(`Foreground ${color}`); }
+      else { setColorSamples((samples) => [...samples.slice(-7), { x: p.x, y: p.y, color }]); notify(`Sampled ${color}`); }
+      return;
+    }
+    if (activeTool === "direct-select") {
+      if (!activeLayer?.path) { notify("Select a path layer"); return; }
+      let index = 0;
+      let distance = Infinity;
+      activeLayer.path.anchors.forEach((anchor, candidate) => {
+        const d = Math.hypot(anchor.x - p.x, anchor.y - p.y);
+        if (d < distance) { distance = d; index = candidate; }
+      });
+      const original = structuredClone(activeLayer.path);
+      directAnchorRef.current = { layerId: activeLayer.id, index, original, next: structuredClone(original) };
       return;
     }
     if (moveTool && activeLayer) {
@@ -994,6 +1185,20 @@ export default function SpatialStudio() {
       });
       return;
     }
+    if (activeTool === "direct-select" && directAnchorRef.current && e.buttons !== 0) {
+      const p = eventToDoc(e);
+      const edit = directAnchorRef.current;
+      const next = structuredClone(edit.next);
+      next.anchors[edit.index] = { ...next.anchors[edit.index], x: p.x, y: p.y };
+      edit.next = next;
+      studio.liveUpdatePath(edit.layerId, next);
+      return;
+    }
+    if (activeTool === "sel-quick" && e.buttons !== 0 && activeLayer?.kind === "raster") {
+      const p = eventToDoc(e);
+      studio.selectByColor(activeLayer.id, p.x, p.y, Math.max(6, wandTolerance / 2), "add", true);
+      return;
+    }
     const d = dragRef.current;
     if (paintingTool && e.buttons !== 0 && activeLayer) {
       // Coalesced events for smoother strokes on high-frequency devices.
@@ -1029,6 +1234,7 @@ export default function SpatialStudio() {
       const dy = p.y - d.y0;
       studio.liveUpdateTransform(activeLayer.id, snapLayerTranslation(activeLayer, d.moveStart.tx + dx, d.moveStart.ty + dy));
     }
+    if (d.kind === "ruler") setMeasurement({ start: { x: d.x0, y: d.y0 }, end: { x: p.x, y: p.y } });
     setDragBoth(next);
   };
 
@@ -1037,6 +1243,14 @@ export default function SpatialStudio() {
     if (panDragRef.current) { panDragRef.current = null; return; }
     if (activeTool === "pen" && penDragging) {
       setPenDragging(null);
+      return;
+    }
+    if (activeTool === "direct-select" && directAnchorRef.current) {
+      const edit = directAnchorRef.current;
+      studio.liveUpdatePath(edit.layerId, edit.original);
+      studio.updatePath(edit.layerId, edit.next);
+      directAnchorRef.current = null;
+      notify("Anchor moved");
       return;
     }
     if (paintingTool && activeLayer) {
@@ -1060,6 +1274,15 @@ export default function SpatialStudio() {
     else if (d.kind === "sel-lasso" && d.path && d.path.length > 4) studio.selectLasso(d.path, mode, feather);
     else if (d.kind === "rect" && w > 2 && h > 2) studio.addShapeLayer({ kind: "rect", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
     else if (d.kind === "ellipse" && w > 2 && h > 2) studio.addShapeLayer({ kind: "ellipse", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
+    else if (["triangle", "polygon", "line", "custom-shape"].includes(d.kind) && w > 2 && h > 2) studio.addPathLayer(geometricPath(d.kind as "triangle" | "polygon" | "line" | "custom-shape", x, y, w, h, brushColor));
+    else if (d.kind === "frame" && w > 2 && h > 2) studio.addFrame(x, y, w, h, e.shiftKey);
+    else if (d.kind === "paragraph-text" && w > 8 && h > 8) studio.addTextLayer(textDraft, { x, y, layout: "paragraph", boxWidth: w, boxHeight: h, color: brushColor });
+    else if (d.kind === "gradient" && activeLayer?.kind === "raster") studio.gradientFill(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, brushColor, secondaryColor, gradientType);
+    else if (d.kind === "crop" && w > 2 && h > 2) studio.cropRect(x, y, w, h);
+    else if (d.kind === "straighten") studio.straightenDocument(-Math.atan2(d.y1 - d.y0, d.x1 - d.x0));
+    else if (d.kind === "content-move" && activeLayer?.kind === "raster") studio.moveSelectionContent(activeLayer.id, d.x1 - d.x0, d.y1 - d.y0);
+    else if (d.kind === "puppet-warp" && activeLayer?.kind === "raster") studio.radialWarpLayer(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, warpRadius);
+    else if (d.kind === "ruler") setMeasurement({ start: { x: d.x0, y: d.y0 }, end: { x: d.x1, y: d.y1 } });
     else if (d.kind === "move-layer" && activeLayer) {
       studio.updateTransform(activeLayer.id, { tx: activeLayer.transform.tx, ty: activeLayer.transform.ty });
     }
@@ -1101,6 +1324,8 @@ export default function SpatialStudio() {
   };
 
   const switchWorkspace = (next: WorkspaceMode) => {
+    setPointDraft([]);
+    directAnchorRef.current = null;
     setWorkspace(next);
     setActiveTool(modeTools[next][0][0]);
   };
@@ -1450,6 +1675,14 @@ export default function SpatialStudio() {
       if (e.key === "Escape" && showHistory) { setShowHistory(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
+      if (e.key === "Enter" && pointSelectionTool && pointDraft.length >= 3) {
+        e.preventDefault();
+        studio?.selectLasso(pointDraft, "replace", feather);
+        setPointDraft([]);
+        notify("Polygon selection committed");
+        return;
+      }
+      if (e.key === "Escape" && pointDraft.length) { setPointDraft([]); notify("Draft cancelled"); return; }
       if (e.code === "Space" && !e.repeat) { spaceHeld.current = true; document.body.style.cursor = "grab"; }
       if (e.key === "0" && !e.metaKey && !e.ctrlKey) { setView({ zoom: 1, panX: 0, panY: 0 }); return; }
       if (e.key === "1" && !e.metaKey && !e.ctrlKey) { setView((v) => ({ ...v, zoom: 1 })); return; }
@@ -1459,7 +1692,7 @@ export default function SpatialStudio() {
         if (activeLayerId && studio) { studio.clearPixels(activeLayerId); return; }
       }
       const t = modeTools[workspace].find(([, , , k]) => k.toLowerCase() === e.key.toLowerCase());
-      if (t) setActiveTool(t[0]);
+      if (t) { setPointDraft([]); directAnchorRef.current = null; setActiveTool(t[0]); }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") { spaceHeld.current = false; document.body.style.cursor = ""; }
@@ -1470,17 +1703,17 @@ export default function SpatialStudio() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory]);
+  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, pointDraft, pointSelectionTool, feather, notify]);
 
   const currentTools = modeTools[workspace];
   const historyState = studio?.historyState();
   const engineState = studio?.engineState();
   const canvasCursor = useMemo(() => {
-    if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool) return "crosshair";
-    if (activeTool === "pen" || activeTool === "sel-sam") return "crosshair";
+    if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool || transformDragTool || pointSelectionTool || quadTool) return "crosshair";
+    if (activeTool === "pen" || activeTool === "sel-sam" || activeTool === "eyedropper" || activeTool === "color-sampler" || activeTool === "direct-select") return "crosshair";
     if (moveTool) return "move";
     return "default";
-  }, [paintingTool, retouchTool, marqueeTool, lassoTool, wandTool, vectorDragTool, moveTool, activeTool]);
+  }, [paintingTool, retouchTool, marqueeTool, lassoTool, wandTool, vectorDragTool, transformDragTool, pointSelectionTool, quadTool, moveTool, activeTool]);
 
   const activeIsAdjustment = activeLayer?.kind === "adjustment-tone";
 
@@ -1545,6 +1778,18 @@ export default function SpatialStudio() {
       </div>
     );
   }, [doc, activeTool, penDraft]);
+
+  const pointOverlay = useMemo(() => {
+    if (!doc || pointDraft.length === 0) return null;
+    const closedPreview = pointDraft.length === 4 && quadTool;
+    const path = `${pointDraft.map((point, index) => `${index ? "L" : "M"}${point.x} ${point.y}`).join(" ")}${closedPreview ? " Z" : ""}`;
+    return (
+      <svg viewBox={`0 0 ${doc.width} ${doc.height}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible", zIndex: 9 }}>
+        <path d={path} stroke="#f6a85f" strokeWidth={2} strokeDasharray="6 4" fill={closedPreview ? "rgba(246,168,95,.12)" : "none"} vectorEffect="non-scaling-stroke" />
+        {pointDraft.map((point, index) => <circle key={index} cx={point.x} cy={point.y} r={Math.max(4, doc.width * 0.003)} fill="#fff" stroke="#f06d3b" strokeWidth={2} vectorEffect="non-scaling-stroke" />)}
+      </svg>
+    );
+  }, [doc, pointDraft, quadTool]);
 
   // Free-transform overlay: handles for the active non-adjustment layer when
   // the Move tool is active. Handles live in the same coordinate space as the
@@ -1790,8 +2035,9 @@ export default function SpatialStudio() {
                   key={id}
                   className={activeTool === id ? "active" : ""}
                   onClick={() => {
-                    if (id === "fill" && activeLayerId) studio?.fillLayer(activeLayerId, brushColor);
-                    else setActiveTool(id);
+                    setPointDraft([]);
+                    directAnchorRef.current = null;
+                    setActiveTool(id);
                   }}
                   aria-label={label}
                   title={`${label} (${shortcut})`}
@@ -1875,6 +2121,7 @@ export default function SpatialStudio() {
                     {dragOverlay}
                     {transformOverlay}
                     {penOverlay}
+                    {pointOverlay}
                     {showGuides && doc.guides.map((guide) => (
                       <i
                         key={guide.id}
@@ -2378,18 +2625,27 @@ export default function SpatialStudio() {
               </section>
             )}
 
-            {workspace === "edit" && (
+            {(workspace === "edit" || workspace === "retouch") && (
               <section className="glass-card tone-card">
                 <header>
-                  <strong>{retouchTool ? activeTool === "clone" ? "Clone stamp" : activeTool === "heal" ? "Healing brush" : activeTool === "dodge" ? "Dodge" : "Burn" : "Brush"}</strong>
+                  <strong>{modeTools[workspace].find(([tool]) => tool === activeTool)?.[2] ?? "Brush"}</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Brush color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
                 </header>
                 {retouchTool && (
                   <p style={{ padding: "0 12px 7px", fontSize: 10, opacity: 0.72 }}>
-                    {activeTool === "clone" || activeTool === "heal"
+                    {activeTool === "clone" || activeTool === "heal" || activeTool === "patch"
                       ? `${retouchSample ? `Source ${Math.round(retouchSample.x)}, ${Math.round(retouchSample.y)}` : "Alt-click to sample a source"} · float-tile replay`
-                      : "Linear-light exposure retouch · float-tile replay"}
+                      : "Precision float-tile brush · nondestructive history replay"}
                   </p>
+                )}
+                {(activeTool === "gradient" || activeTool === "pattern" || activeTool === "fill") && (
+                  <div style={{ display: "grid", gap: 7, padding: "0 12px 9px" }}>
+                    <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 11 }}>
+                      <span>Second color</span><input type="color" value={secondaryColor} onChange={(event) => setSecondaryColor(event.target.value)} />
+                    </label>
+                    {activeTool === "gradient" && <select value={gradientType} onChange={(event) => setGradientType(event.target.value as typeof gradientType)}><option value="linear">Linear gradient</option><option value="radial">Radial gradient</option></select>}
+                    {activeTool === "pattern" && <><select value={patternKind} onChange={(event) => setPatternKind(event.target.value as PatternKind)}><option value="checker">Checker</option><option value="stripes">Stripes</option><option value="dots">Dots</option></select><label style={{ display: "flex", gap: 8, fontSize: 11 }}><span>Scale</span><input type="range" min="2" max="160" value={patternScale} onChange={(event) => setPatternScale(Number(event.target.value))} /><output>{patternScale}px</output></label></>}
+                  </div>
                 )}
                 <div className="tone-controls">
                   <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
@@ -2441,6 +2697,33 @@ export default function SpatialStudio() {
                       <button onClick={() => activeLayer?.text && studio?.updateText(activeLayer.id, { text: textDraft })} style={{ marginTop: 4, fontSize: 11 }}>Update active text</button>
                     </>
                   )}
+                </div>
+              </section>
+            )}
+
+            {workspace === "transform" && (
+              <section className="glass-card tone-card">
+                <header><strong>Transform & geometry</strong><small>PRECISION</small></header>
+                <div style={{ display: "grid", gap: 8, padding: "8px 12px 12px", fontSize: 11 }}>
+                  <p style={{ margin: 0, opacity: 0.72 }}>
+                    {quadTool ? `Place four corners in order · ${pointDraft.length}/4` : activeTool === "content-move" ? "Make a selection, then drag it to a new position." : activeTool === "crop" ? "Drag the retained crop rectangle." : "Drag directly on the document."}
+                  </p>
+                  {(activeTool === "puppet-warp" || activeTool === "liquify") && <label style={{ display: "flex", gap: 8, alignItems: "center" }}><span>Influence</span><input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} /><output>{warpRadius}px</output></label>}
+                  {pointDraft.length > 0 && <button onClick={() => setPointDraft([])}>Clear points</button>}
+                </div>
+              </section>
+            )}
+
+            {workspace === "measure" && (
+              <section className="glass-card tone-card">
+                <header><strong>Measure & sample</strong><button onClick={() => { setColorSamples([]); setMeasurement(null); }}>Clear</button></header>
+                <div style={{ display: "grid", gap: 7, padding: "8px 12px 12px", fontSize: 11 }}>
+                  {measurement ? (() => {
+                    const dx = measurement.end.x - measurement.start.x;
+                    const dy = measurement.end.y - measurement.start.y;
+                    return <><div>Length <strong>{Math.hypot(dx, dy).toFixed(1)} px</strong></div><div>Angle <strong>{(Math.atan2(dy, dx) * 180 / Math.PI).toFixed(1)}°</strong></div><div>Δx {dx.toFixed(1)} · Δy {dy.toFixed(1)}</div></>;
+                  })() : <p style={{ margin: 0, opacity: 0.7 }}>Drag with Ruler or click with a sampler.</p>}
+                  {colorSamples.map((sample, index) => <div key={`${sample.x}-${sample.y}-${index}`} style={{ display: "flex", alignItems: "center", gap: 7 }}><i style={{ width: 14, height: 14, borderRadius: 3, background: sample.color, border: "1px solid rgba(255,255,255,.35)" }} /><span>#{index + 1} · {sample.color} · {Math.round(sample.x)}, {Math.round(sample.y)}</span></div>)}
                 </div>
               </section>
             )}

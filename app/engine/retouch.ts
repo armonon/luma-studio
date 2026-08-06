@@ -1,11 +1,25 @@
 import {
   brushDabOpacityAt,
+  parseBrushColor,
   type BrushDab,
   type BrushParams,
   type FloatRgbaSurface,
 } from "./brush";
 
-export type RetouchMode = "clone" | "heal" | "dodge" | "burn";
+export type RetouchMode =
+  | "clone"
+  | "heal"
+  | "spot-heal"
+  | "patch"
+  | "remove"
+  | "dodge"
+  | "burn"
+  | "blur"
+  | "sharpen"
+  | "smudge"
+  | "sponge"
+  | "mixer"
+  | "liquify";
 
 export type RetouchSample = (x: number, y: number) => readonly [number, number, number, number];
 
@@ -31,7 +45,7 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
   if (surface.data.length !== surface.width * surface.height * 4) {
     throw new Error("Retouch surface payload does not match its dimensions");
   }
-  if ((operation.mode === "clone" || operation.mode === "heal") && !operation.sample) {
+  if ((operation.mode === "clone" || operation.mode === "heal" || operation.mode === "patch") && !operation.sample) {
     throw new Error(`${operation.mode} retouch requires a source sampler`);
   }
   const coverage = new Float32Array(surface.width * surface.height);
@@ -56,6 +70,16 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
 
   const finalOpacity = operation.params.flow === undefined ? 1 : clamp01(operation.params.opacity);
   const strength = clamp01(operation.strength ?? 0.25);
+  const brushColor = parseBrushColor(operation.params.color);
+  const sampledAround = (x: number, y: number, radius: number) => {
+    const sample = operation.sample!;
+    const points = [
+      sample(x - radius, y), sample(x + radius, y), sample(x, y - radius), sample(x, y + radius),
+      sample(x - radius * 0.7, y - radius * 0.7), sample(x + radius * 0.7, y - radius * 0.7),
+      sample(x - radius * 0.7, y + radius * 0.7), sample(x + radius * 0.7, y + radius * 0.7),
+    ];
+    return [0, 1, 2, 3].map((channel) => points.reduce((sum, point) => sum + point[channel], 0) / points.length);
+  };
   let affectedPixels = 0;
   for (let pixel = 0; pixel < coverage.length; pixel += 1) {
     const amount = clamp01(coverage[pixel] * finalOpacity);
@@ -73,12 +97,27 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
     if (operation.mode === "dodge" || operation.mode === "burn") {
       const exposure = operation.mode === "dodge" ? 1 + strength : 1 / (1 + strength);
       source = destination.map((channel) => channel * exposure);
+    } else if (operation.mode === "blur" || operation.mode === "sharpen" || operation.mode === "spot-heal" || operation.mode === "remove") {
+      const average = sampledAround(x, y, operation.mode === "remove" ? 12 : 3);
+      source = operation.mode === "sharpen"
+        ? destination.map((channel, index) => channel + (channel - average[index]) * (0.5 + strength))
+        : average;
+    } else if (operation.mode === "smudge" || operation.mode === "liquify") {
+      source = operation.sample!(
+        x + (operation.sourceOffsetX ?? 0) * (operation.mode === "liquify" ? 1.5 : 1),
+        y + (operation.sourceOffsetY ?? 0) * (operation.mode === "liquify" ? 1.5 : 1),
+      );
+    } else if (operation.mode === "sponge") {
+      const gray = luma(destination);
+      source = destination.map((channel) => gray + (channel - gray) * (1 + strength * 1.5));
+    } else if (operation.mode === "mixer") {
+      source = [brushColor[0] / 255, brushColor[1] / 255, brushColor[2] / 255];
     } else {
       const sampled = operation.sample!(
         x + (operation.sourceOffsetX ?? 0),
         y + (operation.sourceOffsetY ?? 0),
       );
-      if (operation.mode === "heal") {
+      if (operation.mode === "heal" || operation.mode === "patch") {
         const correction = (luma(destination) - luma(sampled)) * 0.65;
         source = [sampled[0] + correction, sampled[1] + correction, sampled[2] + correction];
       } else {
@@ -88,7 +127,7 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
     for (let channel = 0; channel < 3; channel += 1) {
       surface.data[offset + channel] = destination[channel] * (1 - amount) + source[channel] * amount;
     }
-    if (operation.mode === "clone" || operation.mode === "heal") {
+    if (["clone", "heal", "patch", "spot-heal", "remove", "smudge", "liquify"].includes(operation.mode)) {
       const sampledAlpha = operation.sample!(
         x + (operation.sourceOffsetX ?? 0),
         y + (operation.sourceOffsetY ?? 0),

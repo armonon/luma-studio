@@ -241,6 +241,11 @@ export type TextStyle = {
   lineHeight: number; // multiplier
   x: number; // baseline x in layer-space
   y: number; // baseline y in layer-space
+  layout?: "point" | "paragraph" | "vertical" | "path";
+  boxWidth?: number;
+  boxHeight?: number;
+  /** Frozen path geometry for type-on-path so the text layer stays portable. */
+  path?: PathStyle;
 };
 
 export type ShapeKind = "rect" | "ellipse";
@@ -840,10 +845,60 @@ export function drawLayerContent(
     ctx.textAlign = s.align;
     ctx.textBaseline = "alphabetic";
     ctx.fillStyle = s.color;
-    const lines = s.text.split("\n");
     const fontSize = extractFontSize(s.font);
     const lh = fontSize * s.lineHeight;
-    lines.forEach((line, i) => ctx.fillText(line, s.x, s.y + i * lh));
+    if (s.layout === "vertical") {
+      let row = 0;
+      let column = 0;
+      for (const character of s.text) {
+        if (character === "\n") { column += 1; row = 0; continue; }
+        ctx.fillText(character, s.x - column * lh, s.y + row * lh);
+        row += 1;
+      }
+    } else if (s.layout === "paragraph" && s.boxWidth) {
+      const lines: string[] = [];
+      for (const paragraph of s.text.split("\n")) {
+        let line = "";
+        for (const word of paragraph.split(/\s+/)) {
+          const candidate = line ? `${line} ${word}` : word;
+          if (line && ctx.measureText(candidate).width > s.boxWidth) {
+            lines.push(line);
+            line = word;
+          } else line = candidate;
+        }
+        lines.push(line);
+      }
+      const maximumLines = s.boxHeight ? Math.max(1, Math.floor(s.boxHeight / lh)) : lines.length;
+      lines.slice(0, maximumLines).forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));
+    } else if (s.layout === "path" && s.path?.anchors.length) {
+      const anchors = s.path.anchors;
+      const segments = anchors.slice(0, -1).map((anchor, index) => ({ from: anchor, to: anchors[index + 1] }));
+      if (s.path.closed && anchors.length > 1) segments.push({ from: anchors.at(-1)!, to: anchors[0] });
+      const lengths = segments.map(({ from, to }) => Math.hypot(to.x - from.x, to.y - from.y));
+      let distance = 0;
+      for (const character of s.text) {
+        const advance = ctx.measureText(character).width;
+        const center = distance + advance / 2;
+        let remaining = center;
+        let segmentIndex = 0;
+        while (segmentIndex < lengths.length - 1 && remaining > lengths[segmentIndex]) {
+          remaining -= lengths[segmentIndex++];
+        }
+        const segment = segments[segmentIndex];
+        if (!segment) break;
+        const amount = Math.min(1, remaining / Math.max(1e-6, lengths[segmentIndex]));
+        const x = segment.from.x + (segment.to.x - segment.from.x) * amount;
+        const y = segment.from.y + (segment.to.y - segment.from.y) * amount;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(Math.atan2(segment.to.y - segment.from.y, segment.to.x - segment.from.x));
+        ctx.fillText(character, -advance / 2, 0);
+        ctx.restore();
+        distance += advance;
+      }
+    } else {
+      s.text.split("\n").forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));
+    }
   } else if (layer.kind === "path" && layer.path) {
     const p = layer.path;
     if (p.anchors.length >= 2) {

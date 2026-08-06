@@ -70,6 +70,7 @@ import {
   selectByColor,
   selectEllipse,
   selectLasso,
+  selectText,
   selectRect,
 } from "./selection";
 import {
@@ -114,6 +115,17 @@ import {
   type AiOperationControls,
   type AiSelectionGuide,
 } from "./ai-edit";
+import {
+  createGradientPixels,
+  createPatternPixels,
+  radialWarp,
+  rectifyQuadrilateral,
+  rgbaToHex,
+  warpToQuadrilateral,
+  type PatternKind,
+  type Point,
+  type Quad,
+} from "./advanced-tools";
 
 type SubscribeFn = () => void;
 
@@ -719,10 +731,14 @@ export class Studio {
   cropToSelection() {
     const bounds = this.doc.selection?.bounds;
     if (!bounds) return false;
-    const x = Math.max(0, Math.floor(bounds.x));
-    const y = Math.max(0, Math.floor(bounds.y));
-    const width = Math.min(this.doc.width - x, Math.max(1, Math.ceil(bounds.w)));
-    const height = Math.min(this.doc.height - y, Math.max(1, Math.ceil(bounds.h)));
+    return this.cropRect(bounds.x, bounds.y, bounds.w, bounds.h, "Crop to selection");
+  }
+
+  cropRect(inputX: number, inputY: number, requestedWidth: number, requestedHeight: number, label = "Crop") {
+    const x = Math.max(0, Math.floor(inputX));
+    const y = Math.max(0, Math.floor(inputY));
+    const width = Math.min(this.doc.width - x, Math.max(1, Math.ceil(requestedWidth)));
+    const height = Math.min(this.doc.height - y, Math.max(1, Math.ceil(requestedHeight)));
     if (x === 0 && y === 0 && width === this.doc.width && height === this.doc.height) return false;
     const before = cloneDocument(this.doc);
     for (const layer of this.doc.layers) {
@@ -741,9 +757,211 @@ export class Studio {
       .filter((guide) => guide.position >= 0 && guide.position <= (guide.orientation === "vertical" ? width : height));
     this.doc.selection = null;
     const after = cloneDocument(this.doc);
-    this.commit({ label: "Crop to selection", before: [], after: [], documentBefore: before, documentAfter: after });
+    this.commit({ label, before: [], after: [], documentBefore: before, documentAfter: after });
     this.requestRender();
     return true;
+  }
+
+  perspectiveCrop(quad: Quad) {
+    const before = cloneDocument(this.doc);
+    const composite = newCanvas(this.doc.width, this.doc.height);
+    renderClean(this.doc, composite);
+    const source = composite.getContext("2d")!.getImageData(0, 0, composite.width, composite.height);
+    const rectified = rectifyQuadrilateral({ width: source.width, height: source.height, data: source.data }, quad);
+    const bitmap = newCanvas(rectified.width, rectified.height);
+    bitmap.getContext("2d")!.putImageData(new ImageData(Uint8ClampedArray.from(rectified.data), rectified.width, rectified.height), 0, 0);
+    const layer = createRasterLayer("Perspective crop", bitmap);
+    this.doc.width = rectified.width;
+    this.doc.height = rectified.height;
+    this.doc.layers = [layer];
+    this.doc.guides = [];
+    this.doc.selection = null;
+    this.resetVirtualGeometry(rectified.width, rectified.height);
+    layer.surface = this.surfaceFromCanvas(bitmap);
+    this.checkpointLayerSurface(layer);
+    const after = cloneDocument(this.doc);
+    this.commit({ label: "Perspective crop", before: [], after: [], documentBefore: before, documentAfter: after });
+    this.requestRender();
+    return layer;
+  }
+
+  straightenDocument(angleRadians: number) {
+    if (!Number.isFinite(angleRadians) || Math.abs(angleRadians) < 1e-5) return false;
+    const before = cloneDocument(this.doc);
+    const centerX = this.doc.width / 2;
+    const centerY = this.doc.height / 2;
+    const cosine = Math.cos(angleRadians);
+    const sine = Math.sin(angleRadians);
+    for (const layer of this.doc.layers) {
+      const t = layer.transform;
+      const layerCenterX = t.tx + this.doc.width * t.sx / 2;
+      const layerCenterY = t.ty + this.doc.height * t.sy / 2;
+      const dx = layerCenterX - centerX;
+      const dy = layerCenterY - centerY;
+      const rotatedCenterX = centerX + dx * cosine - dy * sine;
+      const rotatedCenterY = centerY + dx * sine + dy * cosine;
+      layer.transform = {
+        ...t,
+        rotation: t.rotation + angleRadians,
+        tx: rotatedCenterX - this.doc.width * t.sx / 2,
+        ty: rotatedCenterY - this.doc.height * t.sy / 2,
+      };
+    }
+    const after = cloneDocument(this.doc);
+    this.commit({ label: "Straighten image", before: [], after: [], documentBefore: before, documentAfter: after });
+    this.requestRender();
+    return true;
+  }
+
+  sampleLayerColor(layerId: string, x: number, y: number) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.bitmap) return null;
+    const px = Math.max(0, Math.min(layer.bitmap.width - 1, Math.round(x)));
+    const py = Math.max(0, Math.min(layer.bitmap.height - 1, Math.round(y)));
+    return rgbaToHex(layer.bitmap.getContext("2d")!.getImageData(px, py, 1, 1).data);
+  }
+
+  private applyGeneratedFill(layerId: string, pixels: { width: number; height: number; data: Uint8ClampedArray }, label: string) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.bitmap || layer.locked) return false;
+    const before = [snapshotLayer(layer)];
+    const generated = newCanvas(pixels.width, pixels.height);
+    generated.getContext("2d")!.putImageData(new ImageData(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height), 0, 0);
+    if (this.doc.selection) {
+      const context = generated.getContext("2d")!;
+      context.globalCompositeOperation = "destination-in";
+      context.drawImage(this.doc.selection.mask, 0, 0);
+      context.globalCompositeOperation = "source-over";
+    }
+    layer.bitmap.getContext("2d")!.drawImage(generated, 0, 0);
+    bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
+    this.commit({ label, before, after: [snapshotLayer(layer)] });
+    this.requestRender();
+    return true;
+  }
+
+  gradientFill(
+    layerId: string,
+    start: Point,
+    end: Point,
+    from: string,
+    to: string,
+    type: "linear" | "radial" = "linear",
+  ) {
+    return this.applyGeneratedFill(
+      layerId,
+      createGradientPixels(this.doc.width, this.doc.height, start, end, from, to, type),
+      `${type === "radial" ? "Radial" : "Linear"} gradient`,
+    );
+  }
+
+  patternFill(layerId: string, kind: PatternKind, foreground: string, background: string, scale = 16) {
+    return this.applyGeneratedFill(
+      layerId,
+      createPatternPixels(this.doc.width, this.doc.height, kind, foreground, background, scale),
+      `${kind} pattern`,
+    );
+  }
+
+  perspectiveWarpLayer(layerId: string, quad: Quad) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.bitmap || layer.locked) return false;
+    const before = [snapshotLayer(layer)];
+    const source = layer.bitmap.getContext("2d")!.getImageData(0, 0, layer.bitmap.width, layer.bitmap.height);
+    const warped = warpToQuadrilateral(
+      { width: source.width, height: source.height, data: source.data },
+      this.doc.width,
+      this.doc.height,
+      quad,
+    );
+    const bitmap = newCanvas(warped.width, warped.height);
+    bitmap.getContext("2d")!.putImageData(new ImageData(Uint8ClampedArray.from(warped.data), warped.width, warped.height), 0, 0);
+    layer.bitmap = bitmap;
+    layer.transform = { ...IDENTITY_TRANSFORM };
+    layer.surface = this.surfaceFromCanvas(bitmap);
+    this.checkpointLayerSurface(layer);
+    this.commit({ label: "Perspective warp", before, after: [snapshotLayer(layer)] });
+    this.requestRender();
+    return true;
+  }
+
+  radialWarpLayer(layerId: string, from: Point, to: Point, radius: number, label = "Puppet warp") {
+    const layer = this.findLayer(layerId);
+    if (!layer?.bitmap || layer.locked) return false;
+    const before = [snapshotLayer(layer)];
+    const source = layer.bitmap.getContext("2d")!.getImageData(0, 0, layer.bitmap.width, layer.bitmap.height);
+    const warped = radialWarp({ width: source.width, height: source.height, data: source.data }, from, to, radius);
+    layer.bitmap.getContext("2d")!.putImageData(new ImageData(Uint8ClampedArray.from(warped.data), warped.width, warped.height), 0, 0);
+    bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
+    this.commit({ label, before, after: [snapshotLayer(layer)] });
+    this.requestRender();
+    return true;
+  }
+
+  moveSelectionContent(layerId: string, deltaX: number, deltaY: number, healSource = true) {
+    const layer = this.findLayer(layerId);
+    const selection = this.doc.selection;
+    if (!layer?.bitmap || !selection || layer.locked) return false;
+    const before = [snapshotLayer(layer)];
+    const selectionBefore = cloneSelection(selection);
+    const content = newCanvas(this.doc.width, this.doc.height);
+    const contentContext = content.getContext("2d")!;
+    contentContext.drawImage(layer.bitmap, 0, 0);
+    contentContext.globalCompositeOperation = "destination-in";
+    contentContext.drawImage(selection.mask, 0, 0);
+
+    const context = layer.bitmap.getContext("2d")!;
+    context.save();
+    context.globalCompositeOperation = "destination-out";
+    context.drawImage(selection.mask, 0, 0);
+    context.restore();
+    if (healSource) {
+      const fill = newCanvas(this.doc.width, this.doc.height);
+      const fillContext = fill.getContext("2d")!;
+      fillContext.filter = "blur(14px)";
+      fillContext.drawImage(layer.bitmap, 0, 0);
+      fillContext.filter = "none";
+      fillContext.globalCompositeOperation = "destination-in";
+      fillContext.drawImage(selection.mask, 0, 0);
+      context.drawImage(fill, 0, 0);
+    }
+    context.drawImage(content, deltaX, deltaY);
+    const movedMask = newCanvas(this.doc.width, this.doc.height);
+    movedMask.getContext("2d")!.drawImage(selection.mask, deltaX, deltaY);
+    this.doc.selection = {
+      mask: movedMask,
+      bounds: {
+        x: selection.bounds.x + deltaX,
+        y: selection.bounds.y + deltaY,
+        w: selection.bounds.w,
+        h: selection.bounds.h,
+      },
+    };
+    bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
+    this.commit({
+      label: "Content-aware move",
+      before,
+      after: [snapshotLayer(layer)],
+      selectionBefore,
+      selectionAfter: cloneSelection(this.doc.selection),
+    });
+    this.requestRender();
+    return true;
+  }
+
+  selectTextMask(text: string, x: number, y: number, font: string, vertical = false) {
+    const before = cloneSelection(this.doc.selection);
+    selectText(this.doc, text, x, y, font, "replace", vertical);
+    const after = cloneSelection(this.doc.selection);
+    this.commit({ label: "Type mask selection", before: [], after: [], selectionBefore: before, selectionAfter: after });
+    this.requestRender();
+    return !!this.doc.selection;
   }
 
   resizeDocument(width: number, height: number) {
@@ -1231,6 +1449,34 @@ export class Studio {
     return layer;
   }
 
+  addFrame(x: number, y: number, width: number, height: number, ellipse = false) {
+    const group = createGroupLayer(ellipse ? "Ellipse frame" : "Rectangle frame");
+    const mask = newCanvas(this.doc.width, this.doc.height);
+    const maskContext = mask.getContext("2d")!;
+    maskContext.fillStyle = "white";
+    if (ellipse) {
+      maskContext.beginPath();
+      maskContext.ellipse(x + width / 2, y + height / 2, Math.abs(width) / 2, Math.abs(height) / 2, 0, 0, Math.PI * 2);
+      maskContext.fill();
+    } else {
+      maskContext.fillRect(x, y, width, height);
+    }
+    group.mask = mask;
+    const placeholderCanvas = newCanvas(this.doc.width, this.doc.height);
+    const placeholderContext = placeholderCanvas.getContext("2d")!;
+    const gradient = placeholderContext.createLinearGradient(x, y, x + width, y + height);
+    gradient.addColorStop(0, "#262b36");
+    gradient.addColorStop(1, "#5a6170");
+    placeholderContext.fillStyle = gradient;
+    placeholderContext.fillRect(x, y, width, height);
+    const placeholder = createRasterLayer("Frame content", placeholderCanvas);
+    placeholder.parentId = group.id;
+    this.commitStructural("Frame added", () => this.doc.layers.unshift(group, placeholder));
+    this.ensureDocumentSurfaces(this.doc);
+    this.requestRender();
+    return group;
+  }
+
   removeLayer(id: string) {
     if (this.findLayer(id)?.locked) return;
     this.commitStructural("Layer deleted", () => {
@@ -1661,7 +1907,7 @@ export class Studio {
   ) {
     const layer = this.findLayer(layerId);
     if (!layer?.surface || layer.locked) return false;
-    if ((mode === "clone" || mode === "heal") && !sourcePoint) return false;
+    if ((mode === "clone" || mode === "heal" || mode === "patch") && !sourcePoint) return false;
     this.retouchStroke = {
       layerId,
       mode,
@@ -1681,6 +1927,11 @@ export class Studio {
     const layer = this.findLayer(layerId);
     const surface = layer?.surface;
     if (!state || !layer || !surface || state.layerId !== layerId) return;
+    const previous = state.points.at(-1);
+    if (previous && (state.mode === "smudge" || state.mode === "liquify")) {
+      state.sourceOffsetX = previous.x - point.x;
+      state.sourceOffsetY = previous.y - point.y;
+    }
     state.points.push({ ...point });
     const dabs = planStroke(state.points, state.params);
     if (!dabs.length) return;
@@ -1745,9 +1996,22 @@ export class Studio {
       before,
       after: layer.surface!.store.read(key),
     }));
-    const label = state.mode === "clone" ? "Clone stamp" :
-      state.mode === "heal" ? "Healing brush" :
-      state.mode === "dodge" ? "Dodge stroke" : "Burn stroke";
+    const labels: Record<RetouchMode, string> = {
+      clone: "Clone stamp",
+      heal: "Healing brush",
+      "spot-heal": "Spot healing",
+      patch: "Patch healing",
+      remove: "Remove stroke",
+      dodge: "Dodge stroke",
+      burn: "Burn stroke",
+      blur: "Blur stroke",
+      sharpen: "Sharpen stroke",
+      smudge: "Smudge stroke",
+      sponge: "Sponge stroke",
+      mixer: "Mixer brush",
+      liquify: "Liquify stroke",
+    };
+    const label = labels[state.mode];
     this.commit({ label, before: [], after: [], surfacePatches });
     this.checkpointLayerSurface(layer);
     this.retouchStroke = null;
