@@ -6,6 +6,7 @@ import {
   labToXyz,
   linearRgbToXyz,
   rgbToCmyk,
+  softProofDisplayRgb,
   workingToDisplaySrgb,
   xyzToLab,
 } from "../app/engine/color.ts";
@@ -31,4 +32,11 @@ test("D65 Lab conversion round-trips XYZ", () => {
 test("fallback CMYK conversion round-trips RGB", () => {
   const rgb = [0.2, 0.6, 0.9] as const;
   close(cmykToRgb(rgbToCmyk(rgb)), rgb);
+});
+
+test("CMYK proofing applies paper simulation and reports gamut compression", () => {
+  const proof = softProofDisplayRgb([0.05, 0.95, 0.9], "cmyk-generic", "absolute-colorimetric", true);
+  assert.ok(proof.rgb[0] > 0);
+  assert.ok(proof.rgb[2] < 0.9);
+  assert.equal(proof.outOfGamut, true);
 });

@@ -2,6 +2,12 @@ import { Document, Selection, newCanvas } from "./document";
 
 export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
 
+export type RefineSelectionParams = {
+  smooth: number;
+  contrast: number;
+  shiftEdge: number;
+};
+
 // Convert path-defined selection into an alpha mask on `doc.selection`.
 // `path` is a callback that draws into a 2D ctx with the source mask fill.
 function combine(
@@ -212,6 +218,99 @@ export function featherSelection(doc: Document, radius: number) {
   bctx.drawImage(src, 0, 0);
   bctx.filter = "none";
   doc.selection = { mask: blurred, bounds: boundsOf(blurred) };
+}
+
+function boxPass(source: Uint8ClampedArray, width: number, height: number, radius: number, horizontal: boolean) {
+  const output = new Uint8ClampedArray(source.length);
+  const major = horizontal ? height : width;
+  const minor = horizontal ? width : height;
+  for (let line = 0; line < major; line += 1) {
+    const prefix = new Uint32Array(minor + 1);
+    for (let index = 0; index < minor; index += 1) {
+      const offset = horizontal ? line * width + index : index * width + line;
+      prefix[index + 1] = prefix[index] + source[offset];
+    }
+    for (let index = 0; index < minor; index += 1) {
+      const start = Math.max(0, index - radius);
+      const end = Math.min(minor, index + radius + 1);
+      const offset = horizontal ? line * width + index : index * width + line;
+      output[offset] = Math.round((prefix[end] - prefix[start]) / (end - start));
+    }
+  }
+  return output;
+}
+
+function morphologyPass(
+  source: Uint8ClampedArray,
+  width: number,
+  height: number,
+  radius: number,
+  horizontal: boolean,
+  grow: boolean,
+) {
+  const output = new Uint8ClampedArray(source.length);
+  const major = horizontal ? height : width;
+  const minor = horizontal ? width : height;
+  for (let line = 0; line < major; line += 1) {
+    for (let index = 0; index < minor; index += 1) {
+      let value = grow ? 0 : 255;
+      for (let sample = Math.max(0, index - radius); sample <= Math.min(minor - 1, index + radius); sample += 1) {
+        const offset = horizontal ? line * width + sample : sample * width + line;
+        value = grow ? Math.max(value, source[offset]) : Math.min(value, source[offset]);
+      }
+      const offset = horizontal ? line * width + index : index * width + line;
+      output[offset] = value;
+    }
+  }
+  return output;
+}
+
+export function refineSelectionAlpha(
+  alpha: Uint8ClampedArray,
+  width: number,
+  height: number,
+  params: RefineSelectionParams,
+) {
+  let output = new Uint8ClampedArray(alpha);
+  const shiftRadius = Math.min(16, Math.round(Math.abs(params.shiftEdge) / 6.25));
+  if (shiftRadius) {
+    const grow = params.shiftEdge > 0;
+    output = morphologyPass(output, width, height, shiftRadius, true, grow);
+    output = morphologyPass(output, width, height, shiftRadius, false, grow);
+  }
+  const smoothRadius = Math.min(32, Math.round(params.smooth));
+  if (smoothRadius) {
+    output = boxPass(output, width, height, smoothRadius, true);
+    output = boxPass(output, width, height, smoothRadius, false);
+  }
+  const contrast = Math.max(0, Math.min(100, params.contrast));
+  if (contrast) {
+    const factor = 1 + contrast / 20;
+    for (let index = 0; index < output.length; index += 1) {
+      output[index] = Math.max(0, Math.min(255, Math.round(127.5 + (output[index] - 127.5) * factor)));
+    }
+  }
+  return output;
+}
+
+export function refineSelection(doc: Document, params: RefineSelectionParams) {
+  if (!doc.selection) return false;
+  const mask = doc.selection.mask;
+  const context = mask.getContext("2d")!;
+  const image = context.getImageData(0, 0, mask.width, mask.height);
+  const alpha = new Uint8ClampedArray(mask.width * mask.height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
+  const refined = refineSelectionAlpha(alpha, mask.width, mask.height, params);
+  for (let pixel = 0; pixel < refined.length; pixel += 1) {
+    const offset = pixel * 4;
+    image.data[offset] = 255;
+    image.data[offset + 1] = 255;
+    image.data[offset + 2] = 255;
+    image.data[offset + 3] = refined[pixel];
+  }
+  context.putImageData(image, 0, 0);
+  doc.selection = { mask, bounds: boundsOf(mask) };
+  return true;
 }
 
 function boundsOf(mask: HTMLCanvasElement) {

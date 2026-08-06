@@ -136,6 +136,7 @@ export class SparseTileStore {
 
   private readonly tiles = new Map<string, Uint8Array>();
   private readonly dirty = new Map<string, number>();
+  private readonly tileRevisions = new Map<string, number>();
   private revision = 0;
 
   constructor(grid: TileGrid, format: PixelFormat = "rgba8") {
@@ -161,6 +162,7 @@ export class SparseTileStore {
     this.tiles.set(key, data);
     this.revision += 1;
     this.dirty.set(key, this.revision);
+    this.tileRevisions.set(key, this.revision);
     return this.revision;
   }
 
@@ -169,6 +171,7 @@ export class SparseTileStore {
     if (!this.tiles.delete(key)) return false;
     this.revision += 1;
     this.dirty.set(key, this.revision);
+    this.tileRevisions.set(key, this.revision);
     return true;
   }
 
@@ -194,6 +197,11 @@ export class SparseTileStore {
       .map(([key, data]) => ({ key, data: data.slice() }));
   }
 
+  revisionFor(key: string) {
+    this.grid.parseKey(key);
+    return this.tileRevisions.get(key) ?? 0;
+  }
+
   clear() {
     const keys = [...this.tiles.keys()];
     if (!keys.length) return;
@@ -201,6 +209,7 @@ export class SparseTileStore {
     for (const key of keys) {
       this.revision += 1;
       this.dirty.set(key, this.revision);
+      this.tileRevisions.set(key, this.revision);
     }
   }
 
@@ -407,6 +416,51 @@ export class PrecisionTileSurface {
       }
     }
     return { width: this.grid.width, height: this.grid.height, data };
+  }
+
+  tileToRgba8(key: string): PixelBuffer {
+    const address = this.grid.parseKey(key);
+    const data = new Uint8ClampedArray(address.width * address.height * 4);
+    const bytes = this.store.read(key);
+    if (!bytes) return { width: address.width, height: address.height, data };
+    for (let index = 0; index < address.width * address.height * 4; index += 4) {
+      const display = workingToDisplaySrgb([
+        readChannel(bytes, index, this.format),
+        readChannel(bytes, index + 1, this.format),
+        readChannel(bytes, index + 2, this.format),
+      ], this.colorSpace);
+      data[index] = Math.round(clamp01(display[0]) * 255);
+      data[index + 1] = Math.round(clamp01(display[1]) * 255);
+      data[index + 2] = Math.round(clamp01(display[2]) * 255);
+      data[index + 3] = Math.round(clamp01(readChannel(bytes, index + 3, this.format)) * 255);
+    }
+    return { width: address.width, height: address.height, data };
+  }
+
+  /** Float display-sRGB tile for RGBA16F GPU upload; unclipped values retain HDR and gamut excursions. */
+  tileToFloat32Display(key: string, premultiplied = true, flipY = false) {
+    const address = this.grid.parseKey(key);
+    const output = new Float32Array(address.width * address.height * 4);
+    const bytes = this.store.read(key);
+    if (!bytes) return output;
+    for (let y = 0; y < address.height; y += 1) {
+      const targetY = flipY ? address.height - y - 1 : y;
+      for (let x = 0; x < address.width; x += 1) {
+        const sourceIndex = (y * address.width + x) * 4;
+        const targetIndex = (targetY * address.width + x) * 4;
+        const alpha = readChannel(bytes, sourceIndex + 3, this.format);
+        const display = workingToDisplaySrgb([
+          readChannel(bytes, sourceIndex, this.format),
+          readChannel(bytes, sourceIndex + 1, this.format),
+          readChannel(bytes, sourceIndex + 2, this.format),
+        ], this.colorSpace);
+        output[targetIndex] = display[0] * (premultiplied ? alpha : 1);
+        output[targetIndex + 1] = display[1] * (premultiplied ? alpha : 1);
+        output[targetIndex + 2] = display[2] * (premultiplied ? alpha : 1);
+        output[targetIndex + 3] = alpha;
+      }
+    }
+    return output;
   }
 
   convert(format: PixelFormat, colorSpace: WorkingColorSpace) {

@@ -280,6 +280,13 @@ export type AiProvenance = {
   };
 };
 
+export type SourceProvenance = {
+  originalName: string;
+  format: string;
+  mode: "decoded" | "embedded-raw-preview";
+  originalBytes?: number;
+};
+
 export type LayerEffect = {
   id: string;
   kind: "drop-shadow";
@@ -309,6 +316,7 @@ export type Layer = {
   clipping?: boolean;
   filters?: SmartFilter[];
   ai?: AiProvenance;
+  source?: SourceProvenance;
   effects?: LayerEffect[];
   bitmap?: HTMLCanvasElement;
   /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
@@ -386,6 +394,15 @@ export type Guide = {
   position: number;
 };
 
+export type ProofProfile = "none" | "srgb" | "display-p3" | "cmyk-generic";
+
+export type ProofSettings = {
+  profile: ProofProfile;
+  intent: "perceptual" | "relative-colorimetric" | "absolute-colorimetric" | "saturation";
+  blackPointCompensation: boolean;
+  gamutWarning: boolean;
+};
+
 export type Document = {
   width: number;
   height: number;
@@ -393,6 +410,7 @@ export type Document = {
   bitDepth: 8 | 16 | 32;
   resolution: { x: number; y: number; unit: "ppi" };
   guides: Guide[];
+  proofing: ProofSettings;
   layers: Layer[]; // index 0 is topmost
   selection: Selection | null;
 };
@@ -432,6 +450,12 @@ export function createDocument(width: number, height: number): Document {
     bitDepth: 8,
     resolution: { x: 72, y: 72, unit: "ppi" },
     guides: [],
+    proofing: {
+      profile: "none",
+      intent: "relative-colorimetric",
+      blackPointCompensation: true,
+      gamutWarning: false,
+    },
     layers: [],
     selection: null,
   };

@@ -34,17 +34,18 @@ uniform vec4 u_underlying_ranges[4];
 
 // ---- color space (piecewise sRGB transfer) ----
 vec3 srgbToLinear(vec3 c) {
-  bvec3 cutoff = lessThanEqual(c, vec3(0.04045));
-  vec3 lo = c / 12.92;
-  vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
-  return mix(hi, lo, vec3(cutoff));
+  vec3 magnitude = abs(c);
+  bvec3 cutoff = lessThanEqual(magnitude, vec3(0.04045));
+  vec3 lo = magnitude / 12.92;
+  vec3 hi = pow((magnitude + 0.055) / 1.055, vec3(2.4));
+  return sign(c) * mix(hi, lo, vec3(cutoff));
 }
 vec3 linearToSrgb(vec3 c) {
-  c = clamp(c, vec3(0.0), vec3(1.0));
-  bvec3 cutoff = lessThanEqual(c, vec3(0.0031308));
-  vec3 lo = c * 12.92;
-  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(hi, lo, vec3(cutoff));
+  vec3 magnitude = abs(c);
+  bvec3 cutoff = lessThanEqual(magnitude, vec3(0.0031308));
+  vec3 lo = magnitude * 12.92;
+  vec3 hi = 1.055 * pow(magnitude, vec3(1.0 / 2.4)) - 0.055;
+  return sign(c) * mix(hi, lo, vec3(cutoff));
 }
 
 // ---- separable blend helpers (W3C spec) ----
@@ -197,17 +198,18 @@ uniform float u_temperature;
 uniform float u_vibrance;
 
 vec3 _srgbToLinear(vec3 c) {
-  bvec3 cutoff = lessThanEqual(c, vec3(0.04045));
-  vec3 lo = c / 12.92;
-  vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
-  return mix(hi, lo, vec3(cutoff));
+  vec3 magnitude = abs(c);
+  bvec3 cutoff = lessThanEqual(magnitude, vec3(0.04045));
+  vec3 lo = magnitude / 12.92;
+  vec3 hi = pow((magnitude + 0.055) / 1.055, vec3(2.4));
+  return sign(c) * mix(hi, lo, vec3(cutoff));
 }
 vec3 _linearToSrgb(vec3 c) {
-  c = clamp(c, vec3(0.0), vec3(1.0));
-  bvec3 cutoff = lessThanEqual(c, vec3(0.0031308));
-  vec3 lo = c * 12.92;
-  vec3 hi = 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055;
-  return mix(hi, lo, vec3(cutoff));
+  vec3 magnitude = abs(c);
+  bvec3 cutoff = lessThanEqual(magnitude, vec3(0.0031308));
+  vec3 lo = magnitude * 12.92;
+  vec3 hi = 1.055 * pow(magnitude, vec3(1.0 / 2.4)) - 0.055;
+  return sign(c) * mix(hi, lo, vec3(cutoff));
 }
 
 vec3 applyContrast(vec3 c, float amt) {
@@ -377,16 +379,48 @@ in vec2 v_uv;
 out vec4 outColor;
 uniform sampler2D u_src;
 uniform vec2 u_size;
+uniform int u_proof_mode;
+uniform int u_proof_intent;
+uniform bool u_black_point_compensation;
+uniform bool u_gamut_warning;
+uniform bool u_checkerboard;
+
+vec3 proofCmyk(vec3 rgb) {
+  vec3 clipped = clamp(rgb, vec3(0.0), vec3(1.0));
+  float k = 1.0 - max(max(clipped.r, clipped.g), clipped.b);
+  vec3 cmy = k >= 0.99999 ? vec3(0.0) : (vec3(1.0) - clipped - k) / (1.0 - k);
+  float total = cmy.r + cmy.g + cmy.b + k;
+  if (total > 2.8) cmy *= max(0.0, (2.8 - k) / max(0.0001, cmy.r + cmy.g + cmy.b));
+  cmy = pow(cmy, vec3(0.9));
+  k = pow(k, 0.82);
+  vec3 proofed = (vec3(1.0) - cmy) * (1.0 - k);
+  if (u_proof_intent == 1) proofed = 0.02 + proofed * 0.94;
+  if (u_proof_intent == 3) {
+    float luma = dot(proofed, vec3(0.2126, 0.7152, 0.0722));
+    proofed = clamp(vec3(luma) + (proofed - luma) * 1.08, vec3(0.0), vec3(1.0));
+  }
+  float black = u_black_point_compensation ? 0.025 : 0.055;
+  vec3 paper = u_proof_intent == 2 ? vec3(0.94, 0.93, 0.89) : vec3(1.0);
+  return vec3(black) + proofed * (paper - black);
+}
 
 void main() {
   vec4 c = texture(u_src, v_uv);
+  if (!u_checkerboard) {
+    outColor = c;
+    return;
+  }
   // Checkerboard
   float tile = 16.0;
   vec2 px = v_uv * u_size;
   float cb = mod(floor(px.x / tile) + floor(px.y / tile), 2.0);
   vec3 bg = mix(vec3(0.109, 0.109, 0.132), vec3(0.149, 0.149, 0.180), cb);
-  vec3 fg = c.a > 0.0 ? c.rgb : bg;
-  vec3 outC = mix(bg, fg, c.a);
+  vec3 fg = c.a > 0.0 ? c.rgb / c.a : bg;
+  vec3 proofed = u_proof_mode == 3 ? proofCmyk(fg) : clamp(fg, vec3(0.0), vec3(1.0));
+  bool outside = any(lessThan(fg, vec3(0.0))) || any(greaterThan(fg, vec3(1.0)));
+  if (u_proof_mode == 3) outside = outside || distance(proofed, clamp(fg, vec3(0.0), vec3(1.0))) > 0.085;
+  if (u_gamut_warning && outside) proofed = vec3(1.0, 0.0, 1.0);
+  vec3 outC = mix(bg, proofed, c.a);
   outColor = vec4(outC, 1.0);
 }`;
 

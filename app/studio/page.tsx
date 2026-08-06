@@ -29,6 +29,8 @@ import {
   MAX_LAYER_BLEND_PASSES,
   PathAnchor,
   PathStyle,
+  ProofProfile,
+  ProofSettings,
   ToneParams,
   Transform,
   cloneCurves,
@@ -42,6 +44,7 @@ import { isNeutralBlendIf } from "@/app/engine/blend";
 import { BrushParams } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
+import { RAW_EXTENSIONS, extractEmbeddedRawPreview, rawExtension } from "@/app/engine/raw";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "select" | "mask" | "develop" | "vector";
@@ -552,9 +555,13 @@ export default function SpatialStudio() {
   const [brushAngle, setBrushAngle] = useState(0);
   const [pressureSize, setPressureSize] = useState(true);
   const [pressureOpacity, setPressureOpacity] = useState(true);
+  const [brushSmoothing, setBrushSmoothing] = useState(0.18);
   const [brushColor, setBrushColor] = useState("#ffffff");
   const [feather, setFeather] = useState(0);
   const [wandTolerance, setWandTolerance] = useState(24);
+  const [selectionSmooth, setSelectionSmooth] = useState(2);
+  const [selectionContrast, setSelectionContrast] = useState(12);
+  const [selectionShift, setSelectionShift] = useState(0);
   const [toast, setToast] = useState("");
   const [activePreset, setActivePreset] = useState(0);
   const [customName, setCustomName] = useState<string | null>(null);
@@ -695,6 +702,7 @@ export default function SpatialStudio() {
     angle: brushAngle,
     pressureSize,
     pressureOpacity,
+    smoothing: brushSmoothing,
     color: brushColor,
     mode: currentBrushMode(),
   });
@@ -951,18 +959,34 @@ export default function SpatialStudio() {
   const onFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !studio) return;
-    const url = URL.createObjectURL(file);
+    let url = URL.createObjectURL(file);
     const name = file.name.replace(/\.[^/.]+$/, "") || "Imported";
     try {
+      const raw = rawExtension(file.name);
+      let source: Parameters<Studio["openImage"]>[2];
+      if (raw) {
+        const preview = extractEmbeddedRawPreview(await file.arrayBuffer(), file.name);
+        if (!preview) throw new Error("This RAW file has no readable embedded preview");
+        URL.revokeObjectURL(url);
+        url = URL.createObjectURL(preview.blob);
+        source = {
+          originalName: file.name,
+          format: preview.format,
+          mode: "embedded-raw-preview",
+          originalBytes: file.size,
+        };
+      } else {
+        source = { originalName: file.name, format: file.type || "image", mode: "decoded", originalBytes: file.size };
+      }
       const img = await loadImage(url);
-      const layer = studio.openImage(name, img);
+      const layer = studio.openImage(name, img, source);
       setActiveLayerId(layer.id);
       setCustomName(name);
       setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
-      notify(`${name} imported`);
-    } catch {
-      notify("Failed to import");
+      notify(raw ? `${raw.toUpperCase()} preview imported · provenance tagged` : `${name} imported`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Failed to import");
     } finally {
       URL.revokeObjectURL(url);
       e.target.value = "";
@@ -1634,9 +1658,9 @@ export default function SpatialStudio() {
                   />
                 ))}
                 <div className="canvas-status">
-                  <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.tiles} addressable preview tiles · ${engineState.precisionTiles} resident precision tiles · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
+                  <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.tiles} addressable preview tiles · ${engineState.precisionTiles} resident precision tiles · ${engineState.previewCache.hits} tile-cache hits · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
                     {doc
-                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master · ${useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · ${useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
                       : "Loading…"}
                   </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
@@ -1721,7 +1745,7 @@ export default function SpatialStudio() {
                     </span>
                     <span className="layer-name">
                       <strong>{layer.name}</strong>
-                      <small>{layer.kind}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
+                      <small>{layer.kind}{layer.source?.mode === "embedded-raw-preview" ? ` · ${layer.source.format} proxy` : ""}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
                     </span>
                     <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
                       {layer.visible ? "◉" : "○"}
@@ -1835,6 +1859,48 @@ export default function SpatialStudio() {
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Linear-light tiled master · {engineState?.precisionTiles ?? 0} resident tiles · {formatBytes(engineState?.precisionBytes ?? 0)}
                 </small>
+                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
+                  <span>Soft proof</span>
+                  <select
+                    value={doc?.proofing.profile ?? "none"}
+                    onChange={(event) => studio?.setDocumentProofing({ profile: event.target.value as ProofProfile })}
+                    aria-label="Soft proof profile"
+                  >
+                    <option value="none">Off</option>
+                    <option value="srgb">sRGB output</option>
+                    <option value="display-p3">Display P3 output</option>
+                    <option value="cmyk-generic">CMYK · coated proof</option>
+                  </select>
+                </label>
+                {doc?.proofing.profile !== "none" && (
+                  <>
+                    <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
+                      <span>Intent</span>
+                      <select
+                        value={doc?.proofing.intent ?? "relative-colorimetric"}
+                        onChange={(event) => studio?.setDocumentProofing({ intent: event.target.value as ProofSettings["intent"] })}
+                        aria-label="Proof rendering intent"
+                      >
+                        <option value="relative-colorimetric">Relative colorimetric</option>
+                        <option value="perceptual">Perceptual</option>
+                        <option value="absolute-colorimetric">Absolute colorimetric</option>
+                        <option value="saturation">Saturation</option>
+                      </select>
+                    </label>
+                    <div className="mask-segmented">
+                      <button
+                        type="button"
+                        className={doc?.proofing.blackPointCompensation ? "active" : ""}
+                        onClick={() => studio?.setDocumentProofing({ blackPointCompensation: !doc?.proofing.blackPointCompensation })}
+                      >Black point</button>
+                      <button
+                        type="button"
+                        className={doc?.proofing.gamutWarning ? "active" : ""}
+                        onClick={() => studio?.setDocumentProofing({ gamutWarning: !doc?.proofing.gamutWarning })}
+                      >Gamut warning</button>
+                    </div>
+                  </>
+                )}
               </div>
             </section>
 
@@ -1875,6 +1941,21 @@ export default function SpatialStudio() {
                       <output>{wandTolerance}</output>
                     </label>
                   )}
+                  <label>
+                    <span>Smooth edge</span>
+                    <input type="range" min="0" max="24" value={selectionSmooth} onChange={(e) => setSelectionSmooth(Number(e.target.value))} />
+                    <output>{selectionSmooth}px</output>
+                  </label>
+                  <label>
+                    <span>Edge contrast</span>
+                    <input type="range" min="0" max="100" value={selectionContrast} onChange={(e) => setSelectionContrast(Number(e.target.value))} />
+                    <output>{selectionContrast}%</output>
+                  </label>
+                  <label>
+                    <span>Shift edge</span>
+                    <input type="range" min="-100" max="100" value={selectionShift} onChange={(e) => setSelectionShift(Number(e.target.value))} />
+                    <output>{selectionShift > 0 ? "+" : ""}{selectionShift}%</output>
+                  </label>
                 </div>
                 <div className="mask-actions">
                   <button onClick={() => studio?.selectAll()}>All</button>
@@ -1885,6 +1966,7 @@ export default function SpatialStudio() {
                   }}>Crop</button>
                   <button onClick={() => studio?.invertSelectionArea()}>Invert</button>
                   <button onClick={() => studio?.featherSelection(feather || 4)}>Feather</button>
+                  <button onClick={() => studio?.refineSelection({ smooth: selectionSmooth, contrast: selectionContrast, shiftEdge: selectionShift })}>Refine edge</button>
                 </div>
                 <p style={{ padding: "0 12px", fontSize: 11, opacity: 0.65 }}>
                   Hold ⇧ to add · ⌥ to subtract · ⌘ (with wand) for non-contiguous
@@ -1984,7 +2066,8 @@ export default function SpatialStudio() {
                 <div className="tone-controls">
                   <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
-                  <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Flow</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Stabilizer</span><input type="range" min="0" max="95" value={Math.round(brushSmoothing * 100)} onChange={(e) => setBrushSmoothing(Number(e.target.value) / 100)} /><output>{Math.round(brushSmoothing * 100)}%</output></label>
                   <label><span>Spacing</span><input type="range" min="1" max="100" value={Math.round(brushSpacing * 100)} onChange={(e) => setBrushSpacing(Number(e.target.value) / 100)} /><output>{Math.round(brushSpacing * 100)}%</output></label>
                   <label><span>Roundness</span><input type="range" min="5" max="100" value={Math.round(brushRoundness * 100)} onChange={(e) => setBrushRoundness(Number(e.target.value) / 100)} /><output>{Math.round(brushRoundness * 100)}%</output></label>
                   <label><span>Angle</span><input type="range" min="-180" max="180" value={brushAngle} onChange={(e) => setBrushAngle(Number(e.target.value))} /><output>{brushAngle}°</output></label>
@@ -2298,7 +2381,7 @@ export default function SpatialStudio() {
           </div>
         </div>
       )}
-      <input ref={fileInput} className="visually-hidden" type="file" accept="image/*" onChange={onFileChange} />
+      <input ref={fileInput} className="visually-hidden" type="file" accept={`image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
       <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}

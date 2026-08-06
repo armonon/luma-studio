@@ -3,7 +3,6 @@ import {
   Document,
   Layer,
   curveToLut,
-  drawLayerContent,
   effectiveLayerOpacity,
   effectiveLayerVisible,
   findClippingBase,
@@ -12,6 +11,7 @@ import {
   resolvedBlendPasses,
   resolvedFillOpacity,
 } from "./document";
+import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, VS } from "./gl-shaders";
@@ -105,7 +105,9 @@ function ensureCache(width: number, height: number): Cache | null {
     "u_src", "u_mask", "u_hasMask", "u_opacity",
     "u_hueDeg", "u_satAmt", "u_lightAmt",
   ], ["a_pos", "a_uv"]);
-  const blit = compileProgram(gl, VS, BLIT_FS, ["u_src", "u_size"], ["a_pos", "a_uv"]);
+  const blit = compileProgram(gl, VS, BLIT_FS, [
+    "u_src", "u_size", "u_proof_mode", "u_proof_intent", "u_black_point_compensation", "u_gamut_warning", "u_checkerboard",
+  ], ["a_pos", "a_uv"]);
   const curvesLut = gl.createTexture()!;
   gl.bindTexture(gl.TEXTURE_2D, curvesLut);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, 4, 0, gl.RED, gl.UNSIGNED_BYTE, new Uint8Array(256 * 4));
@@ -243,6 +245,45 @@ function uploadCanvasTex(
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 }
 
+function canUploadPrecisionDirect(layer: Layer, doc: Document) {
+  const t = layer.transform;
+  return !!layer.surface && layer.surface.grid.width === doc.width && layer.surface.grid.height === doc.height &&
+    t.tx === 0 && t.ty === 0 && t.sx === 1 && t.sy === 1 && t.rotation === 0 &&
+    !layer.filters?.length && !layer.effects?.length && !layer.clipping && resolvedFillOpacity(layer) === 1;
+}
+
+function uploadPrecisionTex(
+  gl: WebGL2RenderingContext,
+  tex: WebGLTexture,
+  doc: Document,
+  layer: Layer,
+) {
+  const surface = layer.surface!;
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, doc.width, doc.height, 0, gl.RGBA, gl.FLOAT, null);
+  for (const { key } of surface.store.entries()) {
+    const address = surface.grid.parseKey(key);
+    const pixels = surface.tileToFloat32Display(key, true, true);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      address.x,
+      doc.height - address.y - address.height,
+      address.width,
+      address.height,
+      gl.RGBA,
+      gl.FLOAT,
+      pixels,
+    );
+  }
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+}
+
 // Rasterize a layer's transformed content into a doc-sized canvas, so the GPU
 // can treat all layer kinds (raster/text/shape) uniformly as a source texture.
 function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
@@ -250,7 +291,7 @@ function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
   const ctx = c.getContext("2d")!;
   const content = newCanvas(doc.width, doc.height);
   const contentCtx = content.getContext("2d")!;
-  drawLayerContent(contentCtx, layer);
+  drawLayerContentManaged(contentCtx, layer);
   applySmartFilters(content, layer.filters);
   for (const effect of layer.effects ?? []) {
     if (!effect.enabled || effect.opacity <= 0 || effect.kind !== "drop-shadow") continue;
@@ -275,7 +316,7 @@ function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
     const base = findClippingBase(doc, layer);
     if (base) {
       const clip = newCanvas(doc.width, doc.height);
-      drawLayerContent(clip.getContext("2d")!, base);
+      drawLayerContentManaged(clip.getContext("2d")!, base);
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(clip, 0, 0);
       ctx.globalCompositeOperation = "source-over";
@@ -293,8 +334,8 @@ function layerVersion(layer: Layer): string {
   const effectKey = layer.effects?.map((effect) => `${effect.id}:${effect.enabled ? 1 : 0}:${effect.opacity}:${effect.kind}:${effect.color}:${effect.blur}:${effect.offsetX}:${effect.offsetY}`).join("|") ?? "";
   const fillKey = resolvedFillOpacity(layer).toFixed(4);
   if (layer.kind === "raster" || layer.kind === "smart-object") {
-    // Use canvas identity as a coarse invalidator (any pixel edit clones).
-    return `raster:${(layer.bitmap as unknown as { __v?: number } | undefined)?.__v ?? "0"}:${tKey}:${filterKey}:${effectKey}:${fillKey}`;
+    const surfaceVersion = layer.surface?.stats().revision ?? 0;
+    return `raster:${surfaceVersion}:${(layer.bitmap as unknown as { __v?: number } | undefined)?.__v ?? "0"}:${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "text" && layer.text) {
     const s = layer.text;
@@ -356,9 +397,9 @@ function ensureLayerTex(
   const version = layerVersion(layer);
   const cached = c.layerTex.get(key);
   if (cached && cached.version === version) return cached.tex;
-  const src = rasterizeLayer(doc, layer);
   const tex = cached?.tex ?? gl.createTexture()!;
-  uploadCanvasTex(gl, tex, src);
+  if (canUploadPrecisionDirect(layer, doc)) uploadPrecisionTex(gl, tex, doc, layer);
+  else uploadCanvasTex(gl, tex, rasterizeLayer(doc, layer));
   c.layerTex.set(key, { tex, version });
   return tex;
 }
@@ -390,7 +431,7 @@ let linearCompositing = true;
 export function setLinearCompositing(on: boolean) { linearCompositing = on; }
 export function isLinearCompositing() { return linearCompositing; }
 
-export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
+export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = true, checkerboard = true): boolean {
   // Adjustment programs transform the current composite directly. Route
   // adjustment layers with custom blend passes through the exact CPU path.
   if (doc.layers.some((layer) => {
@@ -552,6 +593,17 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
   gl.bindTexture(gl.TEXTURE_2D, composite.tex);
   gl.uniform1i(c.blit.uniforms["u_src"], 0);
   gl.uniform2f(c.blit.uniforms["u_size"], c.canvas.width, c.canvas.height);
+  const proofMode = !proofing || doc.proofing.profile === "none" ? 0
+    : doc.proofing.profile === "srgb" ? 1
+    : doc.proofing.profile === "display-p3" ? 2 : 3;
+  const proofIntent = doc.proofing.intent === "perceptual" ? 1
+    : doc.proofing.intent === "absolute-colorimetric" ? 2
+    : doc.proofing.intent === "saturation" ? 3 : 0;
+  gl.uniform1i(c.blit.uniforms["u_proof_mode"], proofMode);
+  gl.uniform1i(c.blit.uniforms["u_proof_intent"], proofIntent);
+  gl.uniform1i(c.blit.uniforms["u_black_point_compensation"], doc.proofing.blackPointCompensation ? 1 : 0);
+  gl.uniform1i(c.blit.uniforms["u_gamut_warning"], proofing && doc.proofing.gamutWarning ? 1 : 0);
+  gl.uniform1i(c.blit.uniforms["u_checkerboard"], checkerboard ? 1 : 0);
   drawFullscreen(gl);
 
   // Blit GL result to the display 2D canvas.

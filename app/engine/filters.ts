@@ -292,6 +292,7 @@ export function applySmartFilters(
     bitDepth: 8,
     resolution: { x: 72, y: 72, unit: "ppi" },
     guides: [],
+    proofing: { profile: "none", intent: "relative-colorimetric", blackPointCompensation: true, gamutWarning: false },
     layers: [layer],
     selection: null,
   };

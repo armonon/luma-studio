@@ -18,8 +18,10 @@ import {
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
   PathStyle,
+  ProofSettings,
   Selection,
   ShapeStyle,
+  SourceProvenance,
   SmartFilter,
   TextStyle,
   ToneParams,
@@ -49,9 +51,11 @@ import { render, renderClean } from "./renderer";
 import { bumpBitmapVersion, isGLSupported, renderGL } from "./gl-renderer";
 import {
   SelectionMode,
+  RefineSelectionParams,
   deselect,
   featherSelection,
   invertSelection,
+  refineSelection,
   selectAll,
   selectByColor,
   selectEllipse,
@@ -69,6 +73,8 @@ import { Action, ActionRecorder, ActionStep } from "./actions";
 import { exportPsd, importPsd } from "./psd";
 import { OperationHistory } from "./operation-history";
 import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
+import { precisionPreviewCacheStats } from "./precision-renderer";
+import { IndexedDbTileBacking } from "./tile-backing";
 
 type SubscribeFn = () => void;
 
@@ -157,6 +163,7 @@ export class Studio {
   private activeSessionId = "";
   private liveSnapshots = new Map<string, LayerSnapshot>();
   private plugins = new Map<string, { plugin: LumaPlugin; dispose?: () => void }>();
+  private tileBacking = IndexedDbTileBacking.supported() ? new IndexedDbTileBacking() : null;
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
     this.doc = createDocument(width, height);
@@ -270,6 +277,9 @@ export class Studio {
       advancedBlendLayers,
       colorSpace: this.doc.colorSpace,
       bitDepth: this.doc.bitDepth,
+      proofing: { ...this.doc.proofing },
+      previewCache: precisionPreviewCacheStats(),
+      tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
       history: this.history.summary(),
     };
   }
@@ -320,6 +330,7 @@ export class Studio {
     if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
     const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
     if (guides) this.doc.guides = guides.map((guide) => ({ ...guide }));
+    this.checkpointDocumentSurfaces(true);
   }
   private applySnapshots(snaps: LayerSnapshot[]) {
     for (const snap of snaps) {
@@ -354,6 +365,7 @@ export class Studio {
       if (snap.text) layer.text = { ...snap.text };
       if (snap.shape) layer.shape = { ...snap.shape };
       if (snap.bitmap && !snap.surface) this.syncLayerSurface(layer);
+      this.checkpointLayerSurface(layer);
     }
   }
 
@@ -370,6 +382,7 @@ export class Studio {
         width: patch[side].width,
         height: patch[side].height,
       });
+      if (layer) this.checkpointLayerSurface(layer);
     }
   }
 
@@ -428,6 +441,7 @@ export class Studio {
       current.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
       this.doc = doc;
       this.history = current.history;
+      this.checkpointDocumentSurfaces(true);
       return;
     }
     const session: DocumentSession = {
@@ -440,6 +454,7 @@ export class Studio {
     this.activeSessionId = session.id;
     this.doc = doc;
     this.history = session.history;
+    this.checkpointDocumentSurfaces(true);
   }
 
   resetDocument(width: number, height: number) {
@@ -452,9 +467,9 @@ export class Studio {
     this.emit();
   }
 
-  openImage(name: string, img: HTMLImageElement) {
+  openImage(name: string, img: HTMLImageElement, source?: SourceProvenance) {
     this.installDocument(createDocument(img.naturalWidth, img.naturalHeight), name);
-    return this.addRasterFromImage(name, img);
+    return this.addRasterFromImage(name, img, source);
   }
 
   // --- layer helpers ---
@@ -529,6 +544,7 @@ export class Studio {
         bitmap.getContext("2d")!.drawImage(layer.bitmap, 0, 0, width, height);
         layer.bitmap = bitmap;
         layer.surface = this.surfaceFromCanvas(bitmap);
+        this.checkpointLayerSurface(layer);
       } else {
         layer.transform = {
           ...layer.transform,
@@ -586,12 +602,32 @@ export class Studio {
       layer.surface = layer.surface
         ? layer.surface.convert(format, colorSpace)
         : this.surfaceFromCanvas(layer.bitmap, format, colorSpace);
+      this.checkpointLayerSurface(layer);
     }
     this.doc.bitDepth = bitDepth;
     this.doc.colorSpace = colorSpace;
     const after = cloneDocument(this.doc);
     this.commit({
       label: `${bitDepth}-bit ${colorSpace.toUpperCase()} conversion`,
+      before: [],
+      after: [],
+      documentBefore: before,
+      documentAfter: after,
+    });
+    this.requestRender();
+    return true;
+  }
+
+  setDocumentProofing(patch: Partial<ProofSettings>) {
+    const next: ProofSettings = { ...this.doc.proofing, ...patch };
+    if (!["none", "srgb", "display-p3", "cmyk-generic"].includes(next.profile) ||
+        !["perceptual", "relative-colorimetric", "absolute-colorimetric", "saturation"].includes(next.intent)) return false;
+    if (JSON.stringify(next) === JSON.stringify(this.doc.proofing)) return false;
+    const before = cloneDocument(this.doc);
+    this.doc.proofing = next;
+    const after = cloneDocument(this.doc);
+    this.commit({
+      label: next.profile === "none" ? "Soft proof disabled" : `Soft proof: ${next.profile.toUpperCase()}`,
       before: [],
       after: [],
       documentBefore: before,
@@ -664,6 +700,19 @@ export class Studio {
     }
   }
 
+  private surfaceBackingId(layerId: string) {
+    return `${this.activeSessionId}:${layerId}`;
+  }
+
+  private checkpointLayerSurface(layer: Layer, replace = false) {
+    if (!this.tileBacking || !layer.surface) return;
+    void this.tileBacking.checkpoint(this.surfaceBackingId(layer.id), layer.surface, replace).catch(() => undefined);
+  }
+
+  private checkpointDocumentSurfaces(replace = false) {
+    for (const layer of this.doc.layers) this.checkpointLayerSurface(layer, replace);
+  }
+
   registerPlugin(plugin: LumaPlugin) {
     if (!plugin.id || this.plugins.has(plugin.id)) throw new Error(`Plugin already registered: ${plugin.id}`);
     const dispose = plugin.activate(this) || undefined;
@@ -684,7 +733,7 @@ export class Studio {
     return [...this.plugins.values()].map(({ plugin }) => ({ id: plugin.id, name: plugin.name, version: plugin.version }));
   }
 
-  addRasterFromImage(name: string, img: HTMLImageElement) {
+  addRasterFromImage(name: string, img: HTMLImageElement, source?: SourceProvenance) {
     if (this.doc.width === 0) {
       this.doc.width = img.naturalWidth;
       this.doc.height = img.naturalHeight;
@@ -692,8 +741,10 @@ export class Studio {
     const bitmap = newCanvas(this.doc.width, this.doc.height);
     bitmap.getContext("2d")!.drawImage(img, 0, 0);
     const layer = createRasterLayer(name, bitmap);
+    layer.source = source ? { ...source } : undefined;
     layer.surface = this.surfaceFromCanvas(bitmap);
     this.commitStructural(`${name} imported`, () => this.doc.layers.unshift(layer));
+    this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
   }
@@ -817,6 +868,7 @@ export class Studio {
     const layer = createRasterLayer(name, bitmap);
     layer.surface = this.surfaceFromCanvas(bitmap);
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
   }
@@ -959,6 +1011,7 @@ export class Studio {
     this.commitStructural("Layer deleted", () => {
       this.doc.layers = this.doc.layers.filter((l) => l.id !== id);
     });
+    if (this.tileBacking) void this.tileBacking.deleteSurface(this.surfaceBackingId(id)).catch(() => undefined);
     this.requestRender();
   }
 
@@ -1190,20 +1243,27 @@ export class Studio {
     if (!target) return;
     const ctx = target.getContext("2d")!;
     const prev = this.lastPoint ?? point;
-    this.captureStrokeTiles(layer, target, params, prev, point);
+    const stabilization = Math.max(0, Math.min(0.95, params.smoothing ?? 0));
+    const response = 1 - stabilization * 0.9;
+    const next = stabilization > 0 ? {
+      x: prev.x + (point.x - prev.x) * response,
+      y: prev.y + (point.y - prev.y) * response,
+      p: prev.p + (point.p - prev.p) * response,
+    } : point;
+    this.captureStrokeTiles(layer, target, params, prev, next);
 
     // If selection exists and we're painting into a raster layer, constrain
     // strokes by drawing through a clipped scratch, then re-composite.
     if (this.doc.selection && (params.mode === "paint" || params.mode === "erase")) {
       const radius = params.size * 0.55 + 2;
-      const x = Math.max(0, Math.floor(Math.min(prev.x, point.x) - radius));
-      const y = Math.max(0, Math.floor(Math.min(prev.y, point.y) - radius));
-      const right = Math.min(this.doc.width, Math.ceil(Math.max(prev.x, point.x) + radius));
-      const bottom = Math.min(this.doc.height, Math.ceil(Math.max(prev.y, point.y) + radius));
+      const x = Math.max(0, Math.floor(Math.min(prev.x, next.x) - radius));
+      const y = Math.max(0, Math.floor(Math.min(prev.y, next.y) - radius));
+      const right = Math.min(this.doc.width, Math.ceil(Math.max(prev.x, next.x) + radius));
+      const bottom = Math.min(this.doc.height, Math.ceil(Math.max(prev.y, next.y) + radius));
       const scratch = newCanvas(Math.max(1, right - x), Math.max(1, bottom - y));
       const sctx = scratch.getContext("2d")!;
       sctx.translate(-x, -y);
-      paintSegment(sctx, prev, point, { ...params, mode: params.mode === "erase" ? "paint" : params.mode });
+      paintSegment(sctx, prev, next, { ...params, mode: params.mode === "erase" ? "paint" : params.mode });
       // Mask scratch by selection
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.globalCompositeOperation = "destination-in";
@@ -1214,14 +1274,14 @@ export class Studio {
       ctx.drawImage(scratch, x, y);
       ctx.globalCompositeOperation = "source-over";
     } else {
-      paintSegment(ctx, prev, point, params);
+      paintSegment(ctx, prev, next, params);
     }
     if (params.mode === "mask-add" || params.mode === "mask-remove") {
       if (layer.mask) bumpBitmapVersion(layer.mask);
     } else if (layer.bitmap) {
       bumpBitmapVersion(layer.bitmap);
     }
-    this.lastPoint = point;
+    this.lastPoint = next;
     this.requestRender();
   }
 
@@ -1251,6 +1311,7 @@ export class Studio {
       });
     }
     this.commit({ label, before: [], after: [], pixelPatches: patches });
+    this.checkpointLayerSurface(layer);
     this.strokeTiles = null;
     this.lastPoint = null;
   }
@@ -1308,6 +1369,7 @@ export class Studio {
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
     this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
     this.commit({ label: `Filled with ${color}`, before, after: [snapshotLayer(layer)] });
     this.actions.push({ op: "fill", color });
     this.requestRender();
@@ -1329,6 +1391,7 @@ export class Studio {
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
     this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
     this.commit({ label: "Pixels cleared", before, after: [snapshotLayer(layer)] });
     this.actions.push({ op: "clear" });
     this.requestRender();
@@ -1462,6 +1525,7 @@ export class Studio {
       },
     };
     this.commitStructural(`AI ${operation}`, () => this.doc.layers.unshift(layer));
+    this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
   }
@@ -1594,6 +1658,15 @@ export class Studio {
     this.actions.push({ op: "featherSelection", radius });
     this.requestRender();
   }
+  refineSelection(params: RefineSelectionParams) {
+    if (!this.doc.selection) return false;
+    const before = cloneSelection(this.doc.selection);
+    if (!refineSelection(this.doc, params)) return false;
+    const after = cloneSelection(this.doc.selection);
+    this.commit({ label: "Selection edge refined", before: [], after: [], selectionBefore: before, selectionAfter: after });
+    this.requestRender();
+    return true;
+  }
 
   // --- filters ---
   filter(layerId: string, kind: "blur" | "sharpen" | "invert" | "desaturate" | "hue", opts: Record<string, number> = {}) {
@@ -1623,6 +1696,7 @@ export class Studio {
     }
     if (layer.bitmap) bumpBitmapVersion(layer.bitmap);
     this.syncLayerSurface(layer);
+    this.checkpointLayerSurface(layer);
     this.commit({ label: `Filter: ${kind}`, before, after: [snapshotLayer(layer)] });
     this.requestRender();
   }
@@ -1703,12 +1777,12 @@ export class Studio {
     const output = newCanvas(this.doc.width, this.doc.height);
     if (type === "image/jpeg") {
       const clean = newCanvas(this.doc.width, this.doc.height);
-      if (!this.useGL || !renderGL(this.doc, clean)) renderClean(this.doc, clean);
+      if (!this.useGL || !renderGL(this.doc, clean, false, false)) renderClean(this.doc, clean);
       const ctx = output.getContext("2d")!;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, output.width, output.height);
       ctx.drawImage(clean, 0, 0);
-    } else if (!this.useGL || !renderGL(this.doc, output)) renderClean(this.doc, output);
+    } else if (!this.useGL || !renderGL(this.doc, output, false, false)) renderClean(this.doc, output);
     return new Promise((resolve, reject) => {
       output.toBlob((blob) => blob ? resolve(blob) : reject(new Error("toBlob failed")), type, quality);
     });
@@ -1719,7 +1793,7 @@ export class Studio {
   // Rasterize the entire document into a fresh canvas without the checkerboard.
   flatten(): HTMLCanvasElement {
     const c = newCanvas(this.doc.width, this.doc.height);
-    if (!this.useGL || !renderGL(this.doc, c)) renderClean(this.doc, c);
+    if (!this.useGL || !renderGL(this.doc, c, false, false)) renderClean(this.doc, c);
     return c;
   }
 }
@@ -1728,6 +1802,7 @@ function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
     surface: layer.surface?.clone(),
+    source: layer.source ? { ...layer.source } : undefined,
     blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
     blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : undefined,
     transform: { ...layer.transform },
@@ -1753,6 +1828,7 @@ function cloneDocument(doc: Document): Document {
     ...doc,
     resolution: { ...doc.resolution },
     guides: doc.guides.map((guide) => ({ ...guide })),
+    proofing: { ...doc.proofing },
     layers: doc.layers.map((layer) => ({
       ...shallowCloneLayer(layer),
       bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,

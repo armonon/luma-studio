@@ -116,3 +116,51 @@ export function rgbToCmyk([r, g, b]: Rgb): [number, number, number, number] {
 export function cmykToRgb([c, m, y, k]: readonly [number, number, number, number]): [number, number, number] {
   return [(1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k)];
 }
+
+export type SoftProofProfile = "none" | "srgb" | "display-p3" | "cmyk-generic";
+export type SoftProofIntent = "perceptual" | "relative-colorimetric" | "absolute-colorimetric" | "saturation";
+
+/** Deterministic generic proof boundary; replaceable by an ICC transform without changing callers. */
+export function softProofDisplayRgb(
+  rgb: Rgb,
+  profile: SoftProofProfile,
+  intent: SoftProofIntent,
+  blackPointCompensation = true,
+) {
+  const clipped = rgb.map(clampUnit) as [number, number, number];
+  if (profile === "none" || profile === "display-p3") {
+    return { rgb: clipped, outOfGamut: rgb.some((value) => value < 0 || value > 1) };
+  }
+  if (profile === "srgb") {
+    return { rgb: clipped, outOfGamut: rgb.some((value) => value < 0 || value > 1) };
+  }
+
+  let [c, m, y, k] = rgbToCmyk(clipped);
+  const totalInk = c + m + y + k;
+  if (totalInk > 2.8) {
+    const scale = Math.max(0, (2.8 - k) / Math.max(0.0001, c + m + y));
+    c *= scale;
+    m *= scale;
+    y *= scale;
+  }
+  // Generic coated-paper dot gain and paper/black simulation.
+  c = c ** 0.9;
+  m = m ** 0.9;
+  y = y ** 0.9;
+  k = k ** 0.82;
+  let proofed = cmykToRgb([c, m, y, k]);
+  if (intent === "perceptual") proofed = proofed.map((value) => 0.02 + value * 0.94) as [number, number, number];
+  if (intent === "saturation") {
+    const luma = proofed[0] * 0.2126 + proofed[1] * 0.7152 + proofed[2] * 0.0722;
+    proofed = proofed.map((value) => clampUnit(luma + (value - luma) * 1.08)) as [number, number, number];
+  }
+  const black = blackPointCompensation ? 0.025 : 0.055;
+  const paper: Rgb = intent === "absolute-colorimetric" ? [0.94, 0.93, 0.89] : [1, 1, 1];
+  proofed = proofed.map((value, index) => black + value * (paper[index] - black)) as [number, number, number];
+  const distance = Math.hypot(proofed[0] - clipped[0], proofed[1] - clipped[1], proofed[2] - clipped[2]);
+  return { rgb: proofed.map(clampUnit) as [number, number, number], outOfGamut: distance > 0.085 };
+}
+
+function clampUnit(value: number) {
+  return Math.max(0, Math.min(1, value));
+}

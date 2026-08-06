@@ -8,6 +8,7 @@ export type BrushParams = {
   angle?: number; // degrees
   pressureSize?: boolean;
   pressureOpacity?: boolean;
+  smoothing?: number; // 0..1 input stabilization
   mode: "paint" | "erase" | "mask-add" | "mask-remove";
 };
 

@@ -270,6 +270,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
     bitDepth: 8,
     resolution: { x: 72, y: 72, unit: "ppi" },
     guides: [],
+    proofing: { profile: "none", intent: "relative-colorimetric", blackPointCompensation: true, gamutWarning: false },
     layers: [],
     selection: null,
   };

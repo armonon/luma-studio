@@ -5,7 +5,6 @@ import {
   applyCurvesToImageData,
   applyHslToImageData,
   applyLevelsToImageData,
-  drawLayerContent,
   effectiveLayerOpacity,
   effectiveLayerVisible,
   findClippingBase,
@@ -14,10 +13,13 @@ import {
   resolvedBlendPasses,
   resolvedFillOpacity,
 } from "./document";
+import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
 import { compositeBlendStack } from "./blend";
 import { drawSelectionOutline } from "./selection";
 import { getDisplayCtx } from "./gl-renderer";
+import { softProofDisplayRgb } from "./color";
+import { DEFAULT_TILE_SIZE } from "./tile-store";
 
 type Scratch = {
   a: HTMLCanvasElement;
@@ -84,6 +86,7 @@ let antsOffset = 0;
 export type RenderOptions = {
   checkerboard?: boolean;
   selectionOverlay?: boolean;
+  proofing?: boolean;
 };
 
 export function render(
@@ -93,6 +96,7 @@ export function render(
 ) {
   const checkerboard = options.checkerboard ?? true;
   const selectionOverlay = options.selectionOverlay ?? true;
+  const proofing = options.proofing ?? true;
   if (target.width !== doc.width) target.width = doc.width;
   if (target.height !== doc.height) target.height = doc.height;
 
@@ -122,6 +126,8 @@ export function render(
     }
   }
 
+  if (proofing) applySoftProof(composite, doc);
+
   const out = getDisplayCtx(target)!;
   out.save();
   out.setTransform(1, 0, 0, 1, 0, 0);
@@ -137,7 +143,37 @@ export function render(
 
 /** Render only document pixels. UI chrome must never leak into files or batch output. */
 export function renderClean(doc: Document, target: HTMLCanvasElement) {
-  render(doc, target, { checkerboard: false, selectionOverlay: false });
+  render(doc, target, { checkerboard: false, selectionOverlay: false, proofing: false });
+}
+
+function applySoftProof(ctx: CanvasRenderingContext2D, doc: Document) {
+  const settings = doc.proofing;
+  if (settings.profile === "none" && !settings.gamutWarning) return;
+  for (let y = 0; y < doc.height; y += DEFAULT_TILE_SIZE) {
+    for (let x = 0; x < doc.width; x += DEFAULT_TILE_SIZE) {
+      const width = Math.min(DEFAULT_TILE_SIZE, doc.width - x);
+      const height = Math.min(DEFAULT_TILE_SIZE, doc.height - y);
+      const image = ctx.getImageData(x, y, width, height);
+      for (let offset = 0; offset < image.data.length; offset += 4) {
+        if (image.data[offset + 3] === 0) continue;
+        const proof = softProofDisplayRgb([
+          image.data[offset] / 255,
+          image.data[offset + 1] / 255,
+          image.data[offset + 2] / 255,
+        ], settings.profile, settings.intent, settings.blackPointCompensation);
+        if (settings.gamutWarning && proof.outOfGamut) {
+          image.data[offset] = 255;
+          image.data[offset + 1] = 0;
+          image.data[offset + 2] = 255;
+        } else if (settings.profile !== "none") {
+          image.data[offset] = Math.round(proof.rgb[0] * 255);
+          image.data[offset + 1] = Math.round(proof.rgb[1] * 255);
+          image.data[offset + 2] = Math.round(proof.rgb[2] * 255);
+        }
+      }
+      ctx.putImageData(image, x, y);
+    }
+  }
 }
 
 function drawContentLayer(
@@ -159,7 +195,7 @@ function drawContentLayer(
   contentCtx.globalCompositeOperation = "source-over";
   contentCtx.globalAlpha = 1;
   contentCtx.clearRect(0, 0, doc.width, doc.height);
-  drawLayerContent(contentCtx, layer);
+  drawLayerContentManaged(contentCtx, layer);
   contentCtx.restore();
   applySmartFilters(contentBuf, layer.filters);
 
@@ -190,7 +226,7 @@ function drawContentLayer(
     const base = findClippingBase(doc, layer);
     if (base) {
       const clip = newCanvas(doc.width, doc.height);
-      drawLayerContent(clip.getContext("2d")!, base);
+      drawLayerContentManaged(clip.getContext("2d")!, base);
       bctx.globalCompositeOperation = "destination-in";
       bctx.drawImage(clip, 0, 0);
       bctx.globalCompositeOperation = "source-over";

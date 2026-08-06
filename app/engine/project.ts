@@ -258,6 +258,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     bitDepth: doc.bitDepth,
     resolution: { ...doc.resolution },
     guides: doc.guides.map((guide) => ({ ...guide })),
+    proofing: { ...doc.proofing },
     layers,
     selection,
   };
@@ -298,6 +299,12 @@ async function deserializeDocument(
     bitDepth: source.bitDepth ?? 8,
     resolution: source.resolution ?? { x: 72, y: 72, unit: "ppi" },
     guides: (source.guides ?? []).map((guide) => ({ ...guide })),
+    proofing: source.proofing ? { ...source.proofing } : {
+      profile: "none",
+      intent: "relative-colorimetric",
+      blackPointCompensation: true,
+      gamutWarning: false,
+    },
     layers,
     selection,
   };

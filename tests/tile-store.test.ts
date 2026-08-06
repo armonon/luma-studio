@@ -56,6 +56,7 @@ test("sparse store copies writes, tracks revisions, and emits tombstones", () =>
   saved[0] = 1;
   assert.equal(store.read("0:0")![0], 7);
   assert.equal(store.stats().residentTiles, 1);
+  assert.ok(store.revisionFor("0:0") > 0);
   assert.equal(store.drainDirty()[0].deleted, false);
   assert.equal(store.stats().dirtyTiles, 0);
 
@@ -92,6 +93,11 @@ test("precision surfaces retain values outside the canvas gamut and convert form
   assert.ok(pixel[1] < 0);
   assert.ok(Math.abs(pixel[3] - 0.8) < 0.002);
   assert.equal(half.stats().residentTiles, 1);
+  const gpu = surface.tileToFloat32Display("0:0", true, true);
+  const gpuIndex = ((4 - 1 - 1) * 4 + 2) * 4;
+  assert.ok(gpu[gpuIndex] > 1);
+  assert.ok(gpu[gpuIndex + 1] < 0);
+  assert.ok(Math.abs(gpu[gpuIndex + 3] - 0.8) < 0.0001);
 });
 
 test("canvas patches update only intersecting precision tiles", () => {

@@ -112,6 +112,7 @@ test.after(() => {
 test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear history", async () => {
   const doc = createDocument(4, 4);
   doc.bitDepth = 16;
+  doc.proofing = { profile: "cmyk-generic", intent: "perceptual", blackPointCompensation: true, gamutWarning: true };
   const bitmap = newCanvas(4, 4);
   const pixels = new TestImageData(4, 4);
   pixels.data.set([18, 52, 86, 255], 0);
@@ -199,6 +200,7 @@ test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear 
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
+  assert.deepEqual(decoded.doc.proofing, doc.proofing);
   assert.equal(decoded.doc.layers[0].blend, "multiply");
   assert.deepEqual(decoded.doc.layers[0].blendStack, layer.blendStack);
   assert.equal(decoded.doc.layers[0].fillOpacity, 0.64);
