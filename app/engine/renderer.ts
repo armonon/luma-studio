@@ -20,6 +20,11 @@ import { drawSelectionOutline } from "./selection";
 import { getDisplayCtx } from "./gl-renderer";
 import { softProofDisplayRgb } from "./color";
 import { DEFAULT_TILE_SIZE } from "./tile-store";
+import {
+  DISPLAY_P3_PROFILE,
+  SRGB_PROFILE,
+  createProofingTransform,
+} from "./color-management";
 
 type Scratch = {
   a: HTMLCanvasElement;
@@ -149,6 +154,17 @@ export function renderClean(doc: Document, target: HTMLCanvasElement) {
 function applySoftProof(ctx: CanvasRenderingContext2D, doc: Document) {
   const settings = doc.proofing;
   if (settings.profile === "none" && !settings.gamutWarning) return;
+  const managedProof = settings.profile === "srgb" || settings.profile === "display-p3"
+    ? createProofingTransform(
+      SRGB_PROFILE,
+      settings.profile === "display-p3" ? DISPLAY_P3_PROFILE : SRGB_PROFILE,
+      SRGB_PROFILE,
+      {
+        renderingIntent: settings.intent,
+        blackPointCompensation: settings.blackPointCompensation,
+      },
+    )
+    : null;
   for (let y = 0; y < doc.height; y += DEFAULT_TILE_SIZE) {
     for (let x = 0; x < doc.width; x += DEFAULT_TILE_SIZE) {
       const width = Math.min(DEFAULT_TILE_SIZE, doc.width - x);
@@ -156,11 +172,17 @@ function applySoftProof(ctx: CanvasRenderingContext2D, doc: Document) {
       const image = ctx.getImageData(x, y, width, height);
       for (let offset = 0; offset < image.data.length; offset += 4) {
         if (image.data[offset + 3] === 0) continue;
-        const proof = softProofDisplayRgb([
+        const alpha = image.data[offset + 3] / 255;
+        const source = [
           image.data[offset] / 255,
           image.data[offset + 1] / 255,
           image.data[offset + 2] / 255,
-        ], settings.profile, settings.intent, settings.blackPointCompensation);
+        ] as [number, number, number];
+        const managed = managedProof?.applyRgba([source[0], source[1], source[2], alpha]);
+        const proof = managed ? {
+          rgb: managed.rgba.slice(0, 3) as [number, number, number],
+          outOfGamut: managed.outOfGamut,
+        } : softProofDisplayRgb(source, settings.profile, settings.intent, settings.blackPointCompensation);
         if (settings.gamutWarning && proof.outOfGamut) {
           image.data[offset] = 255;
           image.data[offset + 1] = 0;

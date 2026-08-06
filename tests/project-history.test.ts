@@ -109,7 +109,7 @@ test.after(() => {
   globalThis.createImageBitmap = originalCreateImageBitmap;
 });
 
-test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear history", async () => {
+test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, pixels, and nonlinear history", async () => {
   const doc = createDocument(4, 4);
   doc.bitDepth = 16;
   doc.proofing = { profile: "cmyk-generic", intent: "perceptual", blackPointCompensation: true, gamutWarning: true };
@@ -151,6 +151,15 @@ test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear 
     inputSha256: "a".repeat(64),
     maskSha256: "b".repeat(64),
     parameters: { quality: "medium", size: "auto" },
+  };
+  layer.source = { originalName: "sensor.dng", format: "DNG", mode: "dng-cfa-developed", originalBytes: 8 };
+  layer.raw = {
+    original: Uint8Array.from([0x49, 0x49, 0x2a, 0, 8, 0, 0, 0]),
+    settings: { whiteBalance: "as-shot", customWhiteBalance: [1, 1, 1], exposureEV: 0.5, highlightRecovery: 0.35, workingSpace: "srgb" },
+    decoder: "luma-dng-tiff-v1",
+    boundary: "classic-tiff-uncompressed-bayer",
+    matrixSource: "color-matrix-1",
+    sensor: { bitsPerSample: 14, dngVersion: "1.6.0.0", warnings: ["fixture warning"] },
   };
   doc.layers.push(layer);
   doc.guides.push({ id: "guide-z", orientation: "vertical", position: 2 });
@@ -194,9 +203,10 @@ test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear 
   const blob = await encodeLumaProject(doc, [], "History fixture", graph.snapshot());
   const encodedZip = await JSZip.loadAsync(await blob.arrayBuffer());
   assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/precision/") && !path.endsWith("/")).length, 1);
+  assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/raw/") && !path.endsWith("/")).length, 1);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
-  assert.equal(LUMA_PROJECT_VERSION, 3);
+  assert.equal(LUMA_PROJECT_VERSION, 4);
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
@@ -207,6 +217,9 @@ test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear 
   assert.deepEqual(decoded.doc.layers[0].blendIf, layer.blendIf);
   assert.equal(decoded.doc.layers[0].ai?.requestId, "req_fixture");
   assert.equal(decoded.doc.layers[0].ai?.inputSha256, "a".repeat(64));
+  assert.deepEqual(Array.from(decoded.doc.layers[0].raw!.original), Array.from(layer.raw.original));
+  assert.deepEqual(decoded.doc.layers[0].raw!.settings, layer.raw.settings);
+  assert.equal(decoded.doc.layers[0].raw!.sensor.bitsPerSample, 14);
   assert.equal(decoded.doc.guides[0].id, "guide-z");
   assert.equal(decoded.doc.layers[0].bitmap!.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 18);
   const hdrPixel = decoded.doc.layers[0].surface!.readPixel(0, 0);

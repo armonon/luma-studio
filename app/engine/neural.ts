@@ -4,6 +4,29 @@
 
 export type ProgressFn = (msg: string, pct: number) => void;
 
+export type LocalSemanticCapability = {
+  id: "subject-matting" | "point-segmentation";
+  model: string;
+  promptTypes: ReadonlyArray<"none" | "positive-point" | "negative-point">;
+  output: "soft-alpha" | "binary-mask";
+  runsOnDevice: true;
+  cachedAfterDownload: true;
+  limitations: ReadonlyArray<string>;
+};
+
+export type SemanticPoint = { x: number; y: number; label?: "include" | "exclude" };
+
+export class NeuralCancelledError extends Error {
+  constructor() {
+    super("Local semantic operation cancelled");
+    this.name = "NeuralCancelledError";
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw new NeuralCancelledError();
+}
+
 type NeuralHandles = {
   model: unknown;
   processor: unknown;
@@ -20,6 +43,35 @@ export function setNeuralModel(name: string) {
     modelName = name;
     handlesPromise = null; // force reload
   }
+}
+
+export function getLocalSemanticCapabilities(): LocalSemanticCapability[] {
+  return [
+    {
+      id: "subject-matting",
+      model: modelName,
+      promptTypes: ["none"],
+      output: "soft-alpha",
+      runsOnDevice: true,
+      cachedAfterDownload: true,
+      limitations: [
+        "Optimized for foreground subject matting, not arbitrary semantic classes.",
+        "First use downloads the model and inference cannot be interrupted inside a single ONNX call.",
+      ],
+    },
+    {
+      id: "point-segmentation",
+      model: SAM_MODEL,
+      promptTypes: ["positive-point", "negative-point"],
+      output: "binary-mask",
+      runsOnDevice: true,
+      cachedAfterDownload: true,
+      limitations: [
+        "Point prompts guide geometry but do not attach a semantic class name.",
+        "The lightweight model can miss thin structures and inference cannot be interrupted inside a single ONNX call.",
+      ],
+    },
+  ];
 }
 
 async function loadHandles(onProgress?: ProgressFn): Promise<NeuralHandles> {
@@ -74,10 +126,13 @@ async function loadHandles(onProgress?: ProgressFn): Promise<NeuralHandles> {
 
 // Warm up the model without running inference — safe to call in the background
 // when the studio is idle to hide download latency.
-export async function warmNeural(onProgress?: ProgressFn): Promise<void> {
+export async function warmNeural(onProgress?: ProgressFn, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
   try {
     await loadHandles(onProgress);
-  } catch {
+    throwIfAborted(signal);
+  } catch (error) {
+    if (error instanceof NeuralCancelledError) throw error;
     // swallow — caller can fall back
   }
 }
@@ -89,8 +144,11 @@ type ModelFn = (inputs: Record<string, Tensor>) => Promise<Record<string, Tensor
 export async function neuralMatte(
   source: HTMLCanvasElement,
   onProgress?: ProgressFn,
+  signal?: AbortSignal,
 ): Promise<HTMLCanvasElement> {
+  throwIfAborted(signal);
   const { model, processor, RawImage } = await loadHandles(onProgress);
+  throwIfAborted(signal);
 
   onProgress?.("Preparing image", 0);
   const blob: Blob = await new Promise((resolve, reject) => {
@@ -100,10 +158,13 @@ export async function neuralMatte(
     );
   });
   const img = await RawImage.read(blob);
+  throwIfAborted(signal);
 
   onProgress?.("Running inference", 0);
   const inputs = await (processor as ProcessorFn)(img);
+  throwIfAborted(signal);
   const outputs = await (model as ModelFn)(inputs);
+  throwIfAborted(signal);
 
   // MODNet's ONNX export names its output "output" (a [1,1,H,W] alpha matte).
   const key = Object.keys(outputs)[0];
@@ -139,6 +200,7 @@ export async function neuralMatte(
   octx.drawImage(matte, 0, 0, source.width, source.height);
 
   onProgress?.("Done", 100);
+  throwIfAborted(signal);
   return out;
 }
 
@@ -193,13 +255,19 @@ async function loadSam(onProgress?: ProgressFn): Promise<SamHandles> {
 
 // One-point SAM prompt. Returns a mask at source resolution with alpha =
 // segmentation confidence.
-export async function samClickMask(
+export async function samPromptMask(
   source: HTMLCanvasElement,
-  x: number,
-  y: number,
+  points: ReadonlyArray<SemanticPoint>,
   onProgress?: ProgressFn,
+  signal?: AbortSignal,
 ): Promise<HTMLCanvasElement> {
+  if (!points.length || points.length > 64) throw new Error("SAM requires between 1 and 64 point prompts");
+  for (const point of points) {
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error("SAM point coordinates must be finite");
+  }
+  throwIfAborted(signal);
   const { model, processor, RawImage } = await loadSam(onProgress);
+  throwIfAborted(signal);
 
   onProgress?.("Preparing image", 0);
   const blob: Blob = await new Promise((resolve, reject) => {
@@ -209,16 +277,19 @@ export async function samClickMask(
     );
   });
   const img = await RawImage.read(blob);
+  throwIfAborted(signal);
 
   onProgress?.("Running SAM", 0);
   type Runtime = {
     (image: unknown, opts?: { input_points?: number[][][]; input_labels?: number[][] }): Promise<Record<string, { data: Float32Array | Uint8Array; dims: number[] }>>;
   };
   const inputs = await (processor as Runtime)(img, {
-    input_points: [[[x, y]]],
-    input_labels: [[1]],
+    input_points: [points.map((point) => [point.x, point.y])],
+    input_labels: [points.map((point) => point.label === "exclude" ? 0 : 1)],
   });
+  throwIfAborted(signal);
   const outputs = await (model as (i: unknown) => Promise<Record<string, { data: Float32Array; dims: number[] }>>)(inputs);
+  throwIfAborted(signal);
   const key = Object.keys(outputs).find((k) => k.toLowerCase().includes("mask")) ?? Object.keys(outputs)[0];
   const masksTensor = outputs[key];
   const dims = masksTensor.dims; // typically [1, N, H, W] where N = number of proposals
@@ -260,5 +331,16 @@ export async function samClickMask(
   octx.imageSmoothingEnabled = true;
   octx.imageSmoothingQuality = "high";
   octx.drawImage(matte, 0, 0, source.width, source.height);
+  throwIfAborted(signal);
   return out;
+}
+
+export function samClickMask(
+  source: HTMLCanvasElement,
+  x: number,
+  y: number,
+  onProgress?: ProgressFn,
+  signal?: AbortSignal,
+) {
+  return samPromptMask(source, [{ x, y, label: "include" }], onProgress, signal);
 }

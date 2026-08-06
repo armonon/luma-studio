@@ -21,9 +21,16 @@ import type {
 } from "./studio";
 import { PixelFormat, PrecisionTileSurface } from "./tile-store";
 import type { WorkingColorSpace } from "./color";
+import { importPsd } from "./psd";
+import {
+  getPhotoshopDocumentMetadata,
+  getPhotoshopLayerMetadata,
+  setPhotoshopDocumentMetadata,
+  setPhotoshopLayerMetadata,
+} from "./psd-metadata";
 
-export const LUMA_PROJECT_VERSION = 3 as const;
-const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, LUMA_PROJECT_VERSION]);
+export const LUMA_PROJECT_VERSION = 4 as const;
+const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, LUMA_PROJECT_VERSION]);
 const RESTORED_HISTORY_LIMIT = 80;
 
 type SerializedPrecisionSurface = {
@@ -35,21 +42,28 @@ type SerializedPrecisionSurface = {
   tiles: Array<{ key: string; asset: string }>;
 };
 
-type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask"> & {
+type SerializedRawSource = Omit<NonNullable<Layer["raw"]>, "original"> & {
+  asset: string;
+};
+
+type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "raw"> & {
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
+  raw?: SerializedRawSource;
 };
 
 type SerializedDocument = Omit<Document, "layers" | "selection"> & {
   layers: SerializedLayer[];
   selection?: { asset: string; bounds: Selection["bounds"] };
+  photoshopSourceAsset?: string;
 };
 
-type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask"> & {
+type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "raw"> & {
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
+  raw?: SerializedRawSource;
 };
 
 type SerializedPixelPatch = Omit<PixelPatch, "before" | "after"> & {
@@ -82,7 +96,7 @@ type SerializedOperationHistory = Omit<OperationHistorySnapshot<HistoryEntry>, "
 
 type ProjectManifest = {
   format: "luma-project";
-  version: 1 | 2 | typeof LUMA_PROJECT_VERSION;
+  version: 1 | 2 | 3 | typeof LUMA_PROJECT_VERSION;
   name: string;
   savedAt: string;
   document: SerializedDocument;
@@ -101,8 +115,12 @@ type EncodeContext = {
   zip: JSZip;
   assets: WeakMap<HTMLCanvasElement, string>;
   precisionAssets: Map<string, string>;
+  rawAssets: Map<string, string>;
+  photoshopAssets: Map<string, string>;
   nextAsset: number;
   nextPrecisionAsset: number;
+  nextRawAsset: number;
+  nextPhotoshopAsset: number;
 };
 
 function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -192,6 +210,48 @@ async function digestBytes(data: Uint8Array) {
   return `${data.byteLength.toString(16)}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
+async function addRawAsset(context: EncodeContext, data: Uint8Array) {
+  const digest = await digestBytes(data);
+  let asset = context.rawAssets.get(digest);
+  if (!asset) {
+    context.nextRawAsset += 1;
+    asset = `assets/raw/${context.nextRawAsset.toString().padStart(4, "0")}-${digest.slice(0, 12)}.dng`;
+    context.zip.file(asset, data);
+    context.rawAssets.set(digest, asset);
+  }
+  return asset;
+}
+
+async function readRawAsset(zip: JSZip, asset: string) {
+  if (!asset.startsWith("assets/raw/") || !asset.endsWith(".dng")) {
+    throw new Error(`Invalid RAW source asset: ${asset}`);
+  }
+  const file = zip.file(asset);
+  if (!file) throw new Error(`Missing RAW source asset: ${asset}`);
+  return file.async("uint8array");
+}
+
+async function addPhotoshopAsset(context: EncodeContext, data: Uint8Array) {
+  const digest = await digestBytes(data);
+  let asset = context.photoshopAssets.get(digest);
+  if (!asset) {
+    context.nextPhotoshopAsset += 1;
+    asset = `assets/photoshop/${context.nextPhotoshopAsset.toString().padStart(4, "0")}-${digest.slice(0, 12)}.bin`;
+    context.zip.file(asset, data);
+    context.photoshopAssets.set(digest, asset);
+  }
+  return asset;
+}
+
+async function readPhotoshopAsset(zip: JSZip, asset: string) {
+  if (!asset.startsWith("assets/photoshop/") || !asset.endsWith(".bin")) {
+    throw new Error(`Invalid Photoshop source asset: ${asset}`);
+  }
+  const file = zip.file(asset);
+  if (!file) throw new Error(`Missing Photoshop source asset: ${asset}`);
+  return file.async("uint8array");
+}
+
 async function deserializePrecisionSurface(source: SerializedPrecisionSurface, zip: JSZip) {
   if (!source || !Number.isInteger(source.width) || !Number.isInteger(source.height) ||
       !["rgba8", "rgba16f", "rgba32f"].includes(source.format) ||
@@ -216,12 +276,18 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
 }
 
 async function serializeLayer(layer: Layer, context: EncodeContext): Promise<SerializedLayer> {
-  const { bitmap, surface, mask, ...metadata } = layer;
+  const { bitmap, surface, mask, raw, ...metadata } = layer;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
+    raw: raw ? {
+      ...raw,
+      settings: { ...raw.settings, customWhiteBalance: [...raw.settings.customWhiteBalance] },
+      sensor: { ...raw.sensor, warnings: [...raw.sensor.warnings] },
+      asset: await addRawAsset(context, raw.original),
+    } : undefined,
   };
 }
 
@@ -231,7 +297,7 @@ async function deserializeLayer(
   preserveId: boolean,
   idMap?: Map<string, string>,
 ): Promise<Layer> {
-  const { bitmapAsset, surface, maskAsset, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, raw, ...metadata } = source;
   const id = preserveId ? metadata.id : nextId(metadata.kind);
   if (preserveId) reserveId(id);
   else idMap?.set(metadata.id, id);
@@ -243,11 +309,21 @@ async function deserializeLayer(
   if (bitmapAsset) layer.bitmap = await readCanvasAsset(zip, bitmapAsset);
   if (surface) layer.surface = await deserializePrecisionSurface(surface, zip);
   if (maskAsset) layer.mask = await readCanvasAsset(zip, maskAsset);
+  if (raw) {
+    const { asset, ...rawMetadata } = raw;
+    layer.raw = {
+      ...rawMetadata,
+      original: await readRawAsset(zip, asset),
+      settings: { ...rawMetadata.settings, customWhiteBalance: [...rawMetadata.settings.customWhiteBalance] },
+      sensor: { ...rawMetadata.sensor, warnings: [...rawMetadata.sensor.warnings] },
+    };
+  }
   return layer;
 }
 
 async function serializeDocument(doc: Document, context: EncodeContext): Promise<SerializedDocument> {
   const layers = await Promise.all(doc.layers.map((layer) => serializeLayer(layer, context)));
+  const photoshopSource = getPhotoshopDocumentMetadata(doc)?.originalSource;
   const selection = doc.selection
     ? { asset: await addCanvasAsset(context, doc.selection.mask), bounds: { ...doc.selection.bounds } }
     : undefined;
@@ -261,6 +337,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     proofing: { ...doc.proofing },
     layers,
     selection,
+    photoshopSourceAsset: photoshopSource ? await addPhotoshopAsset(context, photoshopSource) : undefined,
   };
 }
 
@@ -292,7 +369,7 @@ async function deserializeDocument(
       bounds: { ...source.selection.bounds },
     };
   }
-  return {
+  const doc: Document = {
     width: source.width,
     height: source.height,
     colorSpace: source.colorSpace ?? "srgb",
@@ -308,18 +385,54 @@ async function deserializeDocument(
     layers,
     selection,
   };
+  if (source.photoshopSourceAsset) {
+    const originalSource = await readPhotoshopAsset(zip, source.photoshopSourceAsset);
+    try {
+      const buffer = originalSource.buffer.slice(
+        originalSource.byteOffset,
+        originalSource.byteOffset + originalSource.byteLength,
+      ) as ArrayBuffer;
+      const restoredSource = await importPsd(buffer);
+      const documentMetadata = getPhotoshopDocumentMetadata(restoredSource);
+      if (documentMetadata) {
+        setPhotoshopDocumentMetadata(doc, { ...documentMetadata, originalSource });
+      }
+      const bySourceIndex = new Map(
+        restoredSource.layers
+          .filter((layer) => layer.photoshop)
+          .map((layer) => [layer.photoshop!.sourceIndex, layer] as const),
+      );
+      for (const layer of doc.layers) {
+        const sourceIndex = layer.photoshop?.sourceIndex;
+        if (sourceIndex === undefined) continue;
+        const sourceLayer = bySourceIndex.get(sourceIndex);
+        const metadata = sourceLayer ? getPhotoshopLayerMetadata(sourceLayer) : undefined;
+        if (metadata) setPhotoshopLayerMetadata(layer, metadata);
+      }
+    } catch {
+      // The editable Luma state remains authoritative even if an optional
+      // preservation source cannot be rehydrated on this runtime.
+    }
+  }
+  return doc;
 }
 
 async function serializeLayerSnapshot(
   snapshot: LayerSnapshot,
   context: EncodeContext,
 ): Promise<SerializedLayerSnapshot> {
-  const { bitmap, surface, mask, ...metadata } = snapshot;
+  const { bitmap, surface, mask, raw, ...metadata } = snapshot;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
+    raw: raw ? {
+      ...raw,
+      settings: { ...raw.settings, customWhiteBalance: [...raw.settings.customWhiteBalance] },
+      sensor: { ...raw.sensor, warnings: [...raw.sensor.warnings] },
+      asset: await addRawAsset(context, raw.original),
+    } : undefined,
   };
 }
 
@@ -327,12 +440,21 @@ async function deserializeLayerSnapshot(
   source: SerializedLayerSnapshot,
   zip: JSZip,
 ): Promise<LayerSnapshot> {
-  const { bitmapAsset, surface, maskAsset, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, raw, ...metadata } = source;
   return {
     ...metadata,
     bitmap: bitmapAsset ? await readCanvasAsset(zip, bitmapAsset) : undefined,
     surface: surface ? await deserializePrecisionSurface(surface, zip) : undefined,
     mask: maskAsset ? await readCanvasAsset(zip, maskAsset) : undefined,
+    raw: raw ? await (async () => {
+      const { asset, ...rawMetadata } = raw;
+      return {
+        ...rawMetadata,
+        original: await readRawAsset(zip, asset),
+        settings: { ...rawMetadata.settings, customWhiteBalance: [...rawMetadata.settings.customWhiteBalance] },
+        sensor: { ...rawMetadata.sensor, warnings: [...rawMetadata.sensor.warnings] },
+      };
+    })() : undefined,
   };
 }
 
@@ -492,8 +614,12 @@ export async function encodeLumaProject(
     zip,
     assets: new WeakMap(),
     precisionAssets: new Map(),
+    rawAssets: new Map(),
+    photoshopAssets: new Map(),
     nextAsset: 0,
     nextPrecisionAsset: 0,
+    nextRawAsset: 0,
+    nextPhotoshopAsset: 0,
   };
   const manifest: ProjectManifest = {
     format: "luma-project",

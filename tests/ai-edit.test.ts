@@ -1,0 +1,112 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  AiEditCancelledError,
+  buildAiEditPrompt,
+  createAiEditProvenance,
+  normalizeAiEditConfig,
+  normalizeAiSize,
+  runAiEditVariations,
+  selectionAlphaToEditMask,
+} from "../app/engine/ai-edit.ts";
+import { getLocalSemanticCapabilities, warmNeural } from "../app/engine/neural.ts";
+
+test("operation controls are validated, clamped, and translated to stable instructions", () => {
+  const config = normalizeAiEditConfig({
+    operation: "relight",
+    prompt: "Moonlight from the window",
+    controls: { direction: "left", temperature: -3, intensity: 0.8, preserveIdentity: 4 },
+    selection: { mode: "selection", coverage: 0.25 },
+  });
+  assert.deepEqual(config.controls, {
+    operation: "relight",
+    direction: "left",
+    temperature: -1,
+    intensity: 0.8,
+    preserveIdentity: 1,
+  });
+  const prompt = buildAiEditPrompt(config, true);
+  assert.match(prompt, /from the left/);
+  assert.match(prompt, /transparent guided region/);
+  assert.match(prompt, /Moonlight from the window/);
+});
+
+test("GPT Image 2 output dimensions enforce documented constraints", () => {
+  assert.equal(normalizeAiSize("1024x1024"), "1024x1024");
+  assert.equal(normalizeAiSize("3840x2160"), "3840x2160");
+  assert.throws(() => normalizeAiSize("1000x1000"), /constraints/);
+  assert.throws(() => normalizeAiSize("4096x4096"), /constraints/);
+  assert.throws(() => normalizeAiSize("2048x512"), /constraints/);
+});
+
+test("provenance identifiers are stable and variation-specific", () => {
+  const first = normalizeAiEditConfig({ operation: "fill", prompt: "Add flowers", variationIndex: 0 });
+  const reordered = normalizeAiEditConfig({ prompt: "Add flowers", variationIndex: 0, operation: "fill" });
+  const variation = normalizeAiEditConfig({ operation: "fill", prompt: "Add flowers", variationIndex: 1 });
+  assert.equal(createAiEditProvenance(first, "gpt-image-2").id, createAiEditProvenance(reordered, "gpt-image-2").id);
+  assert.notEqual(createAiEditProvenance(first, "gpt-image-2").id, createAiEditProvenance(variation, "gpt-image-2").id);
+});
+
+test("selection alpha becomes a feather-preserving transparent edit mask", () => {
+  const mask = selectionAlphaToEditMask(new Uint8Array([0, 128, 255, 0]), 2, 2);
+  assert.deepEqual([...mask.data.filter((_, index) => index % 4 === 3)], [255, 127, 0, 255]);
+  assert.deepEqual(mask.guide.bounds, { x: 0, y: 0, width: 2, height: 2 });
+  assert.ok(Math.abs(mask.guide.coverage! - (128 / 255 + 1) / 4) < 1e-9);
+
+  const inverse = selectionAlphaToEditMask(new Uint8Array([0, 255]), 2, 1, "inverse-selection");
+  assert.deepEqual([...inverse.data.filter((_, index) => index % 4 === 3)], [0, 255]);
+});
+
+test("variation orchestration is ordered, bounded to two requests, and carries provenance", async () => {
+  let active = 0;
+  let peak = 0;
+  const seen: number[] = [];
+  const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    const body = init?.body as FormData;
+    const index = Number(body.get("variationIndex"));
+    seen.push(index);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    active -= 1;
+    return new Response(new Uint8Array([index]), {
+      headers: {
+        "content-type": "image/png",
+        "x-luma-provenance": `variation-${index}`,
+        "x-openai-request-id": `request-${index}`,
+      },
+    });
+  };
+  const results = await runAiEditVariations({
+    image: new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
+    operation: "fill",
+    prompt: "Add a red flower",
+    variations: 4,
+    fetcher,
+  });
+  assert.deepEqual(seen.sort(), [0, 1, 2, 3]);
+  assert.equal(peak, 2);
+  assert.deepEqual(results.map((result) => result.index), [0, 1, 2, 3]);
+  assert.deepEqual(results.map((result) => result.provenanceId), [
+    "variation-0", "variation-1", "variation-2", "variation-3",
+  ]);
+});
+
+test("AI and local semantic work can be cancelled before expensive work starts", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(runAiEditVariations({
+    image: new Blob(["image"]),
+    operation: "fill",
+    prompt: "Change it",
+    signal: controller.signal,
+  }), AiEditCancelledError);
+  await assert.rejects(warmNeural(undefined, controller.signal), /cancelled/);
+});
+
+test("local semantic capability reporting is explicit about models and limits", () => {
+  const capabilities = getLocalSemanticCapabilities();
+  assert.deepEqual(capabilities.map((capability) => capability.id), ["subject-matting", "point-segmentation"]);
+  assert.ok(capabilities.every((capability) => capability.runsOnDevice && capability.cachedAfterDownload));
+  assert.ok(capabilities.find((capability) => capability.id === "point-segmentation")?.promptTypes.includes("negative-point"));
+});

@@ -44,3 +44,49 @@ export function extractEmbeddedRawPreview(source: ArrayBuffer, name: string): Ra
     byteLength: best.end - best.start,
   };
 }
+
+export type RawIngestResult =
+  | { kind: "developed-dng"; developed: ReturnType<typeof decodeDng> }
+  | { kind: "embedded-preview"; preview: RawPreview; decodeFailure?: { code: string; message: string } };
+
+/**
+ * Browser-safe RAW ingestion boundary. Uncompressed classic-TIFF Bayer DNG is
+ * developed from sensor samples; other camera RAWs and compressed/unsupported
+ * DNG variants fall back to a provenance-tagged embedded JPEG when available.
+ */
+export function ingestRaw(
+  source: ArrayBuffer,
+  name: string,
+  settings: Partial<RawDevelopSettings> = {},
+): RawIngestResult {
+  const extension = rawExtension(name);
+  if (!extension) throw new RawDecodeError("invalid-container", "The file extension is not a supported camera RAW type");
+  let failure: RawDecodeError | undefined;
+  if (extension === "dng") {
+    try {
+      return { kind: "developed-dng", developed: decodeDng(source, name, settings) };
+    } catch (error) {
+      if (!(error instanceof RawDecodeError)) throw error;
+      failure = error;
+    }
+  }
+  const preview = extractEmbeddedRawPreview(source, name);
+  if (preview) {
+    return {
+      kind: "embedded-preview",
+      preview,
+      decodeFailure: failure ? { code: failure.code, message: failure.message } : undefined,
+    };
+  }
+  if (failure) throw failure;
+  throw new RawDecodeError(
+    "unsupported-container",
+    `${extension.toUpperCase()} sensor decoding is not available locally and this file has no readable embedded JPEG`,
+  );
+}
+import { decodeDng, RawDecodeError } from "./raw-dng";
+import { RawDevelopSettings } from "./raw-develop";
+
+export * from "./raw-develop";
+export * from "./raw-dng";
+export * from "./raw-surface";

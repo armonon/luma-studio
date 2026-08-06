@@ -1,4 +1,6 @@
 import type { PrecisionTileSurface } from "./tile-store";
+import type { RawDevelopSettings } from "./raw-develop";
+import type { AiEditQuality, AiOperationControls, AiSelectionGuide } from "./ai-edit";
 
 export type BlendMode =
   | "source-over"
@@ -275,16 +277,47 @@ export type AiProvenance = {
   inputSha256?: string;
   maskSha256?: string;
   parameters?: {
-    quality: "low" | "medium" | "high";
+    quality: AiEditQuality;
     size: string;
+    variationIndex?: number;
+    controls?: AiOperationControls;
+    selection?: AiSelectionGuide;
   };
 };
 
 export type SourceProvenance = {
   originalName: string;
   format: string;
-  mode: "decoded" | "embedded-raw-preview";
+  mode: "decoded" | "embedded-raw-preview" | "dng-cfa-developed";
   originalBytes?: number;
+  colorProfile?: {
+    id: string;
+    name: string;
+    version?: string;
+    colorSpace: string;
+    model: "matrix-trc" | "unsupported-lut" | "metadata-only";
+    canTransform: boolean;
+    browserDecoded: true;
+    warnings: string[];
+  };
+};
+
+/**
+ * Original sensor asset and nondestructive develop recipe for an editable DNG
+ * layer. The source bytes are stored once in a .luma project; all display and
+ * precision surfaces remain reproducible derivatives.
+ */
+export type RawLayerSource = {
+  original: Uint8Array;
+  settings: RawDevelopSettings;
+  decoder: "luma-dng-tiff-v1";
+  boundary: "classic-tiff-uncompressed-bayer";
+  matrixSource: "forward-matrix-1" | "color-matrix-1" | "assumed-camera-rgb";
+  sensor: {
+    bitsPerSample: number;
+    dngVersion?: string;
+    warnings: string[];
+  };
 };
 
 export type LayerEffect = {
@@ -317,6 +350,9 @@ export type Layer = {
   filters?: SmartFilter[];
   ai?: AiProvenance;
   source?: SourceProvenance;
+  raw?: RawLayerSource;
+  /** Stable source-layer slot used to restore preservation metadata from an embedded PSD/PSB. */
+  photoshop?: { sourceIndex: number };
   effects?: LayerEffect[];
   bitmap?: HTMLCanvasElement;
   /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */

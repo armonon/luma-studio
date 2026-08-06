@@ -19,6 +19,7 @@ import {
   NEUTRAL_TONE,
   PathStyle,
   ProofSettings,
+  RawLayerSource,
   Selection,
   ShapeStyle,
   SourceProvenance,
@@ -46,7 +47,13 @@ import {
   resolvedFillOpacity,
 } from "./document";
 import { isNeutralBlendIf } from "./blend";
-import { BrushParams, paintSegment } from "./brush";
+import {
+  BrushParams,
+  BrushPoint,
+  PaintSegmentState,
+  createPaintSegmentState,
+  paintSegment,
+} from "./brush";
 import { render, renderClean } from "./renderer";
 import { bumpBitmapVersion, isGLSupported, renderGL } from "./gl-renderer";
 import {
@@ -70,11 +77,38 @@ import {
   unsharpMask,
 } from "./filters";
 import { Action, ActionRecorder, ActionStep } from "./actions";
-import { exportPsd, importPsd } from "./psd";
+import {
+  exportPhotoshopDocument,
+  exportPsd,
+  importPsd,
+  photoshopCompatibilityReport,
+  type PhotoshopExportOptions,
+} from "./psd";
 import { OperationHistory } from "./operation-history";
 import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
 import { precisionPreviewCacheStats } from "./precision-renderer";
 import { IndexedDbTileBacking } from "./tile-backing";
+import type { DevelopedDng } from "./raw-dng";
+import { DngDevelopSession, previewDisplayRgba } from "./raw-dng";
+import type { RawDevelopSettings } from "./raw-develop";
+import { developedDngToSurface } from "./raw-surface";
+import { defaultColorProfileRegistry } from "./color-management";
+import {
+  PyramidDirtyTracker,
+  ViewportTilePlanner,
+  VirtualCanvasPyramid,
+  type ViewportPlan,
+  type VirtualViewport,
+} from "./virtual-canvas";
+import {
+  normalizeAiEditConfig,
+  runAiEditVariations,
+  selectionAlphaToEditMask,
+  type AiEditOperation,
+  type AiEditQuality,
+  type AiOperationControls,
+  type AiSelectionGuide,
+} from "./ai-edit";
 
 type SubscribeFn = () => void;
 
@@ -103,6 +137,7 @@ export type LayerSnapshot = {
   clipping?: boolean;
   filters?: SmartFilter[];
   ai?: AiProvenance;
+  raw?: RawLayerSource;
   effects?: LayerEffect[];
 };
 
@@ -158,16 +193,25 @@ export class Studio {
   private renderScheduled = false;
   private disposed = false;
   private strokeTiles: Map<string, StrokeTile> | null = null;
-  private lastPoint: { x: number; y: number; p: number } | null = null;
+  private lastPoint: BrushPoint | null = null;
+  private paintSegmentState: PaintSegmentState | null = null;
   private sessions: DocumentSession[] = [];
   private activeSessionId = "";
   private liveSnapshots = new Map<string, LayerSnapshot>();
   private plugins = new Map<string, { plugin: LumaPlugin; dispose?: () => void }>();
   private tileBacking = IndexedDbTileBacking.supported() ? new IndexedDbTileBacking() : null;
+  private rawSessions = new Map<string, DngDevelopSession>();
+  private virtualPyramid: VirtualCanvasPyramid;
+  private virtualPlanner: ViewportTilePlanner;
+  private virtualDirty: PyramidDirtyTracker;
+  private virtualPlan: ViewportPlan | null = null;
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
     this.doc = createDocument(width, height);
     this.target = target;
+    this.virtualPyramid = new VirtualCanvasPyramid(width, height, DEFAULT_TILE_SIZE);
+    this.virtualPlanner = new ViewportTilePlanner(this.virtualPyramid);
+    this.virtualDirty = new PyramidDirtyTracker(this.virtualPyramid);
     const session: DocumentSession = {
       id: nextId("doc"),
       name: "Untitled",
@@ -210,6 +254,23 @@ export class Studio {
     for (const fn of this.subscribers) fn();
   }
 
+  private resetVirtualGeometry(width: number, height: number) {
+    this.virtualPyramid = new VirtualCanvasPyramid(width, height, DEFAULT_TILE_SIZE);
+    this.virtualPlanner = new ViewportTilePlanner(this.virtualPyramid);
+    this.virtualDirty = new PyramidDirtyTracker(this.virtualPyramid);
+    this.virtualPlan = null;
+  }
+
+  /** Keep a bounded, priority-ordered tile plan aligned with the visible canvas. */
+  setVirtualViewport(viewport: VirtualViewport) {
+    this.virtualPlan = this.virtualPlanner.plan(viewport, {
+      prefetchMarginTiles: 1,
+      fallbackLevels: 2,
+      maxRequests: 2048,
+    });
+    return this.virtualPlan;
+  }
+
   requestRender() {
     if (this.renderScheduled) return;
     this.renderScheduled = true;
@@ -230,6 +291,7 @@ export class Studio {
 
   private commit(entry: HistoryEntry) {
     this.history.commit(entry.label, entry);
+    this.virtualDirty.invalidateAll();
     this.emit();
   }
 
@@ -264,6 +326,7 @@ export class Studio {
     workingSetBytes += precisionBytes;
     const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
+    const photoshop = photoshopCompatibilityReport(this.doc, { format: "auto" });
     return {
       renderer: this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
       tileSize: DEFAULT_TILE_SIZE,
@@ -277,6 +340,28 @@ export class Studio {
       advancedBlendLayers,
       colorSpace: this.doc.colorSpace,
       bitDepth: this.doc.bitDepth,
+      colorManagement: {
+        profiles: defaultColorProfileRegistry.list().length,
+        transformCache: defaultColorProfileRegistry.transforms.stats,
+        embeddedProfiles: this.doc.layers.filter((layer) => !!layer.source?.colorProfile).length,
+      },
+      virtualCanvas: {
+        levels: this.virtualPyramid.maxLevel + 1,
+        totalBaseTiles: this.virtualPyramid.level(0).totalTiles,
+        plannedLevel: this.virtualPlan?.level ?? 0,
+        plannedTiles: this.virtualPlan?.requests.length ?? 0,
+        visibleTiles: this.virtualPlan?.visibleTileCount ?? 0,
+        fallbackTiles: this.virtualPlan?.fallbackTileCount ?? 0,
+        prefetchTiles: this.virtualPlan?.prefetchTileCount ?? 0,
+        truncated: this.virtualPlan?.truncated ?? false,
+        dirty: this.virtualDirty.stats(),
+      },
+      photoshop: {
+        container: photoshop.container,
+        canExport: photoshop.canExport,
+        warnings: photoshop.issues.filter((issue) => issue.severity === "warning").length,
+        preserved: photoshop.issues.filter((issue) => issue.severity === "info").length,
+      },
       proofing: { ...this.doc.proofing },
       previewCache: precisionPreviewCacheStats(),
       tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
@@ -348,11 +433,8 @@ export class Studio {
       if (snap.locked !== undefined) layer.locked = snap.locked;
       if (snap.clipping !== undefined) layer.clipping = snap.clipping;
       if (snap.filters) layer.filters = cloneFilters(snap.filters);
-      if (snap.ai) layer.ai = {
-        ...snap.ai,
-        sourceLayerIds: [...snap.ai.sourceLayerIds],
-        parameters: snap.ai.parameters ? { ...snap.ai.parameters } : undefined,
-      };
+      if (snap.ai) layer.ai = cloneAiProvenance(snap.ai);
+      if (snap.raw) layer.raw = cloneRawLayerSource(snap.raw);
       if (snap.effects) layer.effects = cloneEffects(snap.effects);
       if (snap.opacity !== undefined) layer.opacity = snap.opacity;
       if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
@@ -432,6 +514,8 @@ export class Studio {
   }
 
   private installDocument(doc: Document, name: string) {
+    this.rawSessions.clear();
+    this.resetVirtualGeometry(doc.width, doc.height);
     this.ensureDocumentSurfaces(doc);
     this.saveActiveSession();
     const current = this.sessions.find((session) => session.id === this.activeSessionId);
@@ -470,6 +554,75 @@ export class Studio {
   openImage(name: string, img: HTMLImageElement, source?: SourceProvenance) {
     this.installDocument(createDocument(img.naturalWidth, img.naturalHeight), name);
     return this.addRasterFromImage(name, img, source);
+  }
+
+  /** Install a sensor-developed DNG without quantizing its float master. */
+  openDevelopedDng(name: string, original: ArrayBuffer, developed: DevelopedDng) {
+    const doc = createDocument(developed.width, developed.height);
+    doc.bitDepth = 32;
+    doc.colorSpace = developed.settings.workingSpace;
+    this.installDocument(doc, name);
+    const bitmap = developedDngPreviewCanvas(developed);
+    const layer = createRasterLayer(name, bitmap);
+    layer.surface = developedDngToSurface(developed, "rgba32f");
+    layer.source = {
+      originalName: developed.provenance.originalName,
+      format: developed.provenance.format,
+      mode: "dng-cfa-developed",
+      originalBytes: developed.provenance.originalBytes,
+    };
+    layer.raw = {
+      original: new Uint8Array(original.slice(0)),
+      settings: cloneRawSettings(developed.settings),
+      decoder: developed.provenance.decoder,
+      boundary: developed.provenance.boundary,
+      matrixSource: developed.provenance.matrixSource,
+      sensor: {
+        bitsPerSample: developed.metadata.bitsPerSample,
+        dngVersion: developed.metadata.dngVersion,
+        warnings: [...developed.metadata.warnings],
+      },
+    };
+    this.commitStructural(`${name} developed from DNG`, () => this.doc.layers.unshift(layer));
+    this.checkpointLayerSurface(layer);
+    this.requestRender();
+    return layer;
+  }
+
+  /** Re-run the sensor pipeline from the embedded original DNG and commit one undo step. */
+  redevelopRaw(layerId: string, patch: Partial<RawDevelopSettings>) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.raw || layer.source?.mode !== "dng-cfa-developed") return false;
+    const before = snapshotLayer(layer);
+    let session = this.rawSessions.get(layerId);
+    if (!session) {
+      const source = layer.raw.original.slice().buffer as ArrayBuffer;
+      session = new DngDevelopSession(source, layer.source.originalName, layer.raw.settings);
+      this.rawSessions.set(layerId, session);
+    }
+    const developed = session.develop({
+      ...patch,
+      // A layer master always stays in the document working space.
+      workingSpace: this.doc.colorSpace,
+    });
+    layer.bitmap = developedDngPreviewCanvas(developed);
+    bumpBitmapVersion(layer.bitmap);
+    layer.surface = developedDngToSurface(developed, pixelFormatForDepth(this.doc.bitDepth));
+    layer.raw = {
+      ...layer.raw,
+      settings: cloneRawSettings(developed.settings),
+      matrixSource: developed.provenance.matrixSource,
+      sensor: {
+        bitsPerSample: developed.metadata.bitsPerSample,
+        dngVersion: developed.metadata.dngVersion,
+        warnings: [...developed.metadata.warnings],
+      },
+    };
+    const after = snapshotLayer(layer);
+    this.commit({ label: "RAW developed", before: [before], after: [after] });
+    this.checkpointLayerSurface(layer, true);
+    this.requestRender();
+    return true;
   }
 
   // --- layer helpers ---
@@ -521,6 +674,7 @@ export class Studio {
     }
     this.doc.width = width;
     this.doc.height = height;
+    this.resetVirtualGeometry(width, height);
     this.doc.guides = this.doc.guides
       .map((guide) => ({ ...guide, position: guide.position - (guide.orientation === "vertical" ? x : y) }))
       .filter((guide) => guide.position >= 0 && guide.position <= (guide.orientation === "vertical" ? width : height));
@@ -581,6 +735,7 @@ export class Studio {
     this.doc.guides = this.doc.guides.map((guide) => ({ ...guide, position: guide.position * (guide.orientation === "vertical" ? sx : sy) }));
     this.doc.width = width;
     this.doc.height = height;
+    this.resetVirtualGeometry(width, height);
     const after = cloneDocument(this.doc);
     this.commit({ label: "Image resized", before: [], after: [], documentBefore: before, documentAfter: after });
     this.requestRender();
@@ -1227,16 +1382,20 @@ export class Studio {
   }
 
   // --- painting ---
-  beginStroke(layerId: string, params: BrushParams, point: { x: number; y: number; p: number }) {
+  beginStroke(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
     if (!paintTarget(layer, params, this.doc.width, this.doc.height)) return;
     this.strokeTiles = new Map();
     this.lastPoint = point;
+    this.paintSegmentState = null;
     this.paintTo(layerId, params, point);
+    this.paintSegmentState = createPaintSegmentState(params);
+    this.paintSegmentState.planner.start(point, false);
+    this.paintSegmentState.started = true;
   }
 
-  paintTo(layerId: string, params: BrushParams, point: { x: number; y: number; p: number }) {
+  paintTo(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer) return;
     const target = paintTarget(layer, params, this.doc.width, this.doc.height);
@@ -1249,6 +1408,9 @@ export class Studio {
       x: prev.x + (point.x - prev.x) * response,
       y: prev.y + (point.y - prev.y) * response,
       p: prev.p + (point.p - prev.p) * response,
+      tiltX: (prev.tiltX ?? 0) + ((point.tiltX ?? 0) - (prev.tiltX ?? 0)) * response,
+      tiltY: (prev.tiltY ?? 0) + ((point.tiltY ?? 0) - (prev.tiltY ?? 0)) * response,
+      azimuth: point.azimuth,
     } : point;
     this.captureStrokeTiles(layer, target, params, prev, next);
 
@@ -1263,7 +1425,13 @@ export class Studio {
       const scratch = newCanvas(Math.max(1, right - x), Math.max(1, bottom - y));
       const sctx = scratch.getContext("2d")!;
       sctx.translate(-x, -y);
-      paintSegment(sctx, prev, next, { ...params, mode: params.mode === "erase" ? "paint" : params.mode });
+      paintSegment(
+        sctx,
+        prev,
+        next,
+        { ...params, mode: params.mode === "erase" ? "paint" : params.mode },
+        this.paintSegmentState ?? undefined,
+      );
       // Mask scratch by selection
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.globalCompositeOperation = "destination-in";
@@ -1274,7 +1442,7 @@ export class Studio {
       ctx.drawImage(scratch, x, y);
       ctx.globalCompositeOperation = "source-over";
     } else {
-      paintSegment(ctx, prev, next, params);
+      paintSegment(ctx, prev, next, params, this.paintSegmentState ?? undefined);
     }
     if (params.mode === "mask-add" || params.mode === "mask-remove") {
       if (layer.mask) bumpBitmapVersion(layer.mask);
@@ -1314,6 +1482,7 @@ export class Studio {
     this.checkpointLayerSurface(layer);
     this.strokeTiles = null;
     this.lastPoint = null;
+    this.paintSegmentState = null;
   }
 
   private captureStrokeTiles(
@@ -1324,7 +1493,7 @@ export class Studio {
     to: { x: number; y: number },
   ) {
     if (!this.strokeTiles) return;
-    const radius = params.size * 0.55 + 2;
+    const radius = params.size * (0.55 + Math.max(0, params.scatter ?? 0)) + 2;
     const target: PixelPatch["target"] = params.mode === "mask-add" || params.mode === "mask-remove" ? "mask" : "bitmap";
     const ctx = canvas.getContext("2d")!;
     const grid = new TileGrid(canvas.width, canvas.height, DEFAULT_TILE_SIZE);
@@ -1467,67 +1636,105 @@ export class Studio {
     }
   }
 
-  async generativeEdit(
+  async generativeEditVariations(
     layerId: string,
     prompt: string,
-    operation: AiProvenance["operation"] = "fill",
+    operation: AiEditOperation = "fill",
+    options: {
+      controls?: Partial<AiOperationControls>;
+      quality?: AiEditQuality;
+      size?: "auto" | `${number}x${number}`;
+      variations?: number;
+      signal?: AbortSignal;
+      onVariation?: (completed: number, total: number) => void;
+    } = {},
   ) {
     const source = this.findLayer(layerId);
     if (!source || source.kind === "group") throw new Error("Select a content layer");
     const composite = this.flatten();
     const image = await canvasToBlob(composite);
-    const body = new FormData();
-    body.append("image", image, "source.png");
-    body.append("prompt", prompt);
-    body.append("operation", operation);
     let maskBlob: Blob | undefined;
+    let selectionGuide: AiSelectionGuide = { mode: "none" };
     if (this.doc.selection) {
-      const mask = newCanvas(this.doc.width, this.doc.height);
       const input = this.doc.selection.mask.getContext("2d")!.getImageData(0, 0, this.doc.width, this.doc.height);
+      const alpha = new Uint8Array(this.doc.width * this.doc.height);
+      for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = input.data[pixel * 4 + 3];
+      const editMask = selectionAlphaToEditMask(alpha, this.doc.width, this.doc.height);
+      const mask = newCanvas(this.doc.width, this.doc.height);
       const output = mask.getContext("2d")!.createImageData(this.doc.width, this.doc.height);
-      for (let i = 0; i < input.data.length; i += 4) {
-        output.data[i] = 255;
-        output.data[i + 1] = 255;
-        output.data[i + 2] = 255;
-        output.data[i + 3] = 255 - input.data[i + 3];
-      }
+      output.data.set(editMask.data);
       mask.getContext("2d")!.putImageData(output, 0, 0);
       maskBlob = await canvasToBlob(mask);
-      body.append("mask", maskBlob, "mask.png");
+      selectionGuide = editMask.guide;
     }
     const [inputSha256, maskSha256] = await Promise.all([
       sha256Blob(image),
       maskBlob ? sha256Blob(maskBlob) : Promise.resolve(undefined),
     ]);
-    const response = await fetch("/api/ai/edit", { method: "POST", body });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(payload?.error ?? "Generative edit failed");
-    }
-    const result = await blobToCanvas(await response.blob(), this.doc.width, this.doc.height);
-    const layer = createRasterLayer(`AI · ${operation}`, result);
-    layer.surface = this.surfaceFromCanvas(result);
-    layer.ai = {
-      id: nextId("ai"),
+    const total = options.variations ?? 1;
+    let completed = 0;
+    const results = await runAiEditVariations({
+      image,
+      mask: maskBlob,
       operation,
-      provider: "openai",
-      model: response.headers.get("x-luma-model") ?? "gpt-image-2",
       prompt,
-      createdAt: new Date().toISOString(),
-      sourceLayerIds: [layerId],
-      usedSelection: !!this.doc.selection,
-      requestId: response.headers.get("x-openai-request-id") ?? undefined,
-      inputSha256,
-      maskSha256,
-      parameters: {
-        quality: (response.headers.get("x-luma-quality") as "low" | "medium" | "high" | null) ?? "medium",
-        size: response.headers.get("x-luma-size") ?? "auto",
-      },
-    };
-    this.commitStructural(`AI ${operation}`, () => this.doc.layers.unshift(layer));
-    this.checkpointLayerSurface(layer);
+      controls: options.controls,
+      quality: options.quality,
+      size: options.size,
+      selection: selectionGuide,
+      variations: total,
+      signal: options.signal,
+      onVariation: () => options.onVariation?.(++completed, total),
+    });
+    const layers = await Promise.all(results.map(async (result) => {
+      const bitmap = await blobToCanvas(result.image, this.doc.width, this.doc.height);
+      const layer = createRasterLayer(`AI · ${operation}${total > 1 ? ` · ${result.index + 1}` : ""}`, bitmap);
+      layer.surface = this.surfaceFromCanvas(bitmap);
+      const config = normalizeAiEditConfig({
+        operation,
+        prompt,
+        controls: options.controls,
+        quality: options.quality,
+        size: options.size,
+        selection: selectionGuide,
+        variationIndex: result.index,
+        sourceDigest: inputSha256,
+        maskDigest: maskSha256,
+      });
+      layer.ai = {
+        id: result.provenanceId ?? nextId("ai"),
+        operation,
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt,
+        createdAt: new Date().toISOString(),
+        sourceLayerIds: [layerId],
+        usedSelection: selectionGuide.mode !== "none",
+        requestId: result.upstreamRequestId,
+        inputSha256,
+        maskSha256,
+        parameters: {
+          quality: config.quality,
+          size: config.size,
+          variationIndex: config.variationIndex,
+          controls: config.controls,
+          selection: config.selection,
+        },
+      };
+      return layer;
+    }));
+    this.commitStructural(`AI ${operation} · ${layers.length} variation${layers.length === 1 ? "" : "s"}`, () => this.doc.layers.unshift(...layers));
+    for (const layer of layers) this.checkpointLayerSurface(layer);
     this.requestRender();
-    return layer;
+    return layers;
+  }
+
+  async generativeEdit(
+    layerId: string,
+    prompt: string,
+    operation: AiProvenance["operation"] = "fill",
+  ) {
+    return (await this.generativeEditVariations(layerId, prompt, operation, { variations: 1 }))[0];
   }
 
   // Click-point SAM segmentation. The mask returned becomes the document
@@ -1752,7 +1959,9 @@ export class Studio {
     return newDoc;
   }
 
-  exportPsd(): ArrayBuffer { return exportPsd(this.doc); }
+  exportPsd(options: PhotoshopExportOptions = {}): ArrayBuffer { return exportPsd(this.doc, options); }
+  exportPhotoshop(options: PhotoshopExportOptions = {}) { return exportPhotoshopDocument(this.doc, options); }
+  photoshopCompatibility(options: PhotoshopExportOptions = {}) { return photoshopCompatibilityReport(this.doc, options); }
 
   async exportProject(name = "Untitled") {
     const { encodeLumaProject } = await import("./project");
@@ -1802,7 +2011,15 @@ function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
     surface: layer.surface?.clone(),
-    source: layer.source ? { ...layer.source } : undefined,
+    source: layer.source ? {
+      ...layer.source,
+      colorProfile: layer.source.colorProfile ? {
+        ...layer.source.colorProfile,
+        warnings: [...layer.source.colorProfile.warnings],
+      } : undefined,
+    } : undefined,
+    photoshop: layer.photoshop ? { ...layer.photoshop } : undefined,
+    raw: layer.raw ? cloneRawLayerSource(layer.raw) : undefined,
     blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
     blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : undefined,
     transform: { ...layer.transform },
@@ -1814,11 +2031,7 @@ function shallowCloneLayer(layer: Layer): Layer {
     shape: layer.shape ? { ...layer.shape } : undefined,
     path: layer.path ? deepClonePath(layer.path) : undefined,
     filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? {
-      ...layer.ai,
-      sourceLayerIds: [...layer.ai.sourceLayerIds],
-      parameters: layer.ai.parameters ? { ...layer.ai.parameters } : undefined,
-    } : undefined,
+    ai: layer.ai ? cloneAiProvenance(layer.ai) : undefined,
     effects: layer.effects ? cloneEffects(layer.effects) : undefined,
   };
 }
@@ -1880,17 +2093,56 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
     locked: layer.locked,
     clipping: layer.clipping,
     filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? {
-      ...layer.ai,
-      sourceLayerIds: [...layer.ai.sourceLayerIds],
-      parameters: layer.ai.parameters ? { ...layer.ai.parameters } : undefined,
-    } : undefined,
+    ai: layer.ai ? cloneAiProvenance(layer.ai) : undefined,
+    raw: layer.raw ? cloneRawLayerSource(layer.raw) : undefined,
     effects: layer.effects ? cloneEffects(layer.effects) : undefined,
   };
 }
 
 function pixelFormatForDepth(bitDepth: Document["bitDepth"]): PixelFormat {
   return bitDepth === 32 ? "rgba32f" : bitDepth === 16 ? "rgba16f" : "rgba8";
+}
+
+function cloneRawSettings(settings: RawDevelopSettings): RawDevelopSettings {
+  return {
+    ...settings,
+    customWhiteBalance: [...settings.customWhiteBalance],
+  };
+}
+
+function cloneAiProvenance(ai: AiProvenance): AiProvenance {
+  return {
+    ...ai,
+    sourceLayerIds: [...ai.sourceLayerIds],
+    parameters: ai.parameters ? {
+      ...ai.parameters,
+      controls: ai.parameters.controls ? { ...ai.parameters.controls } : undefined,
+      selection: ai.parameters.selection ? {
+        ...ai.parameters.selection,
+        bounds: ai.parameters.selection.bounds ? { ...ai.parameters.selection.bounds } : undefined,
+      } : undefined,
+    } : undefined,
+  };
+}
+
+function cloneRawLayerSource(raw: RawLayerSource): RawLayerSource {
+  return {
+    ...raw,
+    // Sensor sources are immutable and may be hundreds of megabytes. History
+    // nodes intentionally share this byte buffer; .luma serialization dedupes it.
+    original: raw.original,
+    settings: cloneRawSettings(raw.settings),
+    sensor: { ...raw.sensor, warnings: [...raw.sensor.warnings] },
+  };
+}
+
+function developedDngPreviewCanvas(developed: DevelopedDng) {
+  const canvas = newCanvas(developed.width, developed.height);
+  const context = canvas.getContext("2d")!;
+  const image = context.createImageData(developed.width, developed.height);
+  image.data.set(previewDisplayRgba(developed));
+  context.putImageData(image, 0, 0);
+  return canvas;
 }
 
 function cloneFilters(filters: SmartFilter[]): SmartFilter[] {

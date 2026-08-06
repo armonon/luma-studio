@@ -44,7 +44,11 @@ import { isNeutralBlendIf } from "@/app/engine/blend";
 import { BrushParams } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
-import { RAW_EXTENSIONS, extractEmbeddedRawPreview, rawExtension } from "@/app/engine/raw";
+import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
+import type { RawDevelopSettings } from "@/app/engine/raw-develop";
+import { extractAndParseEmbeddedColorProfile } from "@/app/engine/embedded-color-profile";
+import { defaultColorProfileRegistry } from "@/app/engine/color-management";
+import type { AiEditQuality, AiOperationControls } from "@/app/engine/ai-edit";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "select" | "mask" | "develop" | "vector";
@@ -530,6 +534,7 @@ function formatBytes(bytes: number) {
 
 export default function SpatialStudio() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const psdInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
@@ -547,15 +552,26 @@ export default function SpatialStudio() {
   }, []);
   const [activeAdjustmentId, setActiveAdjustmentId] = useState<string | null>(null);
   const [tone, setTone] = useState<ToneParams>({ ...NEUTRAL_TONE });
+  const [rawDevelopDraft, setRawDevelopDraft] = useState<{
+    layerId: string;
+    settings: RawDevelopSettings;
+  } | null>(null);
   const [brushSize, setBrushSize] = useState(48);
   const [hardness, setHardness] = useState(0.7);
   const [brushOpacity, setBrushOpacity] = useState(0.9);
+  const [brushFlow, setBrushFlow] = useState(0.32);
   const [brushSpacing, setBrushSpacing] = useState(0.12);
   const [brushRoundness, setBrushRoundness] = useState(1);
   const [brushAngle, setBrushAngle] = useState(0);
   const [pressureSize, setPressureSize] = useState(true);
   const [pressureOpacity, setPressureOpacity] = useState(true);
   const [brushSmoothing, setBrushSmoothing] = useState(0.18);
+  const [brushScatter, setBrushScatter] = useState(0);
+  const [brushTilt, setBrushTilt] = useState(0.55);
+  const [brushTexture, setBrushTexture] = useState(0);
+  const [brushBuildUp, setBrushBuildUp] = useState(true);
+  const [brushBlendMode, setBrushBlendMode] = useState<NonNullable<BrushParams["blendMode"]>>("normal");
+  const [brushSymmetry, setBrushSymmetry] = useState<"none" | "horizontal" | "vertical" | "radial">("none");
   const [brushColor, setBrushColor] = useState("#ffffff");
   const [feather, setFeather] = useState(0);
   const [wandTolerance, setWandTolerance] = useState(24);
@@ -575,6 +591,12 @@ export default function SpatialStudio() {
   const [aiPrompt, setAiPrompt] = useState("Replace the selected area naturally while preserving the rest of the photograph");
   const [aiOperation, setAiOperation] = useState<AiProvenance["operation"]>("fill");
   const [aiRunning, setAiRunning] = useState(false);
+  const [aiQuality, setAiQuality] = useState<AiEditQuality>("medium");
+  const [aiVariations, setAiVariations] = useState(1);
+  const [aiStrength, setAiStrength] = useState(0.8);
+  const [aiPreserve, setAiPreserve] = useState(0.95);
+  const [aiTemperature, setAiTemperature] = useState(0);
+  const aiAbort = useRef<AbortController | null>(null);
   const [showBatch, setShowBatch] = useState(false);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ i: number; total: number; name: string } | null>(null);
@@ -583,6 +605,7 @@ export default function SpatialStudio() {
   const [useGL, setUseGL] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
+  const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
   const [showGuides, setShowGuides] = useState(true);
   const resizeWidthRef = useRef<HTMLInputElement>(null);
@@ -675,15 +698,63 @@ export default function SpatialStudio() {
   const layers: Layer[] = doc?.layers ?? [];
   const openDocuments = studio?.listDocuments() ?? [];
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const rawDevelop = activeLayer?.raw
+    ? rawDevelopDraft?.layerId === activeLayer.id
+      ? rawDevelopDraft.settings
+      : activeLayer.raw.settings
+    : null;
+  const setRawDevelop = (settings: RawDevelopSettings | null) => {
+    setRawDevelopDraft(settings && activeLayer ? { layerId: activeLayer.id, settings } : null);
+  };
 
-  const eventToDoc = useCallback((e: { clientX: number; clientY: number; pressure?: number }) => {
+  useEffect(() => {
+    if (!studio || !doc || !canvasRef.current || !stageRef.current) return;
+    const updatePlan = () => {
+      const canvasRect = canvasRef.current!.getBoundingClientRect();
+      const stageRect = stageRef.current!.getBoundingClientRect();
+      if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
+      const left = Math.max(stageRect.left, canvasRect.left);
+      const top = Math.max(stageRect.top, canvasRect.top);
+      const right = Math.min(stageRect.right, canvasRect.right);
+      const bottom = Math.min(stageRect.bottom, canvasRect.bottom);
+      const x = (left - canvasRect.left) / canvasRect.width * doc.width;
+      const y = (top - canvasRect.top) / canvasRect.height * doc.height;
+      const width = Math.max(0, right - left) / canvasRect.width * doc.width;
+      const height = Math.max(0, bottom - top) / canvasRect.height * doc.height;
+      studio.setVirtualViewport({
+        x,
+        y,
+        width,
+        height,
+        zoom: canvasRect.width / doc.width,
+      });
+    };
+    updatePlan();
+    const observer = new ResizeObserver(updatePlan);
+    observer.observe(stageRef.current);
+    return () => observer.disconnect();
+  }, [studio, doc, view]);
+
+  const eventToDoc = useCallback((e: {
+    clientX: number;
+    clientY: number;
+    pressure?: number;
+    tiltX?: number;
+    tiltY?: number;
+    azimuthAngle?: number;
+  }) => {
     const canvas = canvasRef.current;
     if (!canvas || !doc) return { x: 0, y: 0, p: 0.5 };
     const rect = canvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * doc.width;
     const y = ((e.clientY - rect.top) / rect.height) * doc.height;
     const p = e.pressure !== undefined && e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : 0.5;
-    return { x, y, p };
+    const tiltX = e.tiltX ?? 0;
+    const tiltY = e.tiltY ?? 0;
+    const azimuth = Number.isFinite(e.azimuthAngle)
+      ? e.azimuthAngle
+      : (tiltX || tiltY ? Math.atan2(tiltY, tiltX) : 0);
+    return { x, y, p, tiltX, tiltY, azimuth };
   }, [doc]);
 
   const currentBrushMode = (): BrushParams["mode"] => {
@@ -697,12 +768,28 @@ export default function SpatialStudio() {
     size: brushSize,
     hardness,
     opacity: brushOpacity,
+    flow: brushFlow,
     spacing: brushSpacing,
     roundness: brushRoundness,
     angle: brushAngle,
     pressureSize,
     pressureOpacity,
     smoothing: brushSmoothing,
+    tiltInfluence: brushTilt,
+    scatter: brushScatter,
+    texture: brushTexture > 0 ? { strength: brushTexture, scale: 0.35, seed: 917 } : undefined,
+    buildUp: brushBuildUp,
+    blendMode: brushBlendMode,
+    pressureCurve: 1.15,
+    minimumPressureSize: 0.08,
+    seed: 1731,
+    symmetry: brushSymmetry === "none" || !doc ? undefined : {
+      centerX: doc.width / 2,
+      centerY: doc.height / 2,
+      horizontal: brushSymmetry === "horizontal",
+      vertical: brushSymmetry === "vertical",
+      radialSegments: brushSymmetry === "radial" ? 6 : 1,
+    },
     color: brushColor,
     mode: currentBrushMode(),
   });
@@ -860,7 +947,14 @@ export default function SpatialStudio() {
     const d = dragRef.current;
     if (paintingTool && e.buttons !== 0 && activeLayer) {
       // Coalesced events for smoother strokes on high-frequency devices.
-      type WithCoalesced = { getCoalescedEvents?: () => Array<{ clientX: number; clientY: number; pressure?: number }> };
+      type WithCoalesced = { getCoalescedEvents?: () => Array<{
+        clientX: number;
+        clientY: number;
+        pressure?: number;
+        tiltX?: number;
+        tiltY?: number;
+        azimuthAngle?: number;
+      }> };
       const src = e.nativeEvent as WithCoalesced;
       const events = src.getCoalescedEvents ? src.getCoalescedEvents() : [];
       const points = events.length ? events : [e.nativeEvent];
@@ -928,6 +1022,13 @@ export default function SpatialStudio() {
     if (!studio || !activeAdjustmentId) return;
     studio.updateTone(activeAdjustmentId, tone);
   };
+
+  const commitRawDevelop = (settings: RawDevelopSettings | null) => {
+    if (!studio || !activeLayer?.raw || !settings) return;
+    if (studio.redevelopRaw(activeLayer.id, settings)) {
+      notify("RAW develop updated from sensor data");
+    }
+  };
   const resetTone = () => {
     if (!studio || !activeAdjustmentId) { setTone({ ...NEUTRAL_TONE }); return; }
     setTone({ ...NEUTRAL_TONE });
@@ -964,19 +1065,46 @@ export default function SpatialStudio() {
     try {
       const raw = rawExtension(file.name);
       let source: Parameters<Studio["openImage"]>[2];
+      let profileLabel = "";
       if (raw) {
-        const preview = extractEmbeddedRawPreview(await file.arrayBuffer(), file.name);
-        if (!preview) throw new Error("This RAW file has no readable embedded preview");
+        const bytes = await file.arrayBuffer();
+        const ingested = ingestRaw(bytes, file.name, {
+          workingSpace: studio.doc.colorSpace,
+        });
+        if (ingested.kind === "developed-dng") {
+          const layer = studio.openDevelopedDng(name, bytes, ingested.developed);
+          setActiveLayerId(layer.id);
+          setCustomName(name);
+          setActiveAdjustmentId(null);
+          setTone({ ...NEUTRAL_TONE });
+          notify(`DNG developed · ${ingested.developed.metadata.bitsPerSample}-bit Bayer · 32-bit float master`);
+          return;
+        }
         URL.revokeObjectURL(url);
-        url = URL.createObjectURL(preview.blob);
+        url = URL.createObjectURL(ingested.preview.blob);
         source = {
           originalName: file.name,
-          format: preview.format,
+          format: ingested.preview.format,
           mode: "embedded-raw-preview",
           originalBytes: file.size,
         };
       } else {
         source = { originalName: file.name, format: file.type || "image", mode: "decoded", originalBytes: file.size };
+        const embedded = await extractAndParseEmbeddedColorProfile(await file.arrayBuffer());
+        if (embedded.profile) {
+          defaultColorProfileRegistry.register(embedded.profile, { replace: true });
+          source.colorProfile = {
+            id: embedded.profile.id,
+            name: embedded.profile.name,
+            version: embedded.profile.version,
+            colorSpace: embedded.profile.colorSpace,
+            model: embedded.profile.capabilities.model,
+            canTransform: embedded.profile.capabilities.canTransform,
+            browserDecoded: true,
+            warnings: [...embedded.profile.warnings],
+          };
+          profileLabel = ` · ${embedded.profile.name}${embedded.profile.capabilities.canTransform ? "" : " · metadata only"}`;
+        }
       }
       const img = await loadImage(url);
       const layer = studio.openImage(name, img, source);
@@ -984,7 +1112,7 @@ export default function SpatialStudio() {
       setCustomName(name);
       setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
-      notify(raw ? `${raw.toUpperCase()} preview imported · provenance tagged` : `${name} imported`);
+      notify(raw ? `${raw.toUpperCase()} preview imported · provenance tagged` : `${name} imported${profileLabel}`);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Failed to import");
     } finally {
@@ -1002,9 +1130,11 @@ export default function SpatialStudio() {
       setActiveLayerId(d.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
-      notify(`${file.name} · ${d.layers.length} layers`);
-    } catch {
-      notify("PSD import failed");
+      const report = studio.photoshopCompatibility({ format: "source" });
+      const previewOnly = report.issues.filter((issue) => issue.severity === "warning").length;
+      notify(`${file.name} · ${d.layers.length} layers · ${report.container.toUpperCase()}${previewOnly ? ` · ${previewOnly} review note${previewOnly === 1 ? "" : "s"}` : " · preservation ready"}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Photoshop import failed");
     } finally {
       e.target.value = "";
     }
@@ -1117,20 +1247,43 @@ export default function SpatialStudio() {
     }
   };
 
+  const currentAiControls = (): AiOperationControls => {
+    switch (aiOperation) {
+      case "remove": return { operation: "remove", removeShadows: true, backgroundContinuity: aiStrength };
+      case "relight": return { operation: "relight", direction: "auto", temperature: aiTemperature, intensity: aiStrength, preserveIdentity: aiPreserve };
+      case "harmonize": return { operation: "harmonize", color: aiStrength, lighting: aiStrength, perspective: 0.6, preserveComposition: aiPreserve };
+      case "upscale": return { operation: "upscale", detail: aiStrength, denoise: 0.25, sharpening: 0.35, preserveGeometry: aiPreserve };
+      case "expand": return { operation: "expand", continuity: aiStrength, preserveComposition: aiPreserve, edgeContext: "natural" };
+      default: return { operation: "fill", edgeBlend: "seamless", preserveStructure: aiPreserve };
+    }
+  };
+
   const runGenerativeEdit = async () => {
     if (!studio || !activeLayer || activeLayer.kind === "group") { notify("Select a content layer"); return; }
     if (!aiPrompt.trim() || aiRunning) return;
+    const controller = new AbortController();
+    aiAbort.current = controller;
     setAiRunning(true);
-    setNeural({ msg: `GPT Image 2 · ${aiOperation}`, pct: 18 });
+    setNeural({ msg: `GPT Image 2 · ${aiOperation} · starting`, pct: 8 });
     try {
-      const layer = await studio.generativeEdit(activeLayer.id, aiPrompt.trim(), aiOperation);
-      setActiveLayerId(layer.id);
+      const layers = await studio.generativeEditVariations(activeLayer.id, aiPrompt.trim(), aiOperation, {
+        controls: currentAiControls(),
+        quality: aiQuality,
+        variations: aiVariations,
+        signal: controller.signal,
+        onVariation: (completed, total) => setNeural({
+          msg: `GPT Image 2 · variation ${completed}/${total}`,
+          pct: 10 + completed / total * 88,
+        }),
+      });
+      setActiveLayerId(layers[0].id);
       setNeural(null);
-      notify(`AI ${aiOperation} added as a new layer`);
+      notify(`AI ${aiOperation} added ${layers.length} variation${layers.length === 1 ? "" : "s"} as layers`);
     } catch (error) {
       setNeural(null);
       notify(error instanceof Error ? error.message : "Generative edit failed");
     } finally {
+      aiAbort.current = null;
       setAiRunning(false);
     }
   };
@@ -1183,16 +1336,17 @@ export default function SpatialStudio() {
   const exportPsd = () => {
     if (!studio) return;
     try {
-      const buf = studio.exportPsd();
+      const { buffer: buf, report } = studio.exportPhotoshop({ format: photoshopFormat });
       const blob = new Blob([buf], { type: "image/vnd.adobe.photoshop" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${customName || filmstrip[activePreset].name}-luma.psd`;
+      a.download = `${customName || filmstrip[activePreset].name}-luma.${report.container}`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 5000);
-      notify("Exported PSD");
-    } catch { notify("PSD export failed"); }
+      const warnings = report.issues.filter((issue) => issue.severity === "warning").length;
+      notify(`Exported ${report.container.toUpperCase()}${warnings ? ` · ${warnings} compatibility warning${warnings === 1 ? "" : "s"}` : " · editable fidelity preserved"}`);
+    } catch (error) { notify(error instanceof Error ? error.message : "Photoshop export failed"); }
   };
 
   const startRecording = () => {
@@ -1506,7 +1660,7 @@ export default function SpatialStudio() {
             <span className="dot-green" />
             <button onClick={() => history.back()} aria-label="Back">‹</button>
             <button onClick={() => fileInput.current?.click()} aria-label="Import image">↗</button>
-            <button onClick={() => psdInput.current?.click()} aria-label="Import PSD" title="Import PSD">PSD</button>
+            <button onClick={() => psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB">PSD/B</button>
             <button onClick={() => projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project">LUMA</button>
           </div>
 
@@ -1556,7 +1710,10 @@ export default function SpatialStudio() {
               <option value="webp">WebP</option>
             </select>
             <button className="spatial-export" onClick={exportPNG}>Export {exportFormat.toUpperCase()} ↗</button>
-            <button className="spatial-export" onClick={exportPsd}>Export PSD ↗</button>
+            <select value={photoshopFormat} onChange={(event) => setPhotoshopFormat(event.target.value as typeof photoshopFormat)} aria-label="Photoshop export container" style={{ width: 76 }}>
+              <option value="auto">PS auto</option><option value="source">PS source</option><option value="psd">PSD</option><option value="psb">PSB</option>
+            </select>
+            <button className="spatial-export" onClick={exportPsd}>Export {photoshopFormat === "psb" ? "PSB" : "PSD"} ↗</button>
           </div>
         </header>
 
@@ -1602,6 +1759,7 @@ export default function SpatialStudio() {
               ))}
             </div>
             <div
+              ref={stageRef}
               className="spatial-canvas-stage"
               onWheel={(e) => {
                 if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey) return;
@@ -1745,7 +1903,7 @@ export default function SpatialStudio() {
                     </span>
                     <span className="layer-name">
                       <strong>{layer.name}</strong>
-                      <small>{layer.kind}{layer.source?.mode === "embedded-raw-preview" ? ` · ${layer.source.format} proxy` : ""}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
+                      <small>{layer.kind}{layer.source?.mode === "embedded-raw-preview" ? ` · ${layer.source.format} proxy` : layer.source?.mode === "dng-cfa-developed" ? " · DNG sensor · editable" : ""}{layer.source?.colorProfile ? ` · ICC ${layer.source.colorProfile.name}${layer.source.colorProfile.canTransform ? "" : " (metadata)"}` : ""}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
                     </span>
                     <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
                       {layer.visible ? "◉" : "○"}
@@ -1858,6 +2016,16 @@ export default function SpatialStudio() {
                 </div>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Linear-light tiled master · {engineState?.precisionTiles ?? 0} resident tiles · {formatBytes(engineState?.precisionBytes ?? 0)}
+                </small>
+                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
+                  ICC matrix/TRC engine · {engineState?.colorManagement.profiles ?? 0} registered profiles · {engineState?.colorManagement.embeddedProfiles ?? 0} embedded
+                </small>
+                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
+                  Sparse canvas · {engineState?.virtualCanvas.levels ?? 1} mip levels · {engineState?.virtualCanvas.plannedTiles ?? 0} prioritized viewport tiles
+                  {engineState?.virtualCanvas.truncated ? " · bounded plan" : ""}
+                </small>
+                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
+                  Photoshop bridge · {engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.preserved ?? 0} preserved features · {engineState?.photoshop.warnings ?? 0} compatibility notes
                 </small>
                 <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
                   <span>Soft proof</span>
@@ -1986,7 +2154,8 @@ export default function SpatialStudio() {
                 <div className="mask-controls">
                   <label><span>Brush</span><input type="range" min="4" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
-                  <label><span>Flow</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Flow</span><input type="range" min="1" max="100" value={Math.round(brushFlow * 100)} onChange={(e) => setBrushFlow(Number(e.target.value) / 100)} /><output>{Math.round(brushFlow * 100)}%</output></label>
                 </div>
                 <div className="mask-actions">
                   <button onClick={runNeuralSubject} disabled={!!neural}>
@@ -1996,6 +2165,83 @@ export default function SpatialStudio() {
                   <button onClick={() => activeLayerId && studio?.invertMask(activeLayerId)}>Invert</button>
                   <button onClick={() => activeLayerId && studio?.clearMask(activeLayerId)}>Reveal all</button>
                 </div>
+              </section>
+            )}
+
+            {workspace === "develop" && activeLayer?.raw && rawDevelop && (
+              <section className="glass-card tone-card">
+                <header>
+                  <strong>RAW Develop</strong>
+                  <small>{activeLayer.raw.sensor.bitsPerSample}-bit CFA · FLOAT</small>
+                </header>
+                <div className="tone-controls">
+                  <label>
+                    <span>White balance</span>
+                    <select
+                      value={rawDevelop.whiteBalance}
+                      onChange={(event) => {
+                        const next = { ...rawDevelop, whiteBalance: event.target.value as RawDevelopSettings["whiteBalance"] };
+                        setRawDevelop(next);
+                        commitRawDevelop(next);
+                      }}
+                    >
+                      <option value="as-shot">As shot</option>
+                      <option value="daylight">Daylight</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                    <output>{rawDevelop.whiteBalance}</output>
+                  </label>
+                  <label>
+                    <span>Sensor exposure</span>
+                    <input
+                      type="range"
+                      min="-5"
+                      max="5"
+                      step="0.1"
+                      value={rawDevelop.exposureEV}
+                      onChange={(event) => setRawDevelop({ ...rawDevelop, exposureEV: Number(event.target.value) })}
+                      onPointerUp={() => commitRawDevelop(rawDevelop)}
+                      onBlur={() => commitRawDevelop(rawDevelop)}
+                    />
+                    <output>{rawDevelop.exposureEV.toFixed(1)} EV</output>
+                  </label>
+                  <label>
+                    <span>Highlight recovery</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Math.round(rawDevelop.highlightRecovery * 100)}
+                      onChange={(event) => setRawDevelop({ ...rawDevelop, highlightRecovery: Number(event.target.value) / 100 })}
+                      onPointerUp={() => commitRawDevelop(rawDevelop)}
+                      onBlur={() => commitRawDevelop(rawDevelop)}
+                    />
+                    <output>{Math.round(rawDevelop.highlightRecovery * 100)}%</output>
+                  </label>
+                  {rawDevelop.whiteBalance === "custom" && (["R", "G", "B"] as const).map((channel, index) => (
+                    <label key={channel}>
+                      <span>WB {channel}</span>
+                      <input
+                        type="number"
+                        min="0.05"
+                        max="16"
+                        step="0.05"
+                        value={rawDevelop.customWhiteBalance[index]}
+                        onChange={(event) => {
+                          const custom = [...rawDevelop.customWhiteBalance] as [number, number, number];
+                          custom[index] = Number(event.target.value);
+                          setRawDevelop({ ...rawDevelop, customWhiteBalance: custom });
+                        }}
+                        onBlur={() => commitRawDevelop(rawDevelop)}
+                      />
+                      <output>{rawDevelop.customWhiteBalance[index].toFixed(2)}</output>
+                    </label>
+                  ))}
+                </div>
+                <p style={{ padding: "0 12px 10px", fontSize: 11, opacity: 0.65 }}>
+                  Re-developed from the original embedded DNG sensor asset · {activeLayer.raw.matrixSource.replaceAll("-", " ")}
+                  {activeLayer.raw.sensor.warnings.length ? ` · ${activeLayer.raw.sensor.warnings.join(" · ")}` : ""}
+                </p>
               </section>
             )}
 
@@ -2066,15 +2312,22 @@ export default function SpatialStudio() {
                 <div className="tone-controls">
                   <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
-                  <label><span>Flow</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Flow</span><input type="range" min="1" max="100" value={Math.round(brushFlow * 100)} onChange={(e) => setBrushFlow(Number(e.target.value) / 100)} /><output>{Math.round(brushFlow * 100)}%</output></label>
                   <label><span>Stabilizer</span><input type="range" min="0" max="95" value={Math.round(brushSmoothing * 100)} onChange={(e) => setBrushSmoothing(Number(e.target.value) / 100)} /><output>{Math.round(brushSmoothing * 100)}%</output></label>
                   <label><span>Spacing</span><input type="range" min="1" max="100" value={Math.round(brushSpacing * 100)} onChange={(e) => setBrushSpacing(Number(e.target.value) / 100)} /><output>{Math.round(brushSpacing * 100)}%</output></label>
                   <label><span>Roundness</span><input type="range" min="5" max="100" value={Math.round(brushRoundness * 100)} onChange={(e) => setBrushRoundness(Number(e.target.value) / 100)} /><output>{Math.round(brushRoundness * 100)}%</output></label>
                   <label><span>Angle</span><input type="range" min="-180" max="180" value={brushAngle} onChange={(e) => setBrushAngle(Number(e.target.value))} /><output>{brushAngle}°</output></label>
+                  <label><span>Tilt shape</span><input type="range" min="0" max="100" value={Math.round(brushTilt * 100)} onChange={(e) => setBrushTilt(Number(e.target.value) / 100)} /><output>{Math.round(brushTilt * 100)}%</output></label>
+                  <label><span>Scatter</span><input type="range" min="0" max="200" value={Math.round(brushScatter * 100)} onChange={(e) => setBrushScatter(Number(e.target.value) / 100)} /><output>{Math.round(brushScatter * 100)}%</output></label>
+                  <label><span>Texture</span><input type="range" min="0" max="100" value={Math.round(brushTexture * 100)} onChange={(e) => setBrushTexture(Number(e.target.value) / 100)} /><output>{Math.round(brushTexture * 100)}%</output></label>
+                  <label><span>Blend</span><select value={brushBlendMode} onChange={(e) => setBrushBlendMode(e.target.value as NonNullable<BrushParams["blendMode"]>)}><option value="normal">Normal</option><option value="multiply">Multiply</option><option value="screen">Screen</option><option value="overlay">Overlay</option></select><output>{brushBlendMode}</output></label>
+                  <label><span>Symmetry</span><select value={brushSymmetry} onChange={(e) => setBrushSymmetry(e.target.value as typeof brushSymmetry)}><option value="none">Off</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="radial">Radial · 6</option></select><output>{brushSymmetry}</output></label>
                 </div>
                 <div className="mask-segmented" style={{ paddingBottom: 9 }}>
                   <button className={pressureSize ? "active" : ""} onClick={() => setPressureSize((value) => !value)}>Pressure size</button>
                   <button className={pressureOpacity ? "active" : ""} onClick={() => setPressureOpacity((value) => !value)}>Pressure opacity</button>
+                  <button className={brushBuildUp ? "active" : ""} onClick={() => setBrushBuildUp((value) => !value)}>Airbrush buildup</button>
                 </div>
               </section>
             )}
@@ -2134,8 +2387,34 @@ export default function SpatialStudio() {
                   <button onClick={runGenerativeEdit} disabled={aiRunning || !aiPrompt.trim()} style={{ flex: 1 }}>
                     {aiRunning ? "Creating…" : "Generate layer ✦"}
                   </button>
+                  {aiRunning && <button onClick={() => aiAbort.current?.abort()} title="Cancel all pending variations">Cancel</button>}
                 </div>
-                <small style={{ opacity: 0.58 }}>Uses the active selection as guidance. Sign-in and hosted API configuration are required.</small>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                  <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
+                    <span>Quality</span>
+                    <select value={aiQuality} onChange={(event) => setAiQuality(event.target.value as AiEditQuality)}>
+                      <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
+                    <span>Variations</span>
+                    <select value={aiVariations} onChange={(event) => setAiVariations(Number(event.target.value))}>
+                      {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
+                  <span>Strength</span><input type="range" min="0" max="100" value={Math.round(aiStrength * 100)} onChange={(event) => setAiStrength(Number(event.target.value) / 100)} /><output>{Math.round(aiStrength * 100)}%</output>
+                </label>
+                <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
+                  <span>Preserve</span><input type="range" min="0" max="100" value={Math.round(aiPreserve * 100)} onChange={(event) => setAiPreserve(Number(event.target.value) / 100)} /><output>{Math.round(aiPreserve * 100)}%</output>
+                </label>
+                {aiOperation === "relight" && (
+                  <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
+                    <span>Temperature</span><input type="range" min="-100" max="100" value={Math.round(aiTemperature * 100)} onChange={(event) => setAiTemperature(Number(event.target.value) / 100)} /><output>{Math.round(aiTemperature * 100)}</output>
+                  </label>
+                )}
+                <small style={{ opacity: 0.58 }}>Selection alpha and feathering are preserved as mask guidance. Each variation is a separate image request.</small>
               </div>
               <div className="neural-quick-grid">
                 <button onClick={runNeuralSubject} disabled={!!neural}>
@@ -2382,7 +2661,7 @@ export default function SpatialStudio() {
         </div>
       )}
       <input ref={fileInput} className="visually-hidden" type="file" accept={`image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
-      <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,image/vnd.adobe.photoshop" onChange={onPsdImport} />
+      <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
     </main>
