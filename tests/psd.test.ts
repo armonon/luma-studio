@@ -17,6 +17,7 @@ import {
   exportPsd,
   importPsd,
   photoshopCompatibilityReport,
+  precisionSurfaceFromPsdPixels,
 } from "../app/engine/psd.ts";
 import {
   PhotoshopFormatError,
@@ -227,6 +228,28 @@ test("PSD rich text runs and paragraph metadata survive an unchanged round trip"
   assert.deepEqual(text.paragraphStyleRuns, canonicalSource.children?.[0].text?.paragraphStyleRuns);
   assert.equal(text.shapeType, "box");
   assert.deepEqual(text.transform, [1, 0.15, 0.05, 1, 12, 28]);
+});
+
+test("Photoshop source mode is byte-for-byte for untouched files and disengages after edits", async () => {
+  const preview = newCanvas(12, 10);
+  preview.getContext("2d")!.fillRect(0, 0, 12, 10);
+  const sourceBytes = writePsd({
+    width: 12,
+    height: 10,
+    bitsPerChannel: 8,
+    colorMode: 3,
+    children: [{ name: "Original pixels", canvas: preview, left: 0, top: 0, opacity: 211 }],
+  }, { noBackground: true });
+  const imported = await importPsd(sourceBytes);
+
+  const untouched = exportPhotoshopDocument(imported, { format: "source" });
+  assert.deepEqual(new Uint8Array(untouched.buffer), new Uint8Array(sourceBytes));
+  assert.ok(untouched.report.issues.some((issue) => issue.code === "ORIGINAL_SOURCE_PASSTHROUGH"));
+
+  imported.layers[0].opacity = 0.5;
+  const edited = exportPhotoshopDocument(imported, { format: "source" });
+  assert.equal(edited.report.issues.some((issue) => issue.code === "ORIGINAL_SOURCE_PASSTHROUGH"), false);
+  assert.notDeepEqual(new Uint8Array(edited.buffer), new Uint8Array(sourceBytes));
 });
 
 test("editing imported rich text emits valid single-style text and an explicit warning", async () => {
@@ -501,6 +524,27 @@ test("PSB export is explicit and compatibility reports never claim high-depth fi
   assert.equal(inspectPhotoshopHeader(exported.buffer).container, "psb");
   const imported = await importPsd(exported.buffer);
   assert.equal(getPhotoshopDocumentMetadata(imported)?.header.container, "psb");
+});
+
+test("16-bit PSD channel values enter the precision master without an 8-bit preview round trip", () => {
+  const doc = createDocument(2, 1);
+  doc.bitDepth = 16;
+  const surface = precisionSurfaceFromPsdPixels({
+    width: 2,
+    height: 1,
+    data: new Uint16Array([
+      65535, 32768, 0, 65535,
+      16384, 8192, 4096, 32768,
+    ]),
+  }, doc, 0, 0);
+  const first = surface.readPixel(0, 0);
+  assert.ok(first[0] > 0.99);
+  assert.ok(first[1] > 0.21 && first[1] < 0.22);
+  assert.equal(first[2], 0);
+  assert.ok(first[3] > 0.999);
+  const second = surface.readPixel(1, 0);
+  assert.ok(second[0] > second[1] && second[1] > second[2]);
+  assert.ok(Math.abs(second[3] - 0.5) < 0.002);
 });
 
 function rawImageResource(id: number, data: number[]) {

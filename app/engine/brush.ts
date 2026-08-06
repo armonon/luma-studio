@@ -84,6 +84,14 @@ export type RgbaSurface = {
   originY?: number;
 };
 
+export type FloatRgbaSurface = {
+  width: number;
+  height: number;
+  data: Float32Array;
+  originX?: number;
+  originY?: number;
+};
+
 const TAU = Math.PI * 2;
 
 function clamp(value: number, minimum = 0, maximum = 1) {
@@ -337,6 +345,27 @@ function textureAt(x: number, y: number, dab: BrushDab, texture?: BrushTexture) 
   return 1 - clamp(texture.strength) + noise * clamp(texture.strength);
 }
 
+/** Analytic dab coverage shared by the paint and retouch engines. */
+export function brushDabOpacityAt(
+  dab: BrushDab,
+  documentX: number,
+  documentY: number,
+  params: Pick<BrushParams, "texture">,
+) {
+  const radius = dab.size / 2;
+  if (radius <= 0) return 0;
+  const dx = documentX - dab.x;
+  const dy = documentY - dab.y;
+  const cosine = Math.cos(-dab.rotation);
+  const sine = Math.sin(-dab.rotation);
+  const localX = (dx * cosine - dy * sine) / radius;
+  const localY = (dx * sine + dy * cosine) / Math.max(radius * dab.roundness, 1e-9);
+  const radial = Math.hypot(localX, localY);
+  if (radial >= 1) return 0;
+  const falloff = 1 - smoothstep(dab.hardness, 1, radial);
+  return clamp(dab.opacity * falloff * textureAt(documentX, documentY, dab, params.texture));
+}
+
 function blendChannel(mode: BrushBlendMode, destination: number, source: number) {
   if (mode === "multiply") return destination * source;
   if (mode === "screen") return 1 - (1 - destination) * (1 - source);
@@ -345,11 +374,10 @@ function blendChannel(mode: BrushBlendMode, destination: number, source: number)
   return source;
 }
 
-/** Replays a complete stroke into an RGBA8 surface without DOM dependencies. */
-export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
-  if (surface.data.length !== surface.width * surface.height * 4) {
-    throw new Error("RGBA surface payload does not match its dimensions");
-  }
+function strokeCoverage(
+  surface: Pick<RgbaSurface, "width" | "height" | "originX" | "originY">,
+  stroke: Stroke,
+) {
   const params = { ...stroke.params, seed: stroke.seed ?? stroke.params.seed ?? 0 };
   const dabs = planStroke(stroke.points, params);
   const coverage = new Float32Array(surface.width * surface.height);
@@ -382,6 +410,15 @@ export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
       }
     }
   }
+  return { params, dabs, coverage };
+}
+
+/** Replays a complete stroke into an RGBA8 surface without DOM dependencies. */
+export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
+  if (surface.data.length !== surface.width * surface.height * 4) {
+    throw new Error("RGBA surface payload does not match its dimensions");
+  }
+  const { params, dabs, coverage } = strokeCoverage(surface, stroke);
 
   const legacyFlow = params.flow === undefined;
   const strokeOpacity = legacyFlow ? 1 : clamp(params.opacity);
@@ -405,6 +442,45 @@ export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
       surface.data[offset + channel] = Math.round(clamp(premultiplied / Math.max(outputAlpha, 1e-9)) * 255);
     }
     surface.data[offset + 3] = Math.round(outputAlpha * 255);
+  }
+  return { dabs, affectedPixels: coverage.reduce((sum, value) => sum + (value > 0 ? 1 : 0), 0) };
+}
+
+/**
+ * Float/linear-light replay path used by precision tile masters. Existing HDR
+ * and wide-gamut channel values remain unbounded; only alpha and brush inputs
+ * are clamped. `workingColor` must already be converted into the surface's
+ * working color space.
+ */
+export function replayStrokeFloat(
+  surface: FloatRgbaSurface,
+  stroke: Stroke,
+  workingColor: readonly [number, number, number] = parseBrushColor(stroke.params.color).map((value) => value / 255) as [number, number, number],
+) {
+  if (surface.data.length !== surface.width * surface.height * 4) {
+    throw new Error("Float RGBA surface payload does not match its dimensions");
+  }
+  const { params, dabs, coverage } = strokeCoverage(surface, stroke);
+  const strokeOpacity = params.flow === undefined ? 1 : clamp(params.opacity);
+  const color = params.mode === "mask-add" ? [1, 1, 1] as const : workingColor;
+  const blendMode = params.blendMode ?? "normal";
+  for (let pixel = 0; pixel < coverage.length; pixel += 1) {
+    const sourceAlpha = clamp(coverage[pixel] * strokeOpacity);
+    if (sourceAlpha <= 0) continue;
+    const offset = pixel * 4;
+    const destinationAlpha = clamp(surface.data[offset + 3]);
+    if (params.mode === "erase" || params.mode === "mask-remove") {
+      surface.data[offset + 3] = destinationAlpha * (1 - sourceAlpha);
+      continue;
+    }
+    const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+    for (let channel = 0; channel < 3; channel += 1) {
+      const destination = surface.data[offset + channel];
+      const blended = blendChannel(blendMode, destination, color[channel]);
+      const premultiplied = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
+      surface.data[offset + channel] = premultiplied / Math.max(outputAlpha, 1e-9);
+    }
+    surface.data[offset + 3] = outputAlpha;
   }
   return { dabs, affectedPixels: coverage.reduce((sum, value) => sum + (value > 0 ? 1 : 0), 0) };
 }

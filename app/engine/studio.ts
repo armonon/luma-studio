@@ -53,8 +53,11 @@ import {
   PaintSegmentState,
   createPaintSegmentState,
   paintSegment,
+  parseBrushColor,
+  planStroke,
+  replayStrokeFloat,
 } from "./brush";
-import { render, renderClean } from "./renderer";
+import { renderClean, renderViewport, viewportRenderCacheStats } from "./renderer";
 import { bumpBitmapVersion, isGLSupported, renderGL } from "./gl-renderer";
 import {
   SelectionMode,
@@ -87,6 +90,8 @@ import {
 import { OperationHistory } from "./operation-history";
 import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
 import { precisionPreviewCacheStats } from "./precision-renderer";
+import { displaySrgbToWorking } from "./color";
+import { replayRetouch, type RetouchMode } from "./retouch";
 import { IndexedDbTileBacking } from "./tile-backing";
 import type { DevelopedDng } from "./raw-dng";
 import { DngDevelopSession, previewDisplayRgba } from "./raw-dng";
@@ -98,8 +103,8 @@ import {
   ViewportTilePlanner,
   VirtualCanvasPyramid,
   type ViewportPlan,
-  type VirtualViewport,
 } from "./virtual-canvas";
+import { calculateDisplayViewport, type DisplayViewport } from "./viewport";
 import {
   normalizeAiEditConfig,
   runAiEditVariations,
@@ -150,10 +155,18 @@ export type HistoryEntry = {
   selectionBefore?: Selection | null;
   selectionAfter?: Selection | null;
   pixelPatches?: PixelPatch[];
+  surfacePatches?: SurfaceTilePatch[];
   guidesBefore?: Guide[];
   guidesAfter?: Guide[];
   documentBefore?: Document;
   documentAfter?: Document;
+};
+
+export type SurfaceTilePatch = {
+  layerId: string;
+  key: string;
+  before: Uint8Array | null;
+  after: Uint8Array | null;
 };
 
 export type PixelPatch = {
@@ -191,10 +204,27 @@ export class Studio {
   private subscribers = new Set<SubscribeFn>();
   private history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
   private renderScheduled = false;
+  private renderRevision = 0;
   private disposed = false;
   private strokeTiles: Map<string, StrokeTile> | null = null;
   private lastPoint: BrushPoint | null = null;
   private paintSegmentState: PaintSegmentState | null = null;
+  private precisionStroke: {
+    layerId: string;
+    params: BrushParams;
+    points: BrushPoint[];
+    before: Map<string, Uint8Array | null>;
+  } | null = null;
+  private retouchStroke: {
+    layerId: string;
+    mode: RetouchMode;
+    params: BrushParams;
+    points: BrushPoint[];
+    before: Map<string, Uint8Array | null>;
+    source: PrecisionTileSurface;
+    sourceOffsetX: number;
+    sourceOffsetY: number;
+  } | null = null;
   private sessions: DocumentSession[] = [];
   private activeSessionId = "";
   private liveSnapshots = new Map<string, LayerSnapshot>();
@@ -205,6 +235,7 @@ export class Studio {
   private virtualPlanner: ViewportTilePlanner;
   private virtualDirty: PyramidDirtyTracker;
   private virtualPlan: ViewportPlan | null = null;
+  private displayViewport: DisplayViewport | null = null;
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
     this.doc = createDocument(width, height);
@@ -225,7 +256,11 @@ export class Studio {
     // selection changes).
     const tick = () => {
       if (this.disposed) return;
-      if (this.doc.selection && !this.useGL) render(this.doc, this.target);
+      if (this.doc.selection && !this.useGL) {
+        renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
+          cacheRevision: this.renderRevision,
+        });
+      }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -259,33 +294,41 @@ export class Studio {
     this.virtualPlanner = new ViewportTilePlanner(this.virtualPyramid);
     this.virtualDirty = new PyramidDirtyTracker(this.virtualPyramid);
     this.virtualPlan = null;
+    this.displayViewport = null;
   }
 
   /** Keep a bounded, priority-ordered tile plan aligned with the visible canvas. */
-  setVirtualViewport(viewport: VirtualViewport) {
+  setVirtualViewport(viewport: DisplayViewport) {
+    this.displayViewport = viewport;
     this.virtualPlan = this.virtualPlanner.plan(viewport, {
       prefetchMarginTiles: 1,
       fallbackLevels: 2,
       maxRequests: 2048,
     });
+    this.requestRender();
     return this.virtualPlan;
   }
 
+  private fallbackDisplayViewport() {
+    return calculateDisplayViewport(
+      this.doc.width,
+      this.doc.height,
+      this.target.clientWidth || Math.min(this.doc.width, 1280),
+      this.target.clientHeight || Math.min(this.doc.height, 900),
+      { zoom: 1, panX: 0, panY: 0 },
+      typeof devicePixelRatio === "number" ? devicePixelRatio : 1,
+    );
+  }
+
   requestRender() {
+    this.renderRevision += 1;
     if (this.renderScheduled) return;
     this.renderScheduled = true;
     requestAnimationFrame(() => {
       this.renderScheduled = false;
-      if (this.useGL) {
-        const ok = renderGL(this.doc, this.target);
-        if (!ok) {
-          this.useGL = false;
-          render(this.doc, this.target);
-          this.emit();
-        }
-      } else {
-        render(this.doc, this.target);
-      }
+      renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
+        cacheRevision: this.renderRevision,
+      });
     });
   }
 
@@ -328,7 +371,9 @@ export class Studio {
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     const photoshop = photoshopCompatibilityReport(this.doc, { format: "auto" });
     return {
-      renderer: this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
+      renderer: this.displayViewport
+        ? "viewport-tiled-canvas2d" as const
+        : this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
       tileSize: DEFAULT_TILE_SIZE,
       tiles,
       precisionTiles,
@@ -364,6 +409,7 @@ export class Studio {
       },
       proofing: { ...this.doc.proofing },
       previewCache: precisionPreviewCacheStats(),
+      viewportCache: viewportRenderCacheStats(),
       tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
       history: this.history.summary(),
     };
@@ -413,6 +459,7 @@ export class Studio {
       this.doc.selection = cloneSelection(selection);
     }
     if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
+    if (entry.surfacePatches) this.applySurfacePatches(entry.surfacePatches, side);
     const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
     if (guides) this.doc.guides = guides.map((guide) => ({ ...guide }));
     this.checkpointDocumentSurfaces(true);
@@ -468,6 +515,18 @@ export class Studio {
     }
   }
 
+  private applySurfacePatches(patches: SurfaceTilePatch[], side: "before" | "after") {
+    for (const patch of patches) {
+      const layer = this.findLayer(patch.layerId);
+      if (!layer?.surface) continue;
+      const bytes = patch[side];
+      if (bytes) layer.surface.store.write(patch.key, bytes);
+      else layer.surface.store.delete(patch.key);
+      this.updateLayerBitmapTile(layer, patch.key);
+      this.checkpointLayerSurface(layer);
+    }
+  }
+
   // --- doc lifecycle ---
   listDocuments() {
     this.saveActiveSession();
@@ -486,6 +545,7 @@ export class Studio {
     this.activeSessionId = next.id;
     this.doc = next.doc;
     this.history = next.history;
+    this.resetVirtualGeometry(this.doc.width, this.doc.height);
     this.requestRender();
     this.emit();
   }
@@ -501,6 +561,7 @@ export class Studio {
       this.activeSessionId = next.id;
       this.doc = next.doc;
       this.history = next.history;
+      this.resetVirtualGeometry(this.doc.width, this.doc.height);
       this.requestRender();
     }
     this.emit();
@@ -1019,9 +1080,18 @@ export class Studio {
   }
 
   addBlankRaster(name = "Layer") {
-    const bitmap = newCanvas(this.doc.width, this.doc.height);
+    const browserCanvasSafe = this.doc.width <= 16384 && this.doc.height <= 16384 &&
+      this.doc.width * this.doc.height <= 64_000_000;
+    const bitmap = browserCanvasSafe ? newCanvas(this.doc.width, this.doc.height) : undefined;
     const layer = createRasterLayer(name, bitmap);
-    layer.surface = this.surfaceFromCanvas(bitmap);
+    layer.surface = bitmap
+      ? this.surfaceFromCanvas(bitmap)
+      : new PrecisionTileSurface(
+        this.doc.width,
+        this.doc.height,
+        pixelFormatForDepth(this.doc.bitDepth),
+        this.doc.colorSpace,
+      );
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
     this.checkpointLayerSurface(layer);
     this.requestRender();
@@ -1385,8 +1455,15 @@ export class Studio {
   beginStroke(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
-    if (!paintTarget(layer, params, this.doc.width, this.doc.height)) return;
+    const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
+    if (!precisionPaint && !paintTarget(layer, params, this.doc.width, this.doc.height)) return;
     this.strokeTiles = new Map();
+    this.precisionStroke = precisionPaint ? {
+      layerId,
+      params: { ...params },
+      points: [],
+      before: new Map(),
+    } : null;
     this.lastPoint = point;
     this.paintSegmentState = null;
     this.paintTo(layerId, params, point);
@@ -1398,9 +1475,9 @@ export class Studio {
   paintTo(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer) return;
-    const target = paintTarget(layer, params, this.doc.width, this.doc.height);
-    if (!target) return;
-    const ctx = target.getContext("2d")!;
+    const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
+    const target = precisionPaint ? null : paintTarget(layer, params, this.doc.width, this.doc.height);
+    if (!precisionPaint && !target) return;
     const prev = this.lastPoint ?? point;
     const stabilization = Math.max(0, Math.min(0.95, params.smoothing ?? 0));
     const response = 1 - stabilization * 0.9;
@@ -1412,7 +1489,14 @@ export class Studio {
       tiltY: (prev.tiltY ?? 0) + ((point.tiltY ?? 0) - (prev.tiltY ?? 0)) * response,
       azimuth: point.azimuth,
     } : point;
-    this.captureStrokeTiles(layer, target, params, prev, next);
+    if (precisionPaint) {
+      this.paintPrecisionStroke(layer, params, next);
+      this.lastPoint = next;
+      this.requestRender();
+      return;
+    }
+    const ctx = target!.getContext("2d")!;
+    this.captureStrokeTiles(layer, target!, params, prev, next);
 
     // If selection exists and we're painting into a raster layer, constrain
     // strokes by drawing through a clipped scratch, then re-composite.
@@ -1462,6 +1546,21 @@ export class Studio {
       params.mode === "mask-add" ? "Mask paint (add)" :
       params.mode === "mask-remove" ? "Mask paint (remove)" :
       "Brush stroke";
+    if (this.precisionStroke && layer.surface) {
+      const surfacePatches: SurfaceTilePatch[] = [...this.precisionStroke.before].map(([key, before]) => ({
+        layerId,
+        key,
+        before,
+        after: layer.surface!.store.read(key),
+      }));
+      this.commit({ label, before: [], after: [], surfacePatches });
+      this.checkpointLayerSurface(layer);
+      this.strokeTiles = null;
+      this.precisionStroke = null;
+      this.lastPoint = null;
+      this.paintSegmentState = null;
+      return;
+    }
     const patches: PixelPatch[] = [];
     for (const tile of this.strokeTiles.values()) {
       const canvas = tile.target === "bitmap" ? layer.bitmap : layer.mask;
@@ -1481,8 +1580,177 @@ export class Studio {
     this.commit({ label, before: [], after: [], pixelPatches: patches });
     this.checkpointLayerSurface(layer);
     this.strokeTiles = null;
+    this.precisionStroke = null;
     this.lastPoint = null;
     this.paintSegmentState = null;
+  }
+
+  private paintPrecisionStroke(layer: Layer, params: BrushParams, point: BrushPoint) {
+    const state = this.precisionStroke;
+    const surface = layer.surface;
+    if (!state || !surface || state.layerId !== layer.id) return;
+    state.points.push({ ...point });
+    const dabs = planStroke(state.points, params);
+    if (!dabs.length) return;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const dab of dabs) {
+      const radius = dab.size / 2 + 2;
+      left = Math.min(left, dab.x - radius);
+      top = Math.min(top, dab.y - radius);
+      right = Math.max(right, dab.x + radius);
+      bottom = Math.max(bottom, dab.y + radius);
+    }
+    const tiles = surface.grid.tilesIntersecting({ x: left, y: top, width: right - left, height: bottom - top });
+    const parsed = parseBrushColor(params.color);
+    const workingColor = displaySrgbToWorking(
+      [parsed[0] / 255, parsed[1] / 255, parsed[2] / 255],
+      surface.colorSpace,
+    );
+    for (const tile of tiles) {
+      if (!state.before.has(tile.key)) state.before.set(tile.key, surface.store.read(tile.key));
+      const original = state.before.get(tile.key);
+      if (original) surface.store.write(tile.key, original);
+      else surface.store.delete(tile.key);
+      const values = surface.tileToWorkingFloat32(tile.key);
+      const beforeValues = this.doc.selection ? values.slice() : null;
+      replayStrokeFloat({
+        width: tile.width,
+        height: tile.height,
+        data: values,
+        originX: tile.x,
+        originY: tile.y,
+      }, { layerId: layer.id, params, points: state.points }, workingColor);
+      if (this.doc.selection && beforeValues) {
+        const selection = this.doc.selection.mask.getContext("2d")!
+          .getImageData(tile.x, tile.y, tile.width, tile.height).data;
+        for (let pixel = 0; pixel < tile.width * tile.height; pixel += 1) {
+          const alpha = selection[pixel * 4 + 3] / 255;
+          for (let channel = 0; channel < 4; channel += 1) {
+            const offset = pixel * 4 + channel;
+            values[offset] = beforeValues[offset] * (1 - alpha) + values[offset] * alpha;
+          }
+        }
+      }
+      surface.writeWorkingFloat32Tile(tile.key, values);
+      this.updateLayerBitmapTile(layer, tile.key);
+      this.virtualDirty.invalidate(tile, params.size + 2);
+    }
+  }
+
+  private updateLayerBitmapTile(layer: Layer, key: string) {
+    if (!layer.surface || !layer.bitmap) return;
+    const tile = layer.surface.grid.parseKey(key);
+    const preview = layer.surface.tileToRgba8(key);
+    const context = layer.bitmap.getContext("2d")!;
+    context.clearRect(tile.x, tile.y, tile.width, tile.height);
+    const image = context.createImageData(preview.width, preview.height);
+    image.data.set(preview.data);
+    context.putImageData(image, tile.x, tile.y);
+    bumpBitmapVersion(layer.bitmap);
+  }
+
+  beginRetouchStroke(
+    layerId: string,
+    mode: RetouchMode,
+    sourcePoint: { x: number; y: number } | null,
+    destination: BrushPoint,
+    params: BrushParams,
+  ) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.surface || layer.locked) return false;
+    if ((mode === "clone" || mode === "heal") && !sourcePoint) return false;
+    this.retouchStroke = {
+      layerId,
+      mode,
+      params: { ...params, mode: "paint" },
+      points: [],
+      before: new Map(),
+      source: layer.surface.clone(),
+      sourceOffsetX: (sourcePoint?.x ?? destination.x) - destination.x,
+      sourceOffsetY: (sourcePoint?.y ?? destination.y) - destination.y,
+    };
+    this.retouchTo(layerId, destination);
+    return true;
+  }
+
+  retouchTo(layerId: string, point: BrushPoint) {
+    const state = this.retouchStroke;
+    const layer = this.findLayer(layerId);
+    const surface = layer?.surface;
+    if (!state || !layer || !surface || state.layerId !== layerId) return;
+    state.points.push({ ...point });
+    const dabs = planStroke(state.points, state.params);
+    if (!dabs.length) return;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const dab of dabs) {
+      const radius = dab.size / 2 + 2;
+      left = Math.min(left, dab.x - radius);
+      top = Math.min(top, dab.y - radius);
+      right = Math.max(right, dab.x + radius);
+      bottom = Math.max(bottom, dab.y + radius);
+    }
+    const tiles = surface.grid.tilesIntersecting({ x: left, y: top, width: right - left, height: bottom - top });
+    for (const tile of tiles) {
+      if (!state.before.has(tile.key)) state.before.set(tile.key, surface.store.read(tile.key));
+      const original = state.before.get(tile.key);
+      if (original) surface.store.write(tile.key, original);
+      else surface.store.delete(tile.key);
+      const values = surface.tileToWorkingFloat32(tile.key);
+      const beforeValues = this.doc.selection ? values.slice() : null;
+      replayRetouch({
+        width: tile.width,
+        height: tile.height,
+        data: values,
+        originX: tile.x,
+        originY: tile.y,
+      }, {
+        mode: state.mode,
+        dabs,
+        params: state.params,
+        sourceOffsetX: state.sourceOffsetX,
+        sourceOffsetY: state.sourceOffsetY,
+        sample: (x, y) => state.source.sampleBilinearWorking(x, y),
+      });
+      if (this.doc.selection && beforeValues) {
+        const selection = this.doc.selection.mask.getContext("2d")!
+          .getImageData(tile.x, tile.y, tile.width, tile.height).data;
+        for (let pixel = 0; pixel < tile.width * tile.height; pixel += 1) {
+          const alpha = selection[pixel * 4 + 3] / 255;
+          for (let channel = 0; channel < 4; channel += 1) {
+            const offset = pixel * 4 + channel;
+            values[offset] = beforeValues[offset] * (1 - alpha) + values[offset] * alpha;
+          }
+        }
+      }
+      surface.writeWorkingFloat32Tile(tile.key, values);
+      this.updateLayerBitmapTile(layer, tile.key);
+      this.virtualDirty.invalidate(tile, state.params.size + 2);
+    }
+    this.requestRender();
+  }
+
+  endRetouchStroke() {
+    const state = this.retouchStroke;
+    const layer = state ? this.findLayer(state.layerId) : null;
+    if (!state || !layer?.surface) return;
+    const surfacePatches: SurfaceTilePatch[] = [...state.before].map(([key, before]) => ({
+      layerId: layer.id,
+      key,
+      before,
+      after: layer.surface!.store.read(key),
+    }));
+    const label = state.mode === "clone" ? "Clone stamp" :
+      state.mode === "heal" ? "Healing brush" :
+      state.mode === "dodge" ? "Dodge stroke" : "Burn stroke";
+    this.commit({ label, before: [], after: [], surfacePatches });
+    this.checkpointLayerSurface(layer);
+    this.retouchStroke = null;
   }
 
   private captureStrokeTiles(
@@ -1983,6 +2251,15 @@ export class Studio {
 
   // --- export ---
   async exportImage(type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92): Promise<Blob> {
+    const browserCanvasSafe = this.doc.width <= 16384 && this.doc.height <= 16384 &&
+      this.doc.width * this.doc.height <= 64_000_000;
+    if (type === "image/png" && !browserCanvasSafe) {
+      const { exportTiledPng } = await import("./png-stream");
+      return exportTiledPng(this.doc);
+    }
+    if (!browserCanvasSafe) {
+      throw new Error("Large-document JPEG/WebP export is unavailable; export PNG or reduce the document dimensions.");
+    }
     const output = newCanvas(this.doc.width, this.doc.height);
     if (type === "image/jpeg") {
       const clean = newCanvas(this.doc.width, this.doc.height);

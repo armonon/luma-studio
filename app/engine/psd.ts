@@ -12,6 +12,7 @@ import {
   LayerTextData,
   LayerVectorMask,
   VectorContent,
+  PixelData,
 } from "ag-psd";
 import {
   BlendMode,
@@ -49,6 +50,9 @@ import {
   setPhotoshopDocumentMetadata,
   setPhotoshopLayerMetadata,
 } from "./psd-metadata";
+import { drawLayerContentManaged } from "./precision-renderer";
+import { PrecisionTileSurface } from "./tile-store";
+import { displaySrgbToWorking } from "./color";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
 // "multiply". Map to our canvas GlobalCompositeOperation names.
@@ -232,6 +236,102 @@ function effectsFingerprint(layer: Pick<Layer, "effects">) {
   return JSON.stringify(layer.effects ?? []);
 }
 
+function hashBytes(hash: number, bytes: ArrayLike<number>) {
+  let next = hash >>> 0;
+  for (let index = 0; index < bytes.length; index += 1) {
+    next ^= bytes[index] & 0xff;
+    next = Math.imul(next, 0x01000193) >>> 0;
+  }
+  return next;
+}
+
+function hashText(hash: number, value: string) {
+  let next = hash >>> 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    next = hashBytes(next, [code & 0xff, code >>> 8]);
+  }
+  return next;
+}
+
+function fingerprintResult(hash: number) {
+  return hash.toString(16).padStart(8, "0");
+}
+
+/** Pixel fingerprint used only to prove an imported source is still untouched. */
+function canvasFingerprint(canvas: HTMLCanvasElement | undefined) {
+  if (!canvas) return undefined;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return "unreadable";
+  let hash = hashText(0x811c9dc5, `${canvas.width}x${canvas.height}`);
+  try {
+    // Keep peak memory bounded even though legacy imported bitmaps are still
+    // document-sized compatibility mirrors.
+    const rows = 128;
+    for (let y = 0; y < canvas.height; y += rows) {
+      const height = Math.min(rows, canvas.height - y);
+      hash = hashBytes(hash, context.getImageData(0, y, canvas.width, height).data);
+    }
+  } catch {
+    return "unreadable";
+  }
+  return fingerprintResult(hash);
+}
+
+function precisionSurfaceFingerprint(surface: PrecisionTileSurface | undefined) {
+  if (!surface) return undefined;
+  let hash = hashText(
+    0x811c9dc5,
+    `${surface.grid.width}x${surface.grid.height}:${surface.format}:${surface.colorSpace}:${surface.grid.tileSize}`,
+  );
+  for (const { key, data } of surface.store.entries()) {
+    hash = hashText(hash, key);
+    hash = hashBytes(hash, data);
+  }
+  return fingerprintResult(hash);
+}
+
+function layerPixelFingerprint(layer: Layer) {
+  return precisionSurfaceFingerprint(layer.surface) ?? canvasFingerprint(layer.bitmap);
+}
+
+function layerStateFingerprint(layer: Layer) {
+  return JSON.stringify({
+    name: layer.name,
+    kind: layer.kind,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    fillOpacity: layer.fillOpacity,
+    blend: layer.blend,
+    blendStack: layer.blendStack,
+    blendIf: layer.blendIf,
+    transform: layer.transform,
+    locked: layer.locked,
+    clipping: layer.clipping,
+    filters: layer.filters,
+    effects: layer.effects,
+    tone: layer.tone,
+    curves: layer.curves,
+    levels: layer.levels,
+    hsl: layer.hsl,
+    text: layer.text,
+    shape: layer.shape,
+    path: layer.path,
+  });
+}
+
+function documentStateFingerprint(doc: Document) {
+  return JSON.stringify({
+    width: doc.width,
+    height: doc.height,
+    colorSpace: doc.colorSpace,
+    bitDepth: doc.bitDepth,
+    resolution: doc.resolution,
+    guides: doc.guides.map(({ orientation, position }) => ({ orientation, position })),
+    proofing: doc.proofing,
+  });
+}
+
 function psdVectorColor(content: VectorContent | undefined, fallback: string) {
   return content?.type === "color" ? psdColorToCss(content.color) : fallback;
 }
@@ -390,16 +490,69 @@ function vectorStroke(color: string, width: number): PsdLayer["vectorStroke"] {
   };
 }
 
-function applyImportedMask(target: Layer, source: PsdLayer, doc: Pick<Document, "width" | "height">) {
-  if (!source.mask?.canvas || source.mask.disabled) return;
+function normalizedPixelValue(value: number, depth: number) {
+  return depth === 16 ? value / 65535 : depth === 8 ? value / 255 : value;
+}
+
+function applyImportedMask(target: Layer, source: PsdLayer, doc: Pick<Document, "width" | "height" | "bitDepth">) {
+  if ((!source.mask?.canvas && !source.mask?.imageData) || source.mask.disabled) return;
   const mask = newCanvas(doc.width, doc.height);
   const context = mask.getContext("2d")!;
   if ((source.mask.defaultColor ?? 255) > 0) {
     context.fillStyle = "#ffffff";
     context.fillRect(0, 0, doc.width, doc.height);
   }
-  context.drawImage(source.mask.canvas, source.mask.left ?? 0, source.mask.top ?? 0);
+  if (source.mask.canvas) {
+    context.drawImage(source.mask.canvas, source.mask.left ?? 0, source.mask.top ?? 0);
+  } else if (source.mask.imageData) {
+    const sourceData = source.mask.imageData;
+    const image = context.createImageData(sourceData.width, sourceData.height);
+    for (let pixel = 0; pixel < sourceData.width * sourceData.height; pixel += 1) {
+      const alpha = Math.round(Math.max(0, Math.min(1, normalizedPixelValue(sourceData.data[pixel * 4], doc.bitDepth))) * 255);
+      image.data.set([255, 255, 255, alpha], pixel * 4);
+    }
+    context.putImageData(image, source.mask.left ?? 0, source.mask.top ?? 0);
+  }
   target.mask = mask;
+}
+
+export function precisionSurfaceFromPsdPixels(
+  pixels: PixelData,
+  doc: Document,
+  left: number,
+  top: number,
+) {
+  const surface = new PrecisionTileSurface(
+    doc.width,
+    doc.height,
+    doc.bitDepth === 32 ? "rgba32f" : doc.bitDepth === 16 ? "rgba16f" : "rgba8",
+    doc.colorSpace,
+  );
+  const working = new Float32Array(pixels.width * pixels.height * 4);
+  for (let pixel = 0; pixel < pixels.width * pixels.height; pixel += 1) {
+    const offset = pixel * 4;
+    const alpha = normalizedPixelValue(pixels.data[offset + 3], doc.bitDepth);
+    const sourceRgb = [
+      normalizedPixelValue(pixels.data[offset], doc.bitDepth),
+      normalizedPixelValue(pixels.data[offset + 1], doc.bitDepth),
+      normalizedPixelValue(pixels.data[offset + 2], doc.bitDepth),
+    ] as [number, number, number];
+    const rgb = doc.bitDepth === 32 ? sourceRgb : displaySrgbToWorking(sourceRgb, doc.colorSpace);
+    working.set([rgb[0], rgb[1], rgb[2], alpha], offset);
+  }
+  surface.updateFromWorkingFloat32({ width: pixels.width, height: pixels.height, data: working }, left, top);
+  return surface;
+}
+
+function drawPrecisionPreview(target: HTMLCanvasElement, surface: PrecisionTileSurface) {
+  const context = target.getContext("2d")!;
+  for (const { key } of surface.store.entries()) {
+    const tile = surface.grid.parseKey(key);
+    const preview = surface.tileToRgba8(key);
+    const image = context.createImageData(preview.width, preview.height);
+    image.data.set(preview.data);
+    context.putImageData(image, tile.x, tile.y);
+  }
 }
 
 function importedTextStyle(layer: PsdLayer): TextStyle {
@@ -476,6 +629,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
       skipLinkedFilesData: false,
       throwForMissingFeatures: false,
       logMissingFeatures: false,
+      useImageData: true,
     });
   } catch (error) {
     throw new PhotoshopDecodeError(header, error);
@@ -496,9 +650,9 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
     });
   } else if (header.bitsPerChannel !== 8) {
     importedIssues.push({
-      code: "HIGH_DEPTH_LAYER_PREVIEW",
-      severity: "warning",
-      message: `The ${header.bitsPerChannel}-bit document depth is retained, but ag-psd supplies layer canvases through an 8-bit compatibility preview.`,
+      code: "HIGH_DEPTH_LAYER_MASTER",
+      severity: "info",
+      message: `The ${header.bitsPerChannel}-bit layer channels are decoded into Luma precision-tile masters; the canvas is only a display preview.`,
     });
   }
   if (header.colorMode !== 3) { // PSD color-mode code 3 = RGB.
@@ -531,6 +685,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   setPhotoshopDocumentMetadata(doc, {
     header,
     originalSource: new Uint8Array(buffer.slice(0)),
+    originalDocumentFingerprint: documentStateFingerprint(doc),
     imageResources: psd.imageResources,
     linkedFiles: psd.linkedFiles,
     rawImageResources: extractPhotoshopImageResources(buffer),
@@ -538,18 +693,25 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   });
 
   let sourceIndex = 0;
+  const sourceIndexByLayerId = new Map<string, number>();
   const capture = (
     target: Layer,
     source: PsdLayer,
     preservation: "editable" | "descriptor-preserved" | "preview-only",
   ) => {
-    target.photoshop = { sourceIndex: sourceIndex++ };
+    const currentSourceIndex = sourceIndex++;
+    target.photoshop = { sourceIndex: currentSourceIndex };
+    sourceIndexByLayerId.set(target.id, currentSourceIndex);
     setPhotoshopLayerMetadata(target, {
       source,
       originalText: source.text?.text,
       originalTextFingerprint: target.text ? textFingerprint(target) : undefined,
       originalPathFingerprint: pathFingerprint(target),
       originalEffectsFingerprint: effectsFingerprint(target),
+      originalStateFingerprint: layerStateFingerprint(target),
+      originalSurfaceFingerprint: layerPixelFingerprint(target),
+      originalMaskFingerprint: canvasFingerprint(target.mask),
+      originalParentSourceIndex: target.parentId ? sourceIndexByLayerId.get(target.parentId) : undefined,
       preservation,
     });
   };
@@ -600,12 +762,22 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
     const canvas = newCanvas(psd.width, psd.height);
     const ctx = canvas.getContext("2d")!;
     const src = (layer as { canvas?: HTMLCanvasElement }).canvas;
-    if (src) {
-      const left = layer.left ?? 0;
-      const top = layer.top ?? 0;
+    const left = layer.left ?? 0;
+    const top = layer.top ?? 0;
+    const pixelData = layer.imageData;
+    let precisionSurface: PrecisionTileSurface | undefined;
+    if (pixelData && doc.bitDepth > 8) {
+      precisionSurface = precisionSurfaceFromPsdPixels(pixelData, doc, left, top);
+      drawPrecisionPreview(canvas, precisionSurface);
+    } else if (pixelData) {
+      const image = ctx.createImageData(pixelData.width, pixelData.height);
+      image.data.set(pixelData.data as Uint8ClampedArray);
+      ctx.putImageData(image, left, top);
+    } else if (src) {
       ctx.drawImage(src, left, top);
     }
     const l: Layer = createRasterLayer(layer.name || "Layer", canvas);
+    if (precisionSurface) l.surface = precisionSurface;
     if (layer.placedLayer) l.kind = "smart-object";
     applyImportedLayerMetadata(l, layer, parentId);
     applyImportedMask(l, layer, doc);
@@ -633,6 +805,10 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   };
 
   for (const layer of psd.children ?? []) visit(layer);
+  for (const [index, layer] of doc.layers.entries()) {
+    const metadata = getPhotoshopLayerMetadata(layer);
+    if (metadata) setPhotoshopLayerMetadata(layer, { ...metadata, originalStackPosition: index });
+  }
   return doc;
 }
 
@@ -892,6 +1068,41 @@ function resolvedContainer(doc: Document, format: PhotoshopExportOptions["format
   return doc.width > 30000 || doc.height > 30000 ? "psb" : "psd";
 }
 
+/**
+ * Source mode is deliberately strict: every editable property, hierarchy slot,
+ * precision tile, bitmap, and layer mask must still match the import snapshot.
+ * If any proof is unavailable we use the normal writer instead of risking stale
+ * source bytes.
+ */
+function canReturnOriginalPhotoshopSource(doc: Document, container: PhotoshopContainer) {
+  const metadata = getPhotoshopDocumentMetadata(doc);
+  if (!metadata?.originalSource || metadata.header.container !== container) return false;
+  if (metadata.originalDocumentFingerprint !== documentStateFingerprint(doc)) return false;
+
+  const seenSourceIndices = new Set<number>();
+  for (const [stackPosition, layer] of doc.layers.entries()) {
+    const layerMetadata = getPhotoshopLayerMetadata(layer);
+    const sourceLayerIndex = layer.photoshop?.sourceIndex;
+    if (!layerMetadata || sourceLayerIndex === undefined || seenSourceIndices.has(sourceLayerIndex)) return false;
+    seenSourceIndices.add(sourceLayerIndex);
+    if (layerMetadata.originalStackPosition !== stackPosition) return false;
+    if (layerMetadata.originalStateFingerprint !== layerStateFingerprint(layer)) return false;
+
+    const surfaceFingerprint = layerPixelFingerprint(layer);
+    const maskFingerprint = canvasFingerprint(layer.mask);
+    if (layerMetadata.originalSurfaceFingerprint === "unreadable" || surfaceFingerprint === "unreadable") return false;
+    if (layerMetadata.originalMaskFingerprint === "unreadable" || maskFingerprint === "unreadable") return false;
+    if (layerMetadata.originalSurfaceFingerprint !== surfaceFingerprint) return false;
+    if (layerMetadata.originalMaskFingerprint !== maskFingerprint) return false;
+
+    const parentSourceIndex = layer.parentId
+      ? doc.layers.find((candidate) => candidate.id === layer.parentId)?.photoshop?.sourceIndex
+      : undefined;
+    if (layerMetadata.originalParentSourceIndex !== parentSourceIndex) return false;
+  }
+  return seenSourceIndices.size === doc.layers.length;
+}
+
 export function photoshopCompatibilityReport(
   doc: Document,
   options: PhotoshopExportOptions = {},
@@ -921,6 +1132,17 @@ export function photoshopCompatibilityReport(
   }
   if (doc.width > 300000 || doc.height > 300000) {
     issues.push({ code: "PSB_DIMENSION_LIMIT", severity: "error", message: "Photoshop PSB is limited to 300,000 pixels per side." });
+  }
+  const sourcePassthrough = options.format === "source"
+    && canReturnOriginalPhotoshopSource(doc, container)
+    && !issues.some((issue) => issue.severity === "error");
+  if (sourcePassthrough) {
+    issues.push({
+      code: "ORIGINAL_SOURCE_PASSTHROUGH",
+      severity: "info",
+      message: `The untouched ${container.toUpperCase()} will be exported byte-for-byte, preserving its original depth, color mode, resources, and descriptors.`,
+    });
+    return { container, canExport: true, issues };
   }
   if (doc.bitDepth !== 8) {
     issues.push({
@@ -978,6 +1200,15 @@ export function photoshopCompatibilityReport(
         message: `${layer.name}'s Luma blend stack is exported as ordered Photoshop layers.`,
       });
     }
+    if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.surface && !layer.bitmap &&
+        (doc.width > 16384 || doc.height > 16384 || doc.width * doc.height > 64_000_000)) {
+      issues.push({
+        code: "SPARSE_LAYER_REQUIRES_STREAMING_WRITER",
+        severity: "error",
+        layerId: layer.id,
+        message: `${layer.name} is a sparse large-document layer; exporting it requires the streaming PSB writer rather than a browser-sized compatibility canvas.`,
+      });
+    }
   }
   return {
     container,
@@ -993,6 +1224,14 @@ export function exportPhotoshopDocument(
   const report = photoshopCompatibilityReport(doc, options);
   if (!report.canExport) {
     throw new Error(report.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join(" "));
+  }
+  const preservedSource = getPhotoshopDocumentMetadata(doc)?.originalSource;
+  if (report.issues.some((issue) => issue.code === "ORIGINAL_SOURCE_PASSTHROUGH") && preservedSource) {
+    const bytes = preservedSource.slice();
+    return {
+      buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      report,
+    };
   }
   // One Luma blend stack exports as repeated PSD layers, preserving the same
   // bottom-to-top pass order and per-pass opacity in Photoshop.
@@ -1075,8 +1314,9 @@ export function exportPsd(doc: Document, options: PhotoshopExportOptions = {}): 
 function flattenLayerBitmap(doc: Document, layer: Layer): HTMLCanvasElement | null {
   const c = newCanvas(doc.width, doc.height);
   const ctx = c.getContext("2d")!;
-  if ((layer.kind === "raster" || layer.kind === "smart-object") && !layer.bitmap) return null;
-  drawLayerContent(ctx, layer);
+  if ((layer.kind === "raster" || layer.kind === "smart-object") && !layer.bitmap && !layer.surface) return null;
+  if (layer.surface) drawLayerContentManaged(ctx, layer);
+  else drawLayerContent(ctx, layer);
   if (layer.mask) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = "destination-in";

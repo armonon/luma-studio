@@ -49,6 +49,11 @@ import type { RawDevelopSettings } from "@/app/engine/raw-develop";
 import { extractAndParseEmbeddedColorProfile } from "@/app/engine/embedded-color-profile";
 import { defaultColorProfileRegistry } from "@/app/engine/color-management";
 import type { AiEditQuality, AiOperationControls } from "@/app/engine/ai-edit";
+import {
+  calculateDisplayViewport,
+  viewportPointToDocument,
+  type DisplayViewport,
+} from "@/app/engine/viewport";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "select" | "mask" | "develop" | "vector";
@@ -56,6 +61,10 @@ type Tool =
   | "move"
   | "brush"
   | "erase"
+  | "clone"
+  | "heal"
+  | "dodge"
+  | "burn"
   | "fill"
   | "text"
   | "rect"
@@ -82,6 +91,10 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["move", "↖", "Move", "V"],
     ["brush", "╱", "Brush", "B"],
     ["erase", "⌫", "Erase", "E"],
+    ["clone", "⌘", "Clone stamp", "S"],
+    ["heal", "✚", "Healing brush", "J"],
+    ["dodge", "◌", "Dodge", "O"],
+    ["burn", "●", "Burn", "U"],
     ["fill", "▣", "Fill", "F"],
   ],
   select: [
@@ -573,6 +586,8 @@ export default function SpatialStudio() {
   const [brushBlendMode, setBrushBlendMode] = useState<NonNullable<BrushParams["blendMode"]>>("normal");
   const [brushSymmetry, setBrushSymmetry] = useState<"none" | "horizontal" | "vertical" | "radial">("none");
   const [brushColor, setBrushColor] = useState("#ffffff");
+  const [retouchSample, setRetouchSample] = useState<{ x: number; y: number } | null>(null);
+  const retouchActive = useRef(false);
   const [feather, setFeather] = useState(0);
   const [wandTolerance, setWandTolerance] = useState(24);
   const [selectionSmooth, setSelectionSmooth] = useState(2);
@@ -614,6 +629,7 @@ export default function SpatialStudio() {
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const [displayViewport, setDisplayViewport] = useState<DisplayViewport | null>(null);
   const spaceHeld = useRef(false);
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
 
@@ -711,23 +727,17 @@ export default function SpatialStudio() {
     if (!studio || !doc || !canvasRef.current || !stageRef.current) return;
     const updatePlan = () => {
       const canvasRect = canvasRef.current!.getBoundingClientRect();
-      const stageRect = stageRef.current!.getBoundingClientRect();
       if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
-      const left = Math.max(stageRect.left, canvasRect.left);
-      const top = Math.max(stageRect.top, canvasRect.top);
-      const right = Math.min(stageRect.right, canvasRect.right);
-      const bottom = Math.min(stageRect.bottom, canvasRect.bottom);
-      const x = (left - canvasRect.left) / canvasRect.width * doc.width;
-      const y = (top - canvasRect.top) / canvasRect.height * doc.height;
-      const width = Math.max(0, right - left) / canvasRect.width * doc.width;
-      const height = Math.max(0, bottom - top) / canvasRect.height * doc.height;
-      studio.setVirtualViewport({
-        x,
-        y,
-        width,
-        height,
-        zoom: canvasRect.width / doc.width,
-      });
+      const next = calculateDisplayViewport(
+        doc.width,
+        doc.height,
+        canvasRect.width,
+        canvasRect.height,
+        view,
+        window.devicePixelRatio,
+      );
+      setDisplayViewport(next);
+      studio.setVirtualViewport(next);
     };
     updatePlan();
     const observer = new ResizeObserver(updatePlan);
@@ -746,8 +756,23 @@ export default function SpatialStudio() {
     const canvas = canvasRef.current;
     if (!canvas || !doc) return { x: 0, y: 0, p: 0.5 };
     const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * doc.width;
-    const y = ((e.clientY - rect.top) / rect.height) * doc.height;
+    const viewport = displayViewport ?? calculateDisplayViewport(
+      doc.width,
+      doc.height,
+      rect.width,
+      rect.height,
+      view,
+      window.devicePixelRatio,
+    );
+    const point = viewportPointToDocument(
+      viewport,
+      rect.width,
+      rect.height,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+    );
+    const x = point.x;
+    const y = point.y;
     const p = e.pressure !== undefined && e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : 0.5;
     const tiltX = e.tiltX ?? 0;
     const tiltY = e.tiltY ?? 0;
@@ -755,7 +780,7 @@ export default function SpatialStudio() {
       ? e.azimuthAngle
       : (tiltX || tiltY ? Math.atan2(tiltY, tiltX) : 0);
     return { x, y, p, tiltX, tiltY, azimuth };
-  }, [doc]);
+  }, [doc, displayViewport, view]);
 
   const currentBrushMode = (): BrushParams["mode"] => {
     if (activeTool === "erase") return "erase";
@@ -795,6 +820,7 @@ export default function SpatialStudio() {
   });
 
   const paintingTool = activeTool === "brush" || activeTool === "erase" || activeTool === "mask-add" || activeTool === "mask-remove";
+  const retouchTool = activeTool === "clone" || activeTool === "heal" || activeTool === "dodge" || activeTool === "burn";
   const marqueeTool = activeTool === "sel-rect" || activeTool === "sel-ellipse";
   const lassoTool = activeTool === "sel-lasso";
   const wandTool = activeTool === "sel-wand";
@@ -837,6 +863,30 @@ export default function SpatialStudio() {
     }
     (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
     const p = eventToDoc(e);
+
+    if (retouchTool) {
+      if (!activeLayer || activeLayer.kind !== "raster" || !activeLayer.surface) {
+        notify("Retouching needs a raster precision layer");
+        return;
+      }
+      if ((activeTool === "clone" || activeTool === "heal") && e.altKey) {
+        setRetouchSample({ x: p.x, y: p.y });
+        notify(activeTool === "clone" ? "Clone source sampled" : "Healing source sampled");
+        return;
+      }
+      if ((activeTool === "clone" || activeTool === "heal") && !retouchSample) {
+        notify("Alt-click to choose a source");
+        return;
+      }
+      retouchActive.current = studio.beginRetouchStroke(
+        activeLayer.id,
+        activeTool,
+        retouchSample,
+        p,
+        { ...brushParams(), mode: "paint" },
+      );
+      return;
+    }
 
     if (paintingTool) {
       if (!activeLayer) { notify("Select a layer"); return; }
@@ -961,6 +1011,15 @@ export default function SpatialStudio() {
       for (const ev of points) studio.paintTo(activeLayer.id, brushParams(), eventToDoc(ev));
       return;
     }
+    if (retouchTool && retouchActive.current && e.buttons !== 0 && activeLayer) {
+      type WithCoalesced = { getCoalescedEvents?: () => Array<{
+        clientX: number; clientY: number; pressure?: number; tiltX?: number; tiltY?: number; azimuthAngle?: number;
+      }> };
+      const src = e.nativeEvent as WithCoalesced;
+      const events = src.getCoalescedEvents ? src.getCoalescedEvents() : [];
+      for (const event of events.length ? events : [e.nativeEvent]) studio.retouchTo(activeLayer.id, eventToDoc(event));
+      return;
+    }
     if (!d) return;
     const p = eventToDoc(e);
     const nextPath = d.kind === "sel-lasso" && d.path ? [...d.path, { x: p.x, y: p.y }] : d.path;
@@ -982,6 +1041,11 @@ export default function SpatialStudio() {
     }
     if (paintingTool && activeLayer) {
       studio.endStroke(activeLayer.id, brushParams());
+      return;
+    }
+    if (retouchTool && retouchActive.current) {
+      studio.endRetouchStroke();
+      retouchActive.current = false;
       return;
     }
     const d = dragRef.current;
@@ -1127,6 +1191,7 @@ export default function SpatialStudio() {
     try {
       const buf = await file.arrayBuffer();
       const d = await studio.importPsd(buf);
+      setPhotoshopFormat("source");
       setActiveLayerId(d.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
@@ -1411,11 +1476,11 @@ export default function SpatialStudio() {
   const historyState = studio?.historyState();
   const engineState = studio?.engineState();
   const canvasCursor = useMemo(() => {
-    if (paintingTool || marqueeTool || lassoTool || wandTool || vectorDragTool) return "crosshair";
+    if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool) return "crosshair";
     if (activeTool === "pen" || activeTool === "sel-sam") return "crosshair";
     if (moveTool) return "move";
     return "default";
-  }, [paintingTool, marqueeTool, lassoTool, wandTool, vectorDragTool, moveTool, activeTool]);
+  }, [paintingTool, retouchTool, marqueeTool, lassoTool, wandTool, vectorDragTool, moveTool, activeTool]);
 
   const activeIsAdjustment = activeLayer?.kind === "adjustment-tone";
 
@@ -1696,13 +1761,13 @@ export default function SpatialStudio() {
                 const next = !useGL;
                 setUseGL(next);
                 studio?.setUseGL(next);
-                notify(next ? "GPU 16F compositing on" : "CPU compositing on");
+                notify(next ? "RGBA16F GPU export enabled" : "CPU export enabled");
               }}
-              title={glSupported ? "Toggle GPU (RGBA16F) compositing" : "WebGL2 float not supported"}
+              title={glSupported ? "Toggle RGBA16F GPU compositing for flattened exports" : "WebGL2 float not supported"}
               disabled={!glSupported}
               style={{ opacity: glSupported ? 1 : 0.4, background: useGL ? "linear-gradient(135deg,#2385f4,#7c5ce7)" : undefined, color: useGL ? "#fff" : undefined }}
             >
-              <span>◈</span> {useGL ? "GPU · 16F" : "GPU off"}
+              <span>◈</span> {useGL ? "Export · 16F" : "Export · CPU"}
             </button>
             <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as "png" | "jpeg" | "webp")} aria-label="Raster export format" style={{ width: 72 }}>
               <option value="png">PNG</option>
@@ -1778,11 +1843,6 @@ export default function SpatialStudio() {
             >
               <div
                 className={`spatial-canvas tool-${activeTool} workspace-${workspace}`}
-                style={{
-                  position: "relative",
-                  transform: `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`,
-                  transformOrigin: "center center",
-                }}
               >
                 <canvas
                   ref={canvasRef}
@@ -1791,34 +1851,49 @@ export default function SpatialStudio() {
                   onPointerUp={onPointerUp}
                   onPointerCancel={onPointerUp}
                   style={{
+                    position: "absolute",
+                    inset: 0,
                     width: "100%",
                     height: "100%",
-                    objectFit: "contain",
                     cursor: canvasCursor,
                     touchAction: "none",
                     display: "block",
                   }}
                 />
-                {dragOverlay}
-                {transformOverlay}
-                {penOverlay}
-                {showGuides && doc?.guides.map((guide) => (
-                  <i
-                    key={guide.id}
-                    aria-hidden="true"
-                    style={guide.orientation === "vertical" ? {
-                      position: "absolute", top: 0, bottom: 0, left: `${(guide.position / doc.width) * 100}%`, width: 1,
-                      background: "#36d7ff", boxShadow: "0 0 0 1px rgba(0,0,0,.25)", pointerEvents: "none", zIndex: 8,
-                    } : {
-                      position: "absolute", left: 0, right: 0, top: `${(guide.position / doc.height) * 100}%`, height: 1,
-                      background: "#36d7ff", boxShadow: "0 0 0 1px rgba(0,0,0,.25)", pointerEvents: "none", zIndex: 8,
+                {doc && displayViewport && (
+                  <div
+                    className="document-overlay-plane"
+                    style={{
+                      position: "absolute",
+                      left: `${(-displayViewport.x / displayViewport.width) * 100}%`,
+                      top: `${(-displayViewport.y / displayViewport.height) * 100}%`,
+                      width: `${(doc.width / displayViewport.width) * 100}%`,
+                      height: `${(doc.height / displayViewport.height) * 100}%`,
+                      pointerEvents: "none",
                     }}
-                  />
-                ))}
+                  >
+                    {dragOverlay}
+                    {transformOverlay}
+                    {penOverlay}
+                    {showGuides && doc.guides.map((guide) => (
+                      <i
+                        key={guide.id}
+                        aria-hidden="true"
+                        style={guide.orientation === "vertical" ? {
+                          position: "absolute", top: 0, bottom: 0, left: `${(guide.position / doc.width) * 100}%`, width: 1,
+                          background: "#36d7ff", boxShadow: "0 0 0 1px rgba(0,0,0,.25)", pointerEvents: "none", zIndex: 8,
+                        } : {
+                          position: "absolute", left: 0, right: 0, top: `${(guide.position / doc.height) * 100}%`, height: 1,
+                          background: "#36d7ff", boxShadow: "0 0 0 1px rgba(0,0,0,.25)", pointerEvents: "none", zIndex: 8,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
                 <div className="canvas-status">
                   <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.tiles} addressable preview tiles · ${engineState.precisionTiles} resident precision tiles · ${engineState.previewCache.hits} tile-cache hits · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
                     {doc
-                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · ${useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · ${engineState?.renderer === "viewport-tiled-canvas2d" ? "Tiled viewport" : useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
                       : "Loading…"}
                   </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
@@ -2306,9 +2381,16 @@ export default function SpatialStudio() {
             {workspace === "edit" && (
               <section className="glass-card tone-card">
                 <header>
-                  <strong>Brush</strong>
+                  <strong>{retouchTool ? activeTool === "clone" ? "Clone stamp" : activeTool === "heal" ? "Healing brush" : activeTool === "dodge" ? "Dodge" : "Burn" : "Brush"}</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Brush color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
                 </header>
+                {retouchTool && (
+                  <p style={{ padding: "0 12px 7px", fontSize: 10, opacity: 0.72 }}>
+                    {activeTool === "clone" || activeTool === "heal"
+                      ? `${retouchSample ? `Source ${Math.round(retouchSample.x)}, ${Math.round(retouchSample.y)}` : "Alt-click to sample a source"} · float-tile replay`
+                      : "Linear-light exposure retouch · float-tile replay"}
+                  </p>
+                )}
                 <div className="tone-controls">
                   <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>

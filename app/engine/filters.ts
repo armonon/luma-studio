@@ -273,6 +273,7 @@ export function desaturate(doc: Document, layer: Layer, amount = 1) {
 export function applySmartFilters(
   source: HTMLCanvasElement,
   filters: SmartFilter[] | undefined,
+  displayScale = 1,
 ) {
   if (!filters?.length) return;
   const layer: Layer = {
@@ -299,8 +300,15 @@ export function applySmartFilters(
   for (const filter of filters) {
     if (!filter.enabled || filter.opacity <= 0) continue;
     const before = filter.opacity < 1 ? new Uint8ClampedArray(source.getContext("2d")!.getImageData(0, 0, source.width, source.height).data) : null;
-    if (filter.kind === "blur") gaussianBlur(doc, layer, filter.params.radius ?? 8);
-    else if (filter.kind === "sharpen") unsharpMask(doc, layer, filter.params.radius ?? 2, filter.params.amount ?? 0.6);
+    const radius = Math.max(
+      0,
+      Math.min(
+        Math.max(1, Math.min(source.width, source.height) / 4),
+        (filter.params.radius ?? (filter.kind === "blur" ? 8 : 2)) * displayScale,
+      ),
+    );
+    if (filter.kind === "blur") gaussianBlur(doc, layer, radius);
+    else if (filter.kind === "sharpen") unsharpMask(doc, layer, radius, filter.params.amount ?? 0.6);
     else if (filter.kind === "invert") invertColors(doc, layer);
     else if (filter.kind === "desaturate") desaturate(doc, layer, filter.params.amount ?? 1);
     else if (filter.kind === "hue") hueRotate(doc, layer, filter.params.degrees ?? 45);

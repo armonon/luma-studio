@@ -12,6 +12,7 @@ import {
   whiteBalanceMultipliers,
 } from "./raw-develop";
 import { workingToDisplaySrgb } from "./color";
+import { decodeLosslessJpeg, LosslessJpegError } from "./lossless-jpeg";
 
 const TAG = {
   imageWidth: 256,
@@ -55,6 +56,7 @@ const TAG = {
 
 const TYPE_SIZE: Record<number, number> = {
   1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4,
+  16: 8, 17: 8, 18: 8,
 };
 
 export type RawDecodeErrorCode =
@@ -101,6 +103,7 @@ export type DngMetadata = {
 export type ParsedDng = {
   metadata: DngMetadata;
   sensorSamples: Float32Array;
+  container: "classic-tiff" | "bigtiff";
 };
 
 export type DevelopedDng = {
@@ -119,7 +122,7 @@ export type DevelopedDng = {
     originalBytes: number;
     matrixSource: DngMetadata["matrixSource"];
     settings: RawDevelopSettings;
-    boundary: "classic-tiff-uncompressed-bayer";
+    boundary: "classic-tiff-uncompressed-bayer" | "bigtiff-uncompressed-bayer" | "tiff-lossless-jpeg-bayer";
   };
 };
 
@@ -152,10 +155,14 @@ export function orientLinearRgba(pixels: Float32Array, width: number, height: nu
 type EntryMap = Map<number, number[]>;
 type Ifd = { offset: number; entries: EntryMap };
 
-class ClassicTiffReader {
+class TiffReader {
   readonly view: DataView;
   readonly littleEndian: boolean;
   readonly firstIfdOffset: number;
+  readonly bigTiff: boolean;
+  readonly ifdCountBytes: 2 | 8;
+  readonly ifdEntryBytes: 12 | 20;
+  readonly inlineValueBytes: 4 | 8;
 
   constructor(readonly source: ArrayBuffer) {
     this.view = new DataView(source);
@@ -164,9 +171,38 @@ class ClassicTiffReader {
     if (marker !== "II" && marker !== "MM") throw new RawDecodeError("invalid-container", "DNG requires an II or MM TIFF byte-order marker");
     this.littleEndian = marker === "II";
     const magic = this.view.getUint16(2, this.littleEndian);
-    if (magic === 43) throw new RawDecodeError("unsupported-container", "BigTIFF DNG is not supported; use a classic TIFF DNG or its embedded preview");
-    if (magic !== 42) throw new RawDecodeError("invalid-container", "The TIFF magic number is invalid");
-    this.firstIfdOffset = this.view.getUint32(4, this.littleEndian);
+    if (magic === 43) {
+      if (source.byteLength < 16) throw new RawDecodeError("invalid-container", "The BigTIFF header is truncated");
+      const offsetBytes = this.view.getUint16(4, this.littleEndian);
+      const reserved = this.view.getUint16(6, this.littleEndian);
+      if (offsetBytes !== 8 || reserved !== 0) throw new RawDecodeError("unsupported-container", "BigTIFF requires 8-byte offsets and a zero reserved field");
+      this.bigTiff = true;
+      this.ifdCountBytes = 8;
+      this.ifdEntryBytes = 20;
+      this.inlineValueBytes = 8;
+      this.firstIfdOffset = this.readSafeUint64(8);
+    } else {
+      if (magic !== 42) throw new RawDecodeError("invalid-container", "The TIFF magic number is invalid");
+      this.bigTiff = false;
+      this.ifdCountBytes = 2;
+      this.ifdEntryBytes = 12;
+      this.inlineValueBytes = 4;
+      this.firstIfdOffset = this.view.getUint32(4, this.littleEndian);
+    }
+  }
+
+  private readSafeUint64(offset: number) {
+    const value = this.view.getBigUint64(offset, this.littleEndian);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) throw new RawDecodeError("corrupt-data", "A BigTIFF offset exceeds JavaScript's safe integer range");
+    return Number(value);
+  }
+
+  private readSafeInt64(offset: number) {
+    const value = this.view.getBigInt64(offset, this.littleEndian);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+      throw new RawDecodeError("corrupt-data", "A BigTIFF signed value exceeds JavaScript's safe integer range");
+    }
+    return Number(value);
   }
 
   private requireRange(offset: number, length: number) {
@@ -193,26 +229,31 @@ class ClassicTiffReader {
       }
       case 11: return this.view.getFloat32(offset, this.littleEndian);
       case 12: return this.view.getFloat64(offset, this.littleEndian);
+      case 16: case 18: return this.readSafeUint64(offset);
+      case 17: return this.readSafeInt64(offset);
       default: throw new RawDecodeError("unsupported-container", `Unsupported TIFF field type ${type}`);
     }
   }
 
   readIfd(offset: number): Ifd {
-    this.requireRange(offset, 2);
-    const count = this.view.getUint16(offset, this.littleEndian);
+    this.requireRange(offset, this.ifdCountBytes);
+    const count = this.bigTiff ? this.readSafeUint64(offset) : this.view.getUint16(offset, this.littleEndian);
     if (count > 4096) throw new RawDecodeError("corrupt-data", "The TIFF directory has an unreasonable entry count");
-    this.requireRange(offset + 2, count * 12 + 4);
+    this.requireRange(offset + this.ifdCountBytes, count * this.ifdEntryBytes + (this.bigTiff ? 8 : 4));
     const entries: EntryMap = new Map();
     for (let index = 0; index < count; index += 1) {
-      const entryOffset = offset + 2 + index * 12;
+      const entryOffset = offset + this.ifdCountBytes + index * this.ifdEntryBytes;
       const tag = this.view.getUint16(entryOffset, this.littleEndian);
       const type = this.view.getUint16(entryOffset + 2, this.littleEndian);
-      const itemCount = this.view.getUint32(entryOffset + 4, this.littleEndian);
+      const itemCount = this.bigTiff ? this.readSafeUint64(entryOffset + 4) : this.view.getUint32(entryOffset + 4, this.littleEndian);
       const size = TYPE_SIZE[type];
       if (!size) continue;
       if (itemCount > 4_000_000) throw new RawDecodeError("corrupt-data", `TIFF tag ${tag} has an unreasonable value count`);
       const byteLength = itemCount * size;
-      const valueOffset = byteLength <= 4 ? entryOffset + 8 : this.view.getUint32(entryOffset + 8, this.littleEndian);
+      const valueFieldOffset = entryOffset + (this.bigTiff ? 12 : 8);
+      const valueOffset = byteLength <= this.inlineValueBytes
+        ? valueFieldOffset
+        : this.bigTiff ? this.readSafeUint64(valueFieldOffset) : this.view.getUint32(valueFieldOffset, this.littleEndian);
       this.requireRange(valueOffset, byteLength);
       const values = new Array<number>(itemCount);
       for (let item = 0; item < itemCount; item += 1) values[item] = this.readValue(type, valueOffset + item * size);
@@ -232,21 +273,22 @@ class ClassicTiffReader {
       const ifd = this.readIfd(offset);
       output.push(ifd);
       for (const child of ifd.entries.get(TAG.subIfds) ?? []) queue.push(child);
-      const entryCount = this.view.getUint16(offset, this.littleEndian);
-      const next = this.view.getUint32(offset + 2 + entryCount * 12, this.littleEndian);
+      const entryCount = this.bigTiff ? this.readSafeUint64(offset) : this.view.getUint16(offset, this.littleEndian);
+      const nextOffset = offset + this.ifdCountBytes + entryCount * this.ifdEntryBytes;
+      const next = this.bigTiff ? this.readSafeUint64(nextOffset) : this.view.getUint32(nextOffset, this.littleEndian);
       if (next) queue.push(next);
     }
     return output;
   }
 
-  readUncompressedImage(entries: EntryMap, width: number, height: number, bits: number) {
+  readImage(entries: EntryMap, width: number, height: number, bits: number) {
     const samplesPerPixel = entries.get(TAG.samplesPerPixel)?.[0] ?? 1;
     const planar = entries.get(TAG.planarConfiguration)?.[0] ?? 1;
     if (samplesPerPixel !== 1 || planar !== 1) {
       throw new RawDecodeError("unsupported-pixel-layout", "The DNG subset requires one chunky CFA sample per pixel");
     }
     const compression = entries.get(TAG.compression)?.[0] ?? 1;
-    if (compression !== 1) {
+    if (compression !== 1 && compression !== 7) {
       throw new RawDecodeError("unsupported-compression", `DNG compression ${compression} is not decoded locally; the embedded preview remains available`);
     }
     if (![8, 10, 12, 14, 16].includes(bits)) {
@@ -264,7 +306,7 @@ class ClassicTiffReader {
         const firstRow = strip * rowsPerStrip;
         if (firstRow >= height) break;
         const rows = Math.min(rowsPerStrip, height - firstRow);
-        this.decodeBlock(stripOffsets[strip], stripCounts[strip] ?? 0, width, rows, bits, output, width, 0, firstRow);
+        this.decodeImageBlock(compression, stripOffsets[strip], stripCounts[strip] ?? 0, width, rows, bits, output, width, 0, firstRow);
       }
       return output;
     }
@@ -281,13 +323,61 @@ class ClassicTiffReader {
     for (let tileY = 0; tileY < rows; tileY += 1) {
       for (let tileX = 0; tileX < columns; tileX += 1) {
         const index = tileY * columns + tileX;
-        this.decodeBlock(
+        this.decodeImageBlock(
+          compression,
           tileOffsets[index], tileCounts[index] ?? 0, tileWidth, tileHeight, bits,
           output, width, tileX * tileWidth, tileY * tileHeight, width, height,
         );
       }
     }
     return output;
+  }
+
+  private decodeImageBlock(
+    compression: number,
+    offset: number,
+    byteCount: number,
+    blockWidth: number,
+    blockHeight: number,
+    bits: number,
+    destination: Float32Array,
+    destinationWidth: number,
+    destinationX: number,
+    destinationY: number,
+    destinationLimitWidth = destinationWidth,
+    destinationLimitHeight = destination.length / destinationWidth,
+  ) {
+    if (compression === 1) {
+      this.decodeBlock(
+        offset, byteCount, blockWidth, blockHeight, bits,
+        destination, destinationWidth, destinationX, destinationY,
+        destinationLimitWidth, destinationLimitHeight,
+      );
+      return;
+    }
+    this.requireRange(offset, byteCount);
+    try {
+      const decoded = decodeLosslessJpeg(new Uint8Array(this.source, offset, byteCount));
+      if (decoded.width !== blockWidth || decoded.height !== blockHeight || decoded.precision !== bits) {
+        throw new RawDecodeError(
+          "corrupt-data",
+          `Lossless JPEG block is ${decoded.width}×${decoded.height} at ${decoded.precision} bits; expected ${blockWidth}×${blockHeight} at ${bits} bits`,
+        );
+      }
+      for (let row = 0; row < blockHeight; row += 1) {
+        const yy = destinationY + row;
+        if (yy >= destinationLimitHeight) break;
+        for (let column = 0; column < blockWidth; column += 1) {
+          const xx = destinationX + column;
+          if (xx >= destinationLimitWidth) break;
+          destination[yy * destinationWidth + xx] = decoded.samples[row * blockWidth + column];
+        }
+      }
+    } catch (error) {
+      if (error instanceof RawDecodeError) throw error;
+      const message = error instanceof LosslessJpegError ? error.message : "Lossless JPEG decode failed";
+      throw new RawDecodeError("corrupt-data", message);
+    }
   }
 
   private decodeBlock(
@@ -376,7 +466,7 @@ function translateCfaPattern(entries: EntryMap, dim: readonly [number, number]) 
 }
 
 export function parseDng(source: ArrayBuffer): ParsedDng {
-  const reader = new ClassicTiffReader(source);
+  const reader = new TiffReader(source);
   const ifds = reader.allIfds();
   const candidates = ifds.filter(({ entries }) => value(entries, TAG.photometric) === 32803 && value(entries, TAG.imageWidth) && value(entries, TAG.imageLength));
   if (!candidates.length) throw new RawDecodeError("unsupported-pixel-layout", "No CFA RAW image directory was found in this TIFF/DNG");
@@ -434,8 +524,8 @@ export function parseDng(source: ArrayBuffer): ParsedDng {
     matrixSource: forwardMatrix1 ? "forward-matrix-1" : colorMatrix1 ? "color-matrix-1" : "assumed-camera-rgb",
     warnings,
   };
-  const sensorSamples = reader.readUncompressedImage(entries, width, height, bits);
-  return { metadata, sensorSamples };
+  const sensorSamples = reader.readImage(entries, width, height, bits);
+  return { metadata, sensorSamples, container: reader.bigTiff ? "bigtiff" : "classic-tiff" };
 }
 
 export function developParsedDng(
@@ -511,7 +601,9 @@ export function developParsedDng(
       originalBytes,
       matrixSource: metadata.matrixSource,
       settings: developed.settings,
-      boundary: "classic-tiff-uncompressed-bayer",
+      boundary: parsed.metadata.compression === 7
+        ? "tiff-lossless-jpeg-bayer"
+        : parsed.container === "bigtiff" ? "bigtiff-uncompressed-bayer" : "classic-tiff-uncompressed-bayer",
     },
   };
 }

@@ -5,6 +5,7 @@ import {
   evaluatePressureCurve,
   planStroke,
   replayStroke,
+  replayStrokeFloat,
   type BrushParams,
   type RgbaSurface,
 } from "../app/engine/brush.ts";
@@ -169,4 +170,24 @@ test("tile-local replay matches the corresponding full-document pixels", () => {
       assert.deepEqual(pixel(tile, x, y), pixel(full, x + 16, y));
     }
   }
+});
+
+test("float replay preserves HDR values outside the painted footprint", () => {
+  const data = new Float32Array(16 * 16 * 4);
+  for (let offset = 0; offset < data.length; offset += 4) {
+    data[offset] = 2.5;
+    data[offset + 1] = -0.25;
+    data[offset + 2] = 0.75;
+    data[offset + 3] = 1;
+  }
+  replayStrokeFloat({ width: 16, height: 16, data }, {
+    layerId: "float-layer",
+    params: { ...base, size: 4, color: "#ff0000" },
+    points: [{ x: 8.5, y: 8.5, p: 1 }],
+  }, [1, 0, 0]);
+  assert.deepEqual([...data.slice(0, 4)], [2.5, -0.25, 0.75, 1]);
+  const center = (8 * 16 + 8) * 4;
+  assert.ok(data[center] <= 1);
+  assert.equal(data[center + 1], 0);
+  assert.equal(data[center + 3], 1);
 });

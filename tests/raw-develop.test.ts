@@ -9,11 +9,11 @@ import {
   sanitizeRawDevelopSettings,
   whiteBalanceMultipliers,
 } from "../app/engine/raw-develop.ts";
-import { DngDevelopSession, RawDecodeError, decodeDng, orientLinearRgba, parseDng, previewDisplayRgba } from "../app/engine/raw-dng.ts";
+import { DngDevelopSession, decodeDng, orientLinearRgba, parseDng, previewDisplayRgba } from "../app/engine/raw-dng.ts";
 import { ingestRaw } from "../app/engine/raw.ts";
 import { developedDngToSurface } from "../app/engine/raw-surface.ts";
 
-type FixtureOptions = { bits?: 8 | 10 | 12 | 14 | 16; compression?: number; tiled?: boolean };
+type FixtureOptions = { bits?: 8 | 10 | 12 | 14 | 16; compression?: number; tiled?: boolean; bigTiff?: boolean };
 
 const TYPE_SIZE: Record<number, number> = { 1: 1, 3: 2, 4: 4, 5: 8, 10: 8 };
 
@@ -36,6 +36,24 @@ function packRow(values: readonly number[], bits: number, littleEndian: boolean)
   return output;
 }
 
+function constantLosslessJpeg(width: number, height: number, precision: number) {
+  const segment = (marker: number, data: number[]) => [0xff, marker, (data.length + 2) >>> 8, (data.length + 2) & 0xff, ...data];
+  const sof = [precision, height >>> 8, height & 0xff, width >>> 8, width & 0xff, 1, 1, 0x11, 0];
+  const counts = [1, ...new Array(15).fill(0)];
+  const dht = [0, ...counts, 0]; // DC table 0: category zero has the one-bit code 0.
+  const sos = [1, 1, 0, 1, 0, 0];
+  const entropy: number[] = [];
+  let byte = 0;
+  let bits = 0;
+  for (let sample = 0; sample < width * height; sample += 1) {
+    byte <<= 1;
+    bits += 1;
+    if (bits === 8) { entropy.push(byte); byte = 0; bits = 0; }
+  }
+  if (bits) entropy.push((byte << (8 - bits)) | ((1 << (8 - bits)) - 1));
+  return Uint8Array.from([0xff, 0xd8, ...segment(0xc3, sof), ...segment(0xc4, dht), ...segment(0xda, sos), ...entropy, 0xff, 0xd9]);
+}
+
 function syntheticDng(options: FixtureOptions = {}) {
   const width = 6;
   const height = 6;
@@ -43,16 +61,20 @@ function syntheticDng(options: FixtureOptions = {}) {
   const littleEndian = true;
   const max = bits === 16 ? 4095 : (2 ** bits) - 1;
   const channelCodes = bits === 8 ? [200, 160, 128] : [512, 320, 256];
-  const sensor = Array.from({ length: width * height }, (_, index) => {
+  let sensor = Array.from({ length: width * height }, (_, index) => {
     const x = index % width;
     const y = Math.floor(index / width);
     const site = [0, 1, 1, 2][(y % 2) * 2 + (x % 2)];
     return channelCodes[site];
   });
   const rows = Array.from({ length: height }, (_, row) => packRow(sensor.slice(row * width, (row + 1) * width), bits, littleEndian));
-  const pixelBytes = new Uint8Array(rows.reduce((sum, row) => sum + row.length, 0));
+  let pixelBytes = new Uint8Array(rows.reduce((sum, row) => sum + row.length, 0));
   let rowOffset = 0;
   for (const row of rows) { pixelBytes.set(row, rowOffset); rowOffset += row.length; }
+  if (options.compression === 7) {
+    pixelBytes = constantLosslessJpeg(width, height, bits);
+    sensor = new Array(width * height).fill(1 << (bits - 1));
+  }
 
   type Entry = { tag: number; type: number; values: number[] };
   const entries: Entry[] = [
@@ -83,12 +105,17 @@ function syntheticDng(options: FixtureOptions = {}) {
   }
   entries.sort((a, b) => a.tag - b.tag);
 
-  const ifdSize = 2 + entries.length * 12 + 4;
-  let dataOffset = 8 + ifdSize;
+  const ifdOffset = options.bigTiff ? 16 : 8;
+  const countBytes = options.bigTiff ? 8 : 2;
+  const entryBytes = options.bigTiff ? 20 : 12;
+  const nextBytes = options.bigTiff ? 8 : 4;
+  const inlineBytes = options.bigTiff ? 8 : 4;
+  const ifdSize = countBytes + entries.length * entryBytes + nextBytes;
+  let dataOffset = ifdOffset + ifdSize;
   const external = new Map<Entry, number>();
   for (const entry of entries) {
     const byteLength = TYPE_SIZE[entry.type] * entry.values.length;
-    if (byteLength > 4) { external.set(entry, dataOffset); dataOffset += byteLength; }
+    if (byteLength > inlineBytes) { external.set(entry, dataOffset); dataOffset += byteLength; }
   }
   const pixelsAt = dataOffset;
   const pointer = entries.find((entry) => entry.tag === (options.tiled ? 324 : 273))!;
@@ -96,8 +123,16 @@ function syntheticDng(options: FixtureOptions = {}) {
   const output = new ArrayBuffer(pixelsAt + pixelBytes.length);
   const view = new DataView(output);
   view.setUint8(0, 0x49); view.setUint8(1, 0x49);
-  view.setUint16(2, 42, true); view.setUint32(4, 8, true);
-  view.setUint16(8, entries.length, true);
+  if (options.bigTiff) {
+    view.setUint16(2, 43, true);
+    view.setUint16(4, 8, true);
+    view.setUint16(6, 0, true);
+    view.setBigUint64(8, BigInt(ifdOffset), true);
+    view.setBigUint64(ifdOffset, BigInt(entries.length), true);
+  } else {
+    view.setUint16(2, 42, true); view.setUint32(4, ifdOffset, true);
+    view.setUint16(ifdOffset, entries.length, true);
+  }
 
   const writeValues = (entry: Entry, offset: number) => {
     entry.values.forEach((value, index) => {
@@ -117,13 +152,22 @@ function syntheticDng(options: FixtureOptions = {}) {
     });
   };
   entries.forEach((entry, index) => {
-    const at = 10 + index * 12;
-    view.setUint16(at, entry.tag, true); view.setUint16(at + 2, entry.type, true); view.setUint32(at + 4, entry.values.length, true);
+    const at = ifdOffset + countBytes + index * entryBytes;
+    view.setUint16(at, entry.tag, true); view.setUint16(at + 2, entry.type, true);
+    if (options.bigTiff) view.setBigUint64(at + 4, BigInt(entry.values.length), true);
+    else view.setUint32(at + 4, entry.values.length, true);
     const externalOffset = external.get(entry);
-    if (externalOffset === undefined) writeValues(entry, at + 8);
-    else { view.setUint32(at + 8, externalOffset, true); writeValues(entry, externalOffset); }
+    const valueAt = at + (options.bigTiff ? 12 : 8);
+    if (externalOffset === undefined) writeValues(entry, valueAt);
+    else {
+      if (options.bigTiff) view.setBigUint64(valueAt, BigInt(externalOffset), true);
+      else view.setUint32(valueAt, externalOffset, true);
+      writeValues(entry, externalOffset);
+    }
   });
-  view.setUint32(10 + entries.length * 12, 0, true);
+  const nextAt = ifdOffset + countBytes + entries.length * entryBytes;
+  if (options.bigTiff) view.setBigUint64(nextAt, BigInt(0), true);
+  else view.setUint32(nextAt, 0, true);
   new Uint8Array(output).set(pixelBytes, pixelsAt);
   return { output, sensor, width, height };
 }
@@ -218,6 +262,14 @@ test("DNG parser decodes uncompressed tiled CFA storage", () => {
   assert.deepEqual(Array.from(parseDng(fixture.output).sensorSamples), fixture.sensor);
 });
 
+test("BigTIFF DNG parser accepts 64-bit directory counts and offsets", () => {
+  const fixture = syntheticDng({ bits: 12, bigTiff: true });
+  const parsed = parseDng(fixture.output);
+  assert.equal(parsed.container, "bigtiff");
+  assert.deepEqual(Array.from(parsed.sensorSamples), fixture.sensor);
+  assert.equal(decodeDng(fixture.output, "fixture.dng").provenance.boundary, "bigtiff-uncompressed-bayer");
+});
+
 test("complete DNG develop returns linear float pixels and reproducible provenance", () => {
   const fixture = syntheticDng({ bits: 12 });
   const result = decodeDng(fixture.output, "fixture.dng", { workingSpace: "display-p3", highlightRecovery: 0 });
@@ -254,16 +306,16 @@ test("DNG develop sessions re-render settings while retaining immutable sensor c
   assert.equal(session.reset().settings.exposureEV, 0.5);
 });
 
-test("unsupported lossless-JPEG DNG reports a typed fallback reason", () => {
+test("lossless-JPEG DNG develops its CFA samples locally", () => {
   const fixture = syntheticDng({ compression: 7 });
-  assert.throws(
-    () => parseDng(fixture.output),
-    (error) => error instanceof RawDecodeError && error.code === "unsupported-compression" && /embedded preview/.test(error.message),
-  );
+  const parsed = parseDng(fixture.output);
+  assert.deepEqual(Array.from(parsed.sensorSamples), fixture.sensor);
+  assert.equal(parsed.metadata.compression, 7);
+  assert.equal(decodeDng(fixture.output, "compressed.dng").provenance.boundary, "tiff-lossless-jpeg-bayer");
 });
 
 test("RAW ingestion falls back to an embedded preview and preserves typed decode failure", () => {
-  const fixture = syntheticDng({ compression: 7 });
+  const fixture = syntheticDng({ compression: 34892 });
   const jpeg = new Uint8Array(1400).fill(9);
   jpeg.set([0xff, 0xd8], 0);
   jpeg.set([0xff, 0xd9], jpeg.length - 2);

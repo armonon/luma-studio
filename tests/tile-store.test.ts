@@ -116,3 +116,14 @@ test("canvas patches update only intersecting precision tiles", () => {
   assert.ok(surface.readPixel(16, 2)[1] > 0.99);
   assert.equal(surface.readPixel(17, 2)[3], 0);
 });
+
+test("native float tile editing round-trips extended working values", () => {
+  const surface = new PrecisionTileSurface(16, 16, "rgba32f", "linear-srgb", 16);
+  const values = surface.tileToWorkingFloat32("0:0");
+  values.set([3.25, -0.5, 0.125, 0.75], 0);
+  surface.writeWorkingFloat32Tile("0:0", values);
+  assert.deepEqual(surface.readPixel(0, 0), [3.25, -0.5, 0.125, 0.75]);
+  values.fill(0);
+  surface.writeWorkingFloat32Tile("0:0", values);
+  assert.equal(surface.stats().residentTiles, 0);
+});

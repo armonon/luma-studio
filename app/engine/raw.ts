@@ -50,9 +50,9 @@ export type RawIngestResult =
   | { kind: "embedded-preview"; preview: RawPreview; decodeFailure?: { code: string; message: string } };
 
 /**
- * Browser-safe RAW ingestion boundary. Uncompressed classic-TIFF Bayer DNG is
- * developed from sensor samples; other camera RAWs and compressed/unsupported
- * DNG variants fall back to a provenance-tagged embedded JPEG when available.
+ * Browser-safe RAW ingestion boundary. Classic TIFF and BigTIFF Bayer DNGs
+ * using uncompressed or lossless-JPEG CFA blocks are developed from sensor
+ * samples; other camera RAWs fall back to a tagged embedded JPEG when present.
  */
 export function ingestRaw(
   source: ArrayBuffer,

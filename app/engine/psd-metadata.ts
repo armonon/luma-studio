@@ -26,6 +26,8 @@ export type PhotoshopDocumentMetadata = {
   header: PhotoshopHeader;
   /** Complete source container retained for preservation metadata restoration after .luma reload. */
   originalSource?: Uint8Array;
+  /** Luma document settings at import time, excluding layers and the active selection. */
+  originalDocumentFingerprint?: string;
   /** ag-psd resources that it can decode and write back. */
   imageResources?: Psd["imageResources"];
   /** Embedded and linked smart-object payloads. Data is retained byte-for-byte. */
@@ -48,6 +50,12 @@ export type PhotoshopLayerMetadata = {
   originalTextFingerprint?: string;
   originalPathFingerprint?: string;
   originalEffectsFingerprint?: string;
+  /** Editable Luma-facing state at import time, excluding pixel and hierarchy data. */
+  originalStateFingerprint?: string;
+  originalSurfaceFingerprint?: string;
+  originalMaskFingerprint?: string;
+  originalParentSourceIndex?: number;
+  originalStackPosition?: number;
   preservation: "editable" | "descriptor-preserved" | "preview-only";
 };
 

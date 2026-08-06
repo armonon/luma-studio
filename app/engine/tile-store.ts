@@ -372,6 +372,32 @@ export class PrecisionTileSurface {
     }
   }
 
+  updateFromWorkingFloat32(
+    image: { width: number; height: number; data: Float32Array },
+    destX = 0,
+    destY = 0,
+  ) {
+    if (image.data.length !== image.width * image.height * 4) {
+      throw new Error("Working float image payload does not match its dimensions");
+    }
+    const affected = this.grid.tilesIntersecting({ x: destX, y: destY, width: image.width, height: image.height });
+    for (const address of affected) {
+      const values = this.tileToWorkingFloat32(address.key);
+      const left = Math.max(address.x, destX);
+      const top = Math.max(address.y, destY);
+      const right = Math.min(address.x + address.width, destX + image.width);
+      const bottom = Math.min(address.y + address.height, destY + image.height);
+      for (let y = top; y < bottom; y += 1) {
+        for (let x = left; x < right; x += 1) {
+          const sourceIndex = ((y - destY) * image.width + (x - destX)) * 4;
+          const targetIndex = ((y - address.y) * address.width + (x - address.x)) * 4;
+          values.set(image.data.subarray(sourceIndex, sourceIndex + 4), targetIndex);
+        }
+      }
+      this.writeWorkingFloat32Tile(address.key, values);
+    }
+  }
+
   readPixel(x: number, y: number): [number, number, number, number] {
     const address = this.grid.addressForPixel(x, y);
     if (!address) throw new Error(`Pixel out of bounds: ${x}:${y}`);
@@ -384,6 +410,26 @@ export class PrecisionTileSurface {
       readChannel(bytes, index + 2, this.format),
       readChannel(bytes, index + 3, this.format),
     ];
+  }
+
+  sampleBilinearWorking(x: number, y: number): [number, number, number, number] {
+    const clampedX = Math.max(0, Math.min(this.grid.width - 1, x));
+    const clampedY = Math.max(0, Math.min(this.grid.height - 1, y));
+    const x0 = Math.floor(clampedX);
+    const y0 = Math.floor(clampedY);
+    const x1 = Math.min(this.grid.width - 1, x0 + 1);
+    const y1 = Math.min(this.grid.height - 1, y0 + 1);
+    const tx = clampedX - x0;
+    const ty = clampedY - y0;
+    const a = this.readPixel(x0, y0);
+    const b = this.readPixel(x1, y0);
+    const c = this.readPixel(x0, y1);
+    const d = this.readPixel(x1, y1);
+    return a.map((value, channel) => {
+      const top = value * (1 - tx) + b[channel] * tx;
+      const bottom = c[channel] * (1 - tx) + d[channel] * tx;
+      return top * (1 - ty) + bottom * ty;
+    }) as [number, number, number, number];
   }
 
   writePixel(x: number, y: number, rgba: readonly [number, number, number, number]) {
@@ -435,6 +481,34 @@ export class PrecisionTileSurface {
       data[index + 3] = Math.round(clamp01(readChannel(bytes, index + 3, this.format)) * 255);
     }
     return { width: address.width, height: address.height, data };
+  }
+
+  /** Straight-alpha native working values for precision painting and filters. */
+  tileToWorkingFloat32(key: string) {
+    const address = this.grid.parseKey(key);
+    const output = new Float32Array(address.width * address.height * 4);
+    const bytes = this.store.read(key);
+    if (!bytes) return output;
+    for (let index = 0; index < output.length; index += 1) {
+      output[index] = readChannel(bytes, index, this.format);
+    }
+    return output;
+  }
+
+  writeWorkingFloat32Tile(key: string, values: Float32Array) {
+    const address = this.grid.parseKey(key);
+    const channels = address.width * address.height * 4;
+    if (values.length !== channels) {
+      throw new Error(`Tile ${key} expected ${channels} float channels, received ${values.length}`);
+    }
+    const bytes = new Uint8Array(this.grid.byteLength(address, this.format));
+    let hasCoverage = false;
+    for (let index = 0; index < channels; index += 1) {
+      writeChannel(bytes, index, values[index], this.format);
+      if (index % 4 === 3 && values[index] !== 0) hasCoverage = true;
+    }
+    if (hasCoverage) this.store.write(key, bytes);
+    else this.store.delete(key);
   }
 
   /** Float display-sRGB tile for RGBA16F GPU upload; unclipped values retain HDR and gamut excursions. */

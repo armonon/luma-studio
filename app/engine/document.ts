@@ -311,7 +311,7 @@ export type RawLayerSource = {
   original: Uint8Array;
   settings: RawDevelopSettings;
   decoder: "luma-dng-tiff-v1";
-  boundary: "classic-tiff-uncompressed-bayer";
+  boundary: "classic-tiff-uncompressed-bayer" | "bigtiff-uncompressed-bayer" | "tiff-lossless-jpeg-bayer";
   matrixSource: "forward-matrix-1" | "color-matrix-1" | "assumed-camera-rgb";
   sensor: {
     bitsPerSample: number;
@@ -499,7 +499,7 @@ export function createDocument(width: number, height: number): Document {
 
 export function createRasterLayer(
   name: string,
-  bitmap: HTMLCanvasElement,
+  bitmap?: HTMLCanvasElement,
 ): Layer {
   return {
     id: nextId("raster"),
@@ -809,20 +809,29 @@ export function ensureMask(layer: Layer, width: number, height: number) {
 export function drawLayerContent(
   ctx: CanvasRenderingContext2D,
   layer: Layer,
+  projection?: { a: number; b: number; c: number; d: number; e: number; f: number },
 ) {
   const { transform: t } = layer;
   const cos = Math.cos(t.rotation);
   const sin = Math.sin(t.rotation);
   ctx.save();
   // Rotate around the transformed origin
-  ctx.setTransform(
-    cos * t.sx,
-    sin * t.sx,
-    -sin * t.sy,
-    cos * t.sy,
-    t.tx,
-    t.ty,
-  );
+  const a = cos * t.sx;
+  const b = sin * t.sx;
+  const c = -sin * t.sy;
+  const d = cos * t.sy;
+  if (projection) {
+    ctx.setTransform(
+      projection.a * a + projection.c * b,
+      projection.b * a + projection.d * b,
+      projection.a * c + projection.c * d,
+      projection.b * c + projection.d * d,
+      projection.a * t.tx + projection.c * t.ty + projection.e,
+      projection.b * t.tx + projection.d * t.ty + projection.f,
+    );
+  } else {
+    ctx.setTransform(a, b, c, d, t.tx, t.ty);
+  }
   if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.bitmap) {
     ctx.drawImage(layer.bitmap, 0, 0);
   } else if (layer.kind === "text" && layer.text) {

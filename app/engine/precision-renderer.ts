@@ -60,16 +60,35 @@ function previewTile(surface: PrecisionTileSurface, key: string) {
 }
 
 /** Draw raster masters tile-by-tile; vector layers retain their native path. */
-export function drawLayerContentManaged(ctx: CanvasRenderingContext2D, layer: Layer) {
+export function drawLayerContentManaged(
+  ctx: CanvasRenderingContext2D,
+  layer: Layer,
+  projection?: { a: number; b: number; c: number; d: number; e: number; f: number },
+) {
   if ((layer.kind !== "raster" && layer.kind !== "smart-object") || !layer.surface) {
-    drawLayerContent(ctx, layer);
+    drawLayerContent(ctx, layer, projection);
     return;
   }
   const t = layer.transform;
   const cos = Math.cos(t.rotation);
   const sin = Math.sin(t.rotation);
   ctx.save();
-  ctx.setTransform(cos * t.sx, sin * t.sx, -sin * t.sy, cos * t.sy, t.tx, t.ty);
+  const a = cos * t.sx;
+  const b = sin * t.sx;
+  const c = -sin * t.sy;
+  const d = cos * t.sy;
+  if (projection) {
+    ctx.setTransform(
+      projection.a * a + projection.c * b,
+      projection.b * a + projection.d * b,
+      projection.a * c + projection.c * d,
+      projection.b * c + projection.d * d,
+      projection.a * t.tx + projection.c * t.ty + projection.e,
+      projection.b * t.tx + projection.d * t.ty + projection.f,
+    );
+  } else {
+    ctx.setTransform(a, b, c, d, t.tx, t.ty);
+  }
   for (const { key } of layer.surface.store.entries()) {
     const address = layer.surface.grid.parseKey(key);
     ctx.drawImage(previewTile(layer.surface, key), address.x, address.y);
