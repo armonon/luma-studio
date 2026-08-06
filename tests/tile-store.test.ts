@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SparseTileStore, TileGrid } from "../app/engine/tile-store.ts";
+import {
+  PrecisionTileSurface,
+  SparseTileStore,
+  TileGrid,
+  float16ToFloat32,
+  float32ToFloat16,
+} from "../app/engine/tile-store.ts";
 
 test("tile geometry covers edge tiles without exceeding document bounds", () => {
   const grid = new TileGrid(600, 300, 256);
@@ -65,4 +71,42 @@ test("sparse store rejects malformed keys and incorrect payload sizes", () => {
   assert.throws(() => store.read("bad"), /Invalid tile key/);
   assert.throws(() => store.write("0:0", new Uint8Array(3)), /expected 1024 bytes/);
   assert.throws(() => store.write("9:9", new Uint8Array(1024)), /out of bounds/);
+});
+
+test("half-float encoding preserves HDR, negative, and fractional values", () => {
+  for (const value of [-4, -0.125, 0, 0.1, 1, 1.5, 128, 65504]) {
+    const restored = float16ToFloat32(float32ToFloat16(value));
+    assert.ok(Math.abs(restored - value) <= Math.max(0.001, Math.abs(value) * 0.001));
+  }
+});
+
+test("precision surfaces retain values outside the canvas gamut and convert formats", () => {
+  const surface = new PrecisionTileSurface(4, 4, "rgba32f", "display-p3", 16);
+  surface.writePixel(2, 1, [1.75, -0.2, 0.4, 0.8]);
+  assert.deepEqual(surface.readPixel(0, 0), [0, 0, 0, 0]);
+  assert.deepEqual(surface.readPixel(2, 1), [1.75, -0.20000000298023224, 0.4000000059604645, 0.800000011920929]);
+
+  const half = surface.convert("rgba16f", "srgb");
+  const pixel = half.readPixel(2, 1);
+  assert.ok(pixel[0] > 1);
+  assert.ok(pixel[1] < 0);
+  assert.ok(Math.abs(pixel[3] - 0.8) < 0.002);
+  assert.equal(half.stats().residentTiles, 1);
+});
+
+test("canvas patches update only intersecting precision tiles", () => {
+  const surface = new PrecisionTileSurface(32, 16, "rgba16f", "srgb", 16);
+  const patch = {
+    width: 2,
+    height: 2,
+    data: new Uint8ClampedArray([
+      255, 0, 0, 255, 0, 255, 0, 255,
+      0, 0, 255, 255, 255, 255, 255, 128,
+    ]),
+  };
+  surface.updateFromImageData(patch, 15, 2);
+  assert.equal(surface.stats().residentTiles, 2);
+  assert.ok(surface.readPixel(15, 2)[0] > 0.99);
+  assert.ok(surface.readPixel(16, 2)[1] > 0.99);
+  assert.equal(surface.readPixel(17, 2)[3], 0);
 });

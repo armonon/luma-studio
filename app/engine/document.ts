@@ -1,3 +1,5 @@
+import type { PrecisionTileSurface } from "./tile-store";
+
 export type BlendMode =
   | "source-over"
   | "dissolve"
@@ -309,6 +311,8 @@ export type Layer = {
   ai?: AiProvenance;
   effects?: LayerEffect[];
   bitmap?: HTMLCanvasElement;
+  /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
+  surface?: PrecisionTileSurface;
   mask?: HTMLCanvasElement;
   tone?: ToneParams;
   curves?: Curves;

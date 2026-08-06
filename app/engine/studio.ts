@@ -68,13 +68,14 @@ import {
 import { Action, ActionRecorder, ActionStep } from "./actions";
 import { exportPsd, importPsd } from "./psd";
 import { OperationHistory } from "./operation-history";
-import { DEFAULT_TILE_SIZE, TileGrid } from "./tile-store";
+import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
 
 type SubscribeFn = () => void;
 
 export type LayerSnapshot = {
   layerId: string;
   bitmap?: HTMLCanvasElement;
+  surface?: PrecisionTileSurface;
   mask?: HTMLCanvasElement;
   tone?: ToneParams;
   curves?: Curves;
@@ -245,12 +246,23 @@ export class Studio {
       tiles += grid.totalTiles;
       workingSetBytes += grid.estimatedBytes("rgba8");
     }
+    let precisionTiles = 0;
+    let precisionBytes = 0;
+    for (const layer of this.doc.layers) {
+      if (!layer.surface) continue;
+      const stats = layer.surface.stats();
+      precisionTiles += stats.residentTiles;
+      precisionBytes += stats.residentBytes;
+    }
+    workingSetBytes += precisionBytes;
     const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     return {
       renderer: this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
       tileSize: DEFAULT_TILE_SIZE,
       tiles,
+      precisionTiles,
+      precisionBytes,
       surfaces: surfaces.length,
       workingSetBytes,
       layers: this.doc.layers.length,
@@ -314,6 +326,7 @@ export class Studio {
       const layer = this.doc.layers.find((l) => l.id === snap.layerId);
       if (!layer) continue;
       if (snap.bitmap) { layer.bitmap = cloneCanvas(snap.bitmap); bumpBitmapVersion(layer.bitmap); }
+      if (snap.surface) layer.surface = snap.surface.clone();
       if (snap.mask) { layer.mask = cloneCanvas(snap.mask); bumpBitmapVersion(layer.mask); }
       if (snap.tone) layer.tone = { ...snap.tone };
       if (snap.curves) layer.curves = cloneCurves(snap.curves);
@@ -340,6 +353,7 @@ export class Studio {
       if (snap.transform) layer.transform = { ...snap.transform };
       if (snap.text) layer.text = { ...snap.text };
       if (snap.shape) layer.shape = { ...snap.shape };
+      if (snap.bitmap && !snap.surface) this.syncLayerSurface(layer);
     }
   }
 
@@ -350,6 +364,12 @@ export class Studio {
       if (!canvas) continue;
       canvas.getContext("2d")!.putImageData(patch[side], patch.x, patch.y);
       bumpBitmapVersion(canvas);
+      if (patch.target === "bitmap" && layer) this.syncLayerSurface(layer, {
+        x: patch.x,
+        y: patch.y,
+        width: patch[side].width,
+        height: patch[side].height,
+      });
     }
   }
 
@@ -399,6 +419,7 @@ export class Studio {
   }
 
   private installDocument(doc: Document, name: string) {
+    this.ensureDocumentSurfaces(doc);
     this.saveActiveSession();
     const current = this.sessions.find((session) => session.id === this.activeSessionId);
     if (current && current.doc.layers.length === 0) {
@@ -507,6 +528,7 @@ export class Studio {
         const bitmap = newCanvas(width, height);
         bitmap.getContext("2d")!.drawImage(layer.bitmap, 0, 0, width, height);
         layer.bitmap = bitmap;
+        layer.surface = this.surfaceFromCanvas(bitmap);
       } else {
         layer.transform = {
           ...layer.transform,
@@ -549,6 +571,99 @@ export class Studio {
     return true;
   }
 
+  setDocumentPrecision(
+    bitDepth: Document["bitDepth"],
+    colorSpace: Document["colorSpace"],
+  ) {
+    if (![8, 16, 32].includes(bitDepth) || !["srgb", "display-p3", "linear-srgb"].includes(colorSpace)) {
+      return false;
+    }
+    if (bitDepth === this.doc.bitDepth && colorSpace === this.doc.colorSpace) return false;
+    const before = cloneDocument(this.doc);
+    const format = pixelFormatForDepth(bitDepth);
+    for (const layer of this.doc.layers) {
+      if (!layer.bitmap) continue;
+      layer.surface = layer.surface
+        ? layer.surface.convert(format, colorSpace)
+        : this.surfaceFromCanvas(layer.bitmap, format, colorSpace);
+    }
+    this.doc.bitDepth = bitDepth;
+    this.doc.colorSpace = colorSpace;
+    const after = cloneDocument(this.doc);
+    this.commit({
+      label: `${bitDepth}-bit ${colorSpace.toUpperCase()} conversion`,
+      before: [],
+      after: [],
+      documentBefore: before,
+      documentAfter: after,
+    });
+    this.requestRender();
+    return true;
+  }
+
+  private surfaceFromCanvas(
+    canvas: HTMLCanvasElement,
+    format = pixelFormatForDepth(this.doc.bitDepth),
+    colorSpace = this.doc.colorSpace,
+  ) {
+    const surface = new PrecisionTileSurface(canvas.width, canvas.height, format, colorSpace);
+    const context = canvas.getContext("2d")!;
+    for (let row = 0; row < surface.grid.rows; row += 1) {
+      for (let column = 0; column < surface.grid.columns; column += 1) {
+        const tile = surface.grid.address(column, row);
+        surface.updateFromImageData(context.getImageData(tile.x, tile.y, tile.width, tile.height), tile.x, tile.y);
+      }
+    }
+    return surface;
+  }
+
+  private syncLayerSurface(layer: Layer, rect?: PixelRect) {
+    const canvas = layer.bitmap;
+    if (!canvas) return;
+    const expectedFormat = pixelFormatForDepth(this.doc.bitDepth);
+    if (!layer.surface || layer.surface.grid.width !== canvas.width || layer.surface.grid.height !== canvas.height ||
+        layer.surface.format !== expectedFormat || layer.surface.colorSpace !== this.doc.colorSpace) {
+      layer.surface = this.surfaceFromCanvas(canvas);
+      return;
+    }
+    if (!rect) {
+      const context = canvas.getContext("2d")!;
+      for (let row = 0; row < layer.surface.grid.rows; row += 1) {
+        for (let column = 0; column < layer.surface.grid.columns; column += 1) {
+          const tile = layer.surface.grid.address(column, row);
+          layer.surface.updateFromImageData(context.getImageData(tile.x, tile.y, tile.width, tile.height), tile.x, tile.y);
+        }
+      }
+      return;
+    }
+    const x = Math.max(0, Math.floor(rect.x));
+    const y = Math.max(0, Math.floor(rect.y));
+    const right = Math.min(canvas.width, Math.ceil(rect.x + rect.width));
+    const bottom = Math.min(canvas.height, Math.ceil(rect.y + rect.height));
+    if (right <= x || bottom <= y) return;
+    const image = canvas.getContext("2d")!.getImageData(x, y, right - x, bottom - y);
+    layer.surface.updateFromImageData(image, x, y);
+  }
+
+  private ensureDocumentSurfaces(doc: Document) {
+    const format = pixelFormatForDepth(doc.bitDepth);
+    for (const layer of doc.layers) {
+      if (!layer.bitmap) continue;
+      if (layer.surface && layer.surface.grid.width === layer.bitmap.width &&
+          layer.surface.grid.height === layer.bitmap.height && layer.surface.format === format &&
+          layer.surface.colorSpace === doc.colorSpace) continue;
+      const surface = new PrecisionTileSurface(layer.bitmap.width, layer.bitmap.height, format, doc.colorSpace);
+      const context = layer.bitmap.getContext("2d")!;
+      for (let row = 0; row < surface.grid.rows; row += 1) {
+        for (let column = 0; column < surface.grid.columns; column += 1) {
+          const tile = surface.grid.address(column, row);
+          surface.updateFromImageData(context.getImageData(tile.x, tile.y, tile.width, tile.height), tile.x, tile.y);
+        }
+      }
+      layer.surface = surface;
+    }
+  }
+
   registerPlugin(plugin: LumaPlugin) {
     if (!plugin.id || this.plugins.has(plugin.id)) throw new Error(`Plugin already registered: ${plugin.id}`);
     const dispose = plugin.activate(this) || undefined;
@@ -577,6 +692,7 @@ export class Studio {
     const bitmap = newCanvas(this.doc.width, this.doc.height);
     bitmap.getContext("2d")!.drawImage(img, 0, 0);
     const layer = createRasterLayer(name, bitmap);
+    layer.surface = this.surfaceFromCanvas(bitmap);
     this.commitStructural(`${name} imported`, () => this.doc.layers.unshift(layer));
     this.requestRender();
     return layer;
@@ -699,6 +815,7 @@ export class Studio {
   addBlankRaster(name = "Layer") {
     const bitmap = newCanvas(this.doc.width, this.doc.height);
     const layer = createRasterLayer(name, bitmap);
+    layer.surface = this.surfaceFromCanvas(bitmap);
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
     this.requestRender();
     return layer;
@@ -1121,9 +1238,16 @@ export class Studio {
     for (const tile of this.strokeTiles.values()) {
       const canvas = tile.target === "bitmap" ? layer.bitmap : layer.mask;
       if (!canvas) continue;
+      const after = canvas.getContext("2d")!.getImageData(tile.x, tile.y, tile.before.width, tile.before.height);
       patches.push({
         ...tile,
-        after: canvas.getContext("2d")!.getImageData(tile.x, tile.y, tile.before.width, tile.before.height),
+        after,
+      });
+      if (tile.target === "bitmap") this.syncLayerSurface(layer, {
+        x: tile.x,
+        y: tile.y,
+        width: after.width,
+        height: after.height,
       });
     }
     this.commit({ label, before: [], after: [], pixelPatches: patches });
@@ -1183,6 +1307,7 @@ export class Studio {
     }
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
     this.commit({ label: `Filled with ${color}`, before, after: [snapshotLayer(layer)] });
     this.actions.push({ op: "fill", color });
     this.requestRender();
@@ -1203,6 +1328,7 @@ export class Studio {
     }
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
     this.commit({ label: "Pixels cleared", before, after: [snapshotLayer(layer)] });
     this.actions.push({ op: "clear" });
     this.requestRender();
@@ -1317,6 +1443,7 @@ export class Studio {
     }
     const result = await blobToCanvas(await response.blob(), this.doc.width, this.doc.height);
     const layer = createRasterLayer(`AI · ${operation}`, result);
+    layer.surface = this.surfaceFromCanvas(result);
     layer.ai = {
       id: nextId("ai"),
       operation,
@@ -1495,6 +1622,7 @@ export class Studio {
       this.actions.push({ op: "hue", degrees: d });
     }
     if (layer.bitmap) bumpBitmapVersion(layer.bitmap);
+    this.syncLayerSurface(layer);
     this.commit({ label: `Filter: ${kind}`, before, after: [snapshotLayer(layer)] });
     this.requestRender();
   }
@@ -1599,6 +1727,7 @@ export class Studio {
 function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
+    surface: layer.surface?.clone(),
     blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
     blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : undefined,
     transform: { ...layer.transform },
@@ -1654,6 +1783,7 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
   return {
     layerId: layer.id,
     bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,
+    surface: layer.surface?.clone(),
     mask: layer.mask ? cloneCanvas(layer.mask) : undefined,
     tone: layer.tone ? { ...layer.tone } : undefined,
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
@@ -1681,6 +1811,10 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
     } : undefined,
     effects: layer.effects ? cloneEffects(layer.effects) : undefined,
   };
+}
+
+function pixelFormatForDepth(bitDepth: Document["bitDepth"]): PixelFormat {
+  return bitDepth === 32 ? "rgba32f" : bitDepth === 16 ? "rgba16f" : "rgba8";
 }
 
 function cloneFilters(filters: SmartFilter[]): SmartFilter[] {

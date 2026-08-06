@@ -4,6 +4,10 @@ export type BrushParams = {
   opacity: number; // 0..1
   color: string; // css color for raster paint
   spacing?: number; // fraction of size, default 0.15
+  roundness?: number; // 0.05..1
+  angle?: number; // degrees
+  pressureSize?: boolean;
+  pressureOpacity?: boolean;
   mode: "paint" | "erase" | "mask-add" | "mask-remove";
 };
 
@@ -21,11 +25,15 @@ function stamp(
   pressure: number,
   params: BrushParams,
 ) {
-  const r = (params.size * 0.5) * (0.35 + 0.65 * pressure);
+  const r = (params.size * 0.5) * (params.pressureSize === false ? 1 : 0.35 + 0.65 * pressure);
   if (r < 0.5) return;
-  const a = params.opacity * (0.5 + 0.5 * pressure);
+  const a = params.opacity * (params.pressureOpacity === false ? 1 : 0.5 + 0.5 * pressure);
   const inner = Math.max(0, Math.min(1, params.hardness));
-  const grad = ctx.createRadialGradient(x, y, r * inner, x, y, r);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((params.angle ?? 0) * Math.PI / 180);
+  ctx.scale(1, Math.max(0.05, Math.min(1, params.roundness ?? 1)));
+  const grad = ctx.createRadialGradient(0, 0, r * inner, 0, 0, r);
 
   if (params.mode === "erase" || params.mode === "mask-remove") {
     grad.addColorStop(0, `rgba(0,0,0,${a})`);
@@ -42,8 +50,9 @@ function stamp(
   }
   ctx.fillStyle = grad;
   ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.arc(0, 0, r, 0, Math.PI * 2);
   ctx.fill();
+  ctx.restore();
 }
 
 // Convert a css color to rgba(...) with the given alpha, without regex hell.

@@ -4,6 +4,7 @@ import JSZip from "jszip";
 import { createDocument, createRasterLayer, newCanvas } from "../app/engine/document.ts";
 import { OperationHistory } from "../app/engine/operation-history.ts";
 import { decodeLumaProject, encodeLumaProject, LUMA_PROJECT_VERSION } from "../app/engine/project.ts";
+import { PrecisionTileSurface } from "../app/engine/tile-store.ts";
 import type { HistoryEntry } from "../app/engine/studio.ts";
 
 class TestImageData {
@@ -108,13 +109,16 @@ test.after(() => {
   globalThis.createImageBitmap = originalCreateImageBitmap;
 });
 
-test("v2 projects round-trip stable ids, pixels, and nonlinear history", async () => {
+test("v3 projects round-trip stable ids, precision tiles, pixels, and nonlinear history", async () => {
   const doc = createDocument(4, 4);
+  doc.bitDepth = 16;
   const bitmap = newCanvas(4, 4);
   const pixels = new TestImageData(4, 4);
   pixels.data.set([18, 52, 86, 255], 0);
   bitmap.getContext("2d")!.putImageData(pixels as unknown as ImageData, 0, 0);
   const layer = createRasterLayer("Source", bitmap);
+  layer.surface = new PrecisionTileSurface(4, 4, "rgba16f", "srgb", 16);
+  layer.surface.writePixel(0, 0, [1.5, 0.25, -0.125, 1]);
   layer.blend = "multiply";
   layer.blendStack = [
     { id: "blend-primary", mode: "multiply", opacity: 0.72, enabled: true },
@@ -154,13 +158,14 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
   const warm = graph.commit("Warm", {
     label: "Warm",
-    before: [{ layerId: layer.id, opacity: 1, fillOpacity: null, blendStack: null, blendIf: null }],
+    before: [{ layerId: layer.id, opacity: 1, fillOpacity: null, blendStack: null, blendIf: null, surface: layer.surface.clone() }],
     after: [{
       layerId: layer.id,
       opacity: 0.6,
       fillOpacity: layer.fillOpacity,
       blendStack: layer.blendStack.map((pass) => ({ ...pass })),
       blendIf: structuredClone(layer.blendIf),
+      surface: layer.surface.clone(),
     }],
     selectionBefore: null,
     selectionAfter: { mask: selectionMask, bounds: { x: 1, y: 1, w: 2, h: 2 } },
@@ -186,9 +191,11 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   layer.opacity = 0.8;
 
   const blob = await encodeLumaProject(doc, [], "History fixture", graph.snapshot());
+  const encodedZip = await JSZip.loadAsync(await blob.arrayBuffer());
+  assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/precision/") && !path.endsWith("/")).length, 1);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
-  assert.equal(LUMA_PROJECT_VERSION, 2);
+  assert.equal(LUMA_PROJECT_VERSION, 3);
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
@@ -200,6 +207,10 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.equal(decoded.doc.layers[0].ai?.inputSha256, "a".repeat(64));
   assert.equal(decoded.doc.guides[0].id, "guide-z");
   assert.equal(decoded.doc.layers[0].bitmap!.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 18);
+  const hdrPixel = decoded.doc.layers[0].surface!.readPixel(0, 0);
+  assert.ok(Math.abs(hdrPixel[0] - 1.5) < 0.002);
+  assert.ok(Math.abs(hdrPixel[1] - 0.25) < 0.002);
+  assert.ok(Math.abs(hdrPixel[2] + 0.125) < 0.002);
   assert.equal(decoded.history?.summary().branchPoints, 1);
   assert.equal(decoded.history?.summary().operations, 2);
 
@@ -210,6 +221,7 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.deepEqual(restoredWarm.redo[0].value?.after[0].blendStack, layer.blendStack);
   assert.equal(restoredWarm.redo[0].value?.after[0].fillOpacity, 0.64);
   assert.deepEqual(restoredWarm.redo[0].value?.after[0].blendIf, layer.blendIf);
+  assert.ok(Math.abs(restoredWarm.redo[0].value!.after[0].surface!.readPixel(0, 0)[0] - 1.5) < 0.002);
   const restoredCool = decoded.history!.tree().find((node) => node.label === "Cool")!;
   decoded.history!.checkout(restoredCool.id);
   const coolPayload = decoded.history!.lineage().at(-1)!.value!;

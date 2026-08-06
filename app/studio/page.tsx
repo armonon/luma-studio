@@ -547,6 +547,11 @@ export default function SpatialStudio() {
   const [brushSize, setBrushSize] = useState(48);
   const [hardness, setHardness] = useState(0.7);
   const [brushOpacity, setBrushOpacity] = useState(0.9);
+  const [brushSpacing, setBrushSpacing] = useState(0.12);
+  const [brushRoundness, setBrushRoundness] = useState(1);
+  const [brushAngle, setBrushAngle] = useState(0);
+  const [pressureSize, setPressureSize] = useState(true);
+  const [pressureOpacity, setPressureOpacity] = useState(true);
   const [brushColor, setBrushColor] = useState("#ffffff");
   const [feather, setFeather] = useState(0);
   const [wandTolerance, setWandTolerance] = useState(24);
@@ -685,6 +690,11 @@ export default function SpatialStudio() {
     size: brushSize,
     hardness,
     opacity: brushOpacity,
+    spacing: brushSpacing,
+    roundness: brushRoundness,
+    angle: brushAngle,
+    pressureSize,
+    pressureOpacity,
     color: brushColor,
     mode: currentBrushMode(),
   });
@@ -1624,9 +1634,9 @@ export default function SpatialStudio() {
                   />
                 ))}
                 <div className="canvas-status">
-                  <span title={engineState ? `${engineState.surfaces} pixel surfaces · ${engineState.tiles} addressable tiles · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
+                  <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.tiles} addressable preview tiles · ${engineState.precisionTiles} resident precision tiles · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
                     {doc
-                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${useGL ? "GPU RGBA16F" : "CPU 8-bit"} · ${engineState?.tiles ?? 0} tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master · ${useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
                       : "Loading…"}
                   </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
@@ -1774,7 +1784,7 @@ export default function SpatialStudio() {
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Document</strong><small>{doc?.resolution.x ?? 72} ppi · {doc?.colorSpace ?? "sRGB"}</small></header>
+              <header><strong>Document</strong><small>{doc?.resolution.x ?? 72} ppi · {doc?.bitDepth ?? 8}-bit · {doc?.colorSpace ?? "sRGB"}</small></header>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 5, padding: "8px 10px" }}>
                 <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
                   <span>Width px</span>
@@ -1789,6 +1799,42 @@ export default function SpatialStudio() {
                   const height = Number(resizeHeightRef.current?.value);
                   if (studio?.resizeDocument(width, height)) notify(`Resized to ${Math.round(width)}×${Math.round(height)}`);
                 }} style={{ alignSelf: "end" }}>Resize</button>
+              </div>
+              <div style={{ display: "grid", gap: 7, padding: "0 10px 10px" }}>
+                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
+                  <span>Color space</span>
+                  <select
+                    value={doc?.colorSpace ?? "srgb"}
+                    onChange={(event) => {
+                      if (!studio || !doc) return;
+                      const colorSpace = event.target.value as typeof doc.colorSpace;
+                      if (studio.setDocumentPrecision(doc.bitDepth, colorSpace)) notify(`Converted to ${colorSpace.toUpperCase()}`);
+                    }}
+                    aria-label="Document color space"
+                  >
+                    <option value="srgb">sRGB</option>
+                    <option value="display-p3">Display P3</option>
+                    <option value="linear-srgb">Linear sRGB</option>
+                  </select>
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "74px repeat(3, 1fr)", gap: 5, alignItems: "center", fontSize: 10 }}>
+                  <span>Bit depth</span>
+                  {([8, 16, 32] as const).map((depth) => (
+                    <button
+                      key={depth}
+                      type="button"
+                      className={doc?.bitDepth === depth ? "active" : ""}
+                      onClick={() => {
+                        if (!studio || !doc) return;
+                        if (studio.setDocumentPrecision(depth, doc.colorSpace)) notify(`Converted to ${depth}-bit ${depth === 8 ? "integer" : "float"}`);
+                      }}
+                      aria-pressed={doc?.bitDepth === depth}
+                    >{depth}{depth > 8 ? "f" : ""}</button>
+                  ))}
+                </div>
+                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
+                  Linear-light tiled master · {engineState?.precisionTiles ?? 0} resident tiles · {formatBytes(engineState?.precisionBytes ?? 0)}
+                </small>
               </div>
             </section>
 
@@ -1939,6 +1985,13 @@ export default function SpatialStudio() {
                   <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
                   <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                  <label><span>Spacing</span><input type="range" min="1" max="100" value={Math.round(brushSpacing * 100)} onChange={(e) => setBrushSpacing(Number(e.target.value) / 100)} /><output>{Math.round(brushSpacing * 100)}%</output></label>
+                  <label><span>Roundness</span><input type="range" min="5" max="100" value={Math.round(brushRoundness * 100)} onChange={(e) => setBrushRoundness(Number(e.target.value) / 100)} /><output>{Math.round(brushRoundness * 100)}%</output></label>
+                  <label><span>Angle</span><input type="range" min="-180" max="180" value={brushAngle} onChange={(e) => setBrushAngle(Number(e.target.value))} /><output>{brushAngle}°</output></label>
+                </div>
+                <div className="mask-segmented" style={{ paddingBottom: 9 }}>
+                  <button className={pressureSize ? "active" : ""} onClick={() => setPressureSize((value) => !value)}>Pressure size</button>
+                  <button className={pressureOpacity ? "active" : ""} onClick={() => setPressureOpacity((value) => !value)}>Pressure opacity</button>
                 </div>
               </section>
             )}

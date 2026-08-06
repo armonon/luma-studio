@@ -19,13 +19,25 @@ import type {
   LayerSnapshot,
   PixelPatch,
 } from "./studio";
+import { PixelFormat, PrecisionTileSurface } from "./tile-store";
+import type { WorkingColorSpace } from "./color";
 
-export const LUMA_PROJECT_VERSION = 2 as const;
-const SUPPORTED_PROJECT_VERSIONS = new Set([1, LUMA_PROJECT_VERSION]);
+export const LUMA_PROJECT_VERSION = 3 as const;
+const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, LUMA_PROJECT_VERSION]);
 const RESTORED_HISTORY_LIMIT = 80;
 
-type SerializedLayer = Omit<Layer, "bitmap" | "mask"> & {
+type SerializedPrecisionSurface = {
+  width: number;
+  height: number;
+  format: PixelFormat;
+  colorSpace: WorkingColorSpace;
+  tileSize: number;
+  tiles: Array<{ key: string; asset: string }>;
+};
+
+type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask"> & {
   bitmapAsset?: string;
+  surface?: SerializedPrecisionSurface;
   maskAsset?: string;
 };
 
@@ -34,8 +46,9 @@ type SerializedDocument = Omit<Document, "layers" | "selection"> & {
   selection?: { asset: string; bounds: Selection["bounds"] };
 };
 
-type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "mask"> & {
+type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask"> & {
   bitmapAsset?: string;
+  surface?: SerializedPrecisionSurface;
   maskAsset?: string;
 };
 
@@ -69,7 +82,7 @@ type SerializedOperationHistory = Omit<OperationHistorySnapshot<HistoryEntry>, "
 
 type ProjectManifest = {
   format: "luma-project";
-  version: 1 | typeof LUMA_PROJECT_VERSION;
+  version: 1 | 2 | typeof LUMA_PROJECT_VERSION;
   name: string;
   savedAt: string;
   document: SerializedDocument;
@@ -87,7 +100,9 @@ export type DecodedProject = {
 type EncodeContext = {
   zip: JSZip;
   assets: WeakMap<HTMLCanvasElement, string>;
+  precisionAssets: Map<string, string>;
   nextAsset: number;
+  nextPrecisionAsset: number;
 };
 
 function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -140,11 +155,72 @@ async function readCanvasAsset(zip: JSZip, asset: string) {
   return blobCanvas(await file.async("blob"));
 }
 
+async function serializePrecisionSurface(
+  surface: PrecisionTileSurface,
+  context: EncodeContext,
+): Promise<SerializedPrecisionSurface> {
+  const tiles: SerializedPrecisionSurface["tiles"] = [];
+  for (const { key, data } of surface.store.entries()) {
+    const digest = await digestBytes(data);
+    let asset = context.precisionAssets.get(digest);
+    if (!asset) {
+      context.nextPrecisionAsset += 1;
+      asset = `assets/precision/${context.nextPrecisionAsset.toString().padStart(6, "0")}-${digest.slice(0, 12)}.bin`;
+      context.zip.file(asset, data);
+      context.precisionAssets.set(digest, asset);
+    }
+    tiles.push({ key, asset });
+  }
+  return {
+    width: surface.grid.width,
+    height: surface.grid.height,
+    format: surface.format,
+    colorSpace: surface.colorSpace,
+    tileSize: surface.grid.tileSize,
+    tiles,
+  };
+}
+
+async function digestBytes(data: Uint8Array) {
+  if (globalThis.crypto?.subtle) {
+    const source = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", source);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  let hash = 2166136261;
+  for (const byte of data) hash = Math.imul(hash ^ byte, 16777619);
+  return `${data.byteLength.toString(16)}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+async function deserializePrecisionSurface(source: SerializedPrecisionSurface, zip: JSZip) {
+  if (!source || !Number.isInteger(source.width) || !Number.isInteger(source.height) ||
+      !["rgba8", "rgba16f", "rgba32f"].includes(source.format) ||
+      !["srgb", "display-p3", "linear-srgb"].includes(source.colorSpace) || !Array.isArray(source.tiles)) {
+    throw new Error("Invalid precision surface");
+  }
+  const tiles: Array<{ key: string; data: Uint8Array }> = [];
+  for (const tile of source.tiles) {
+    if (!tile.asset.startsWith("assets/precision/")) throw new Error(`Invalid precision asset: ${tile.asset}`);
+    const file = zip.file(tile.asset);
+    if (!file) throw new Error(`Missing precision asset: ${tile.asset}`);
+    tiles.push({ key: tile.key, data: await file.async("uint8array") });
+  }
+  return PrecisionTileSurface.fromTiles(
+    source.width,
+    source.height,
+    source.format,
+    source.colorSpace,
+    source.tileSize,
+    tiles,
+  );
+}
+
 async function serializeLayer(layer: Layer, context: EncodeContext): Promise<SerializedLayer> {
-  const { bitmap, mask, ...metadata } = layer;
+  const { bitmap, surface, mask, ...metadata } = layer;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
+    surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
   };
 }
@@ -155,7 +231,7 @@ async function deserializeLayer(
   preserveId: boolean,
   idMap?: Map<string, string>,
 ): Promise<Layer> {
-  const { bitmapAsset, maskAsset, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, ...metadata } = source;
   const id = preserveId ? metadata.id : nextId(metadata.kind);
   if (preserveId) reserveId(id);
   else idMap?.set(metadata.id, id);
@@ -165,6 +241,7 @@ async function deserializeLayer(
     transform: { ...metadata.transform },
   };
   if (bitmapAsset) layer.bitmap = await readCanvasAsset(zip, bitmapAsset);
+  if (surface) layer.surface = await deserializePrecisionSurface(surface, zip);
   if (maskAsset) layer.mask = await readCanvasAsset(zip, maskAsset);
   return layer;
 }
@@ -230,10 +307,11 @@ async function serializeLayerSnapshot(
   snapshot: LayerSnapshot,
   context: EncodeContext,
 ): Promise<SerializedLayerSnapshot> {
-  const { bitmap, mask, ...metadata } = snapshot;
+  const { bitmap, surface, mask, ...metadata } = snapshot;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
+    surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
   };
 }
@@ -242,10 +320,11 @@ async function deserializeLayerSnapshot(
   source: SerializedLayerSnapshot,
   zip: JSZip,
 ): Promise<LayerSnapshot> {
-  const { bitmapAsset, maskAsset, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, ...metadata } = source;
   return {
     ...metadata,
     bitmap: bitmapAsset ? await readCanvasAsset(zip, bitmapAsset) : undefined,
+    surface: surface ? await deserializePrecisionSurface(surface, zip) : undefined,
     mask: maskAsset ? await readCanvasAsset(zip, maskAsset) : undefined,
   };
 }
@@ -405,7 +484,9 @@ export async function encodeLumaProject(
   const context: EncodeContext = {
     zip,
     assets: new WeakMap(),
+    precisionAssets: new Map(),
     nextAsset: 0,
+    nextPrecisionAsset: 0,
   };
   const manifest: ProjectManifest = {
     format: "luma-project",
