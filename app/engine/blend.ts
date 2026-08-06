@@ -1,4 +1,4 @@
-import { BlendMode, BlendPass } from "./document";
+import { BlendIf, BlendIfChannel, BlendIfRange, BlendMode, BlendPass } from "./document";
 
 const NATIVE_CANVAS_MODES: Partial<Record<BlendMode, GlobalCompositeOperation>> = {
   "source-over": "source-over",
@@ -24,6 +24,45 @@ type Rgb = readonly [number, number, number];
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 const luminosity = (color: Rgb) => 0.3 * color[0] + 0.59 * color[1] + 0.11 * color[2];
 const saturation = (color: Rgb) => Math.max(...color) - Math.min(...color);
+
+export function blendIfFactor(value: number, range: BlendIfRange) {
+  const v = clamp01(value);
+  if (v < range.black || v > range.white) return 0;
+  if (v < range.blackFeather) {
+    const span = range.blackFeather - range.black;
+    return span > 0 ? (v - range.black) / span : 1;
+  }
+  if (v <= range.whiteFeather) return 1;
+  const span = range.white - range.whiteFeather;
+  return span > 0 ? (range.white - v) / span : 1;
+}
+
+function channelValue(color: Rgb, channel: BlendIfChannel) {
+  if (channel === "red") return color[0];
+  if (channel === "green") return color[1];
+  if (channel === "blue") return color[2];
+  return luminosity(color);
+}
+
+export function blendIfOpacity(base: Rgb, source: Rgb, settings: BlendIf) {
+  return (["gray", "red", "green", "blue"] as const).reduce((opacity, channel) => {
+    const ranges = settings.channels[channel];
+    return opacity
+      * blendIfFactor(channelValue(source, channel), ranges.source)
+      * blendIfFactor(channelValue(base, channel), ranges.underlying);
+  }, 1);
+}
+
+export function isNeutralBlendIf(settings: BlendIf) {
+  const neutral = (range: BlendIfRange) => range.black === 0
+    && range.blackFeather === 0
+    && range.whiteFeather === 1
+    && range.white === 1;
+  return (["gray", "red", "green", "blue"] as const).every((channel) => {
+    const ranges = settings.channels[channel];
+    return neutral(ranges.source) && neutral(ranges.underlying);
+  });
+}
 
 function colorDodge(base: number, source: number) {
   if (base <= 0) return 0;
@@ -140,6 +179,7 @@ function compositeCustom(
   mode: BlendMode,
   opacity: number,
   seed: number,
+  blendIf: BlendIf,
 ) {
   const width = source.width;
   const height = source.height;
@@ -153,11 +193,11 @@ function compositeCustom(
     const y = Math.floor(pixel / width);
     const baseAlpha = baseData[offset + 3] / 255;
     const rawSourceAlpha = sourceData[offset + 3] / 255;
-    let sourceAlpha = rawSourceAlpha * opacity;
-    if (mode === "dissolve") sourceAlpha = noise01(x, y, seed) < sourceAlpha ? 1 : 0;
-    if (sourceAlpha <= 0) continue;
     const base: Rgb = [baseData[offset] / 255, baseData[offset + 1] / 255, baseData[offset + 2] / 255];
     const layer: Rgb = [sourceData[offset] / 255, sourceData[offset + 1] / 255, sourceData[offset + 2] / 255];
+    let sourceAlpha = rawSourceAlpha * opacity * blendIfOpacity(base, layer, blendIf);
+    if (mode === "dissolve") sourceAlpha = noise01(x, y, seed) < sourceAlpha ? 1 : 0;
+    if (sourceAlpha <= 0) continue;
     const blended = blendRgb(mode, base, layer);
     const outAlpha = sourceAlpha + baseAlpha * (1 - sourceAlpha);
     for (let channelIndex = 0; channelIndex < 3; channelIndex++) {
@@ -177,20 +217,21 @@ export function compositeBlendStack(
   source: HTMLCanvasElement,
   passes: ReadonlyArray<BlendPass>,
   masterOpacity: number,
+  blendIf: BlendIf,
 ) {
   for (const pass of passes) {
     if (!pass.enabled) continue;
     const opacity = clamp01(masterOpacity * pass.opacity);
     if (opacity <= 0) continue;
     const nativeMode = NATIVE_CANVAS_MODES[pass.mode];
-    if (nativeMode) {
+    if (nativeMode && isNeutralBlendIf(blendIf)) {
       composite.save();
       composite.globalCompositeOperation = nativeMode;
       composite.globalAlpha = opacity;
       composite.drawImage(source, 0, 0);
       composite.restore();
     } else {
-      compositeCustom(composite, source, pass.mode, opacity, blendPassSeed(pass.id));
+      compositeCustom(composite, source, pass.mode, opacity, blendPassSeed(pass.id), blendIf);
     }
   }
 }

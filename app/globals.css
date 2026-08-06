@@ -3901,6 +3901,118 @@ body:has(.spatial-studio) {
   font-size: 7.5px;
 }
 
+.advanced-blending {
+  overflow: hidden;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 9px;
+  background: rgba(246, 247, 249, 0.82);
+}
+
+.advanced-blending summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px;
+  color: #5d6168;
+  font-size: 8.5px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.advanced-blending summary::-webkit-details-marker { display: none; }
+.advanced-blending summary::before { content: "›"; margin-right: 5px; transition: transform 150ms ease; }
+.advanced-blending[open] summary::before { transform: rotate(90deg); }
+.advanced-blending summary span { margin-right: auto; }
+.advanced-blending summary small { color: #989ca4; font-size: 7px; font-weight: 500; }
+
+.advanced-blending-body {
+  display: grid;
+  gap: 9px;
+  padding: 0 8px 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.fill-opacity-control { margin-top: 8px; }
+
+.blend-if-heading,
+.blend-if-range-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.blend-if-heading > span {
+  display: grid;
+  gap: 1px;
+  color: #595d64;
+  font-size: 8.5px;
+}
+
+.blend-if-heading small {
+  color: #999da4;
+  font-size: 6.8px;
+  font-weight: 500;
+}
+
+.blend-if-heading select {
+  width: 72px;
+  height: 24px;
+}
+
+.blend-if-range {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  border: 1px solid rgba(0, 0, 0, 0.055);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.blend-if-range-heading strong {
+  color: #666a71;
+  font-size: 7.5px;
+}
+
+.blend-if-range-heading span {
+  color: #9a9ea6;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 6.5px;
+}
+
+.blend-if-preview {
+  height: 8px;
+  border-radius: 4px;
+  background:
+    linear-gradient(to right,
+      rgba(124, 92, 231, 0) 0 var(--black),
+      rgba(124, 92, 231, 0) var(--black),
+      rgba(124, 92, 231, 0.9) var(--black-feather),
+      rgba(124, 92, 231, 0.9) var(--white-feather),
+      rgba(124, 92, 231, 0) var(--white),
+      rgba(124, 92, 231, 0) 100%),
+    linear-gradient(to right, #17181b, #fff);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.blend-if-range label {
+  grid-template-columns: 58px 1fr 24px;
+  font-size: 7px;
+}
+
+.blend-if-reset {
+  height: 25px;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 7px;
+  background: #f1f2f4;
+  color: #6e7279;
+  font-size: 7.5px;
+  cursor: pointer;
+}
+
+.blend-if-reset:disabled { opacity: 0.4; cursor: default; }
+
 .effects-panel {
   overflow-x: hidden;
 }

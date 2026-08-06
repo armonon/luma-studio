@@ -120,6 +120,19 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
     { id: "blend-primary", mode: "multiply", opacity: 0.72, enabled: true },
     { id: "blend-highlight", mode: "linear-dodge", opacity: 0.18, enabled: true },
   ];
+  layer.fillOpacity = 0.64;
+  layer.blendIf = {
+    activeChannel: "blue",
+    channels: {
+      gray: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+      red: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+      green: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+      blue: {
+        source: { black: 0.08, blackFeather: 0.22, whiteFeather: 0.86, white: 0.96 },
+        underlying: { black: 0.12, blackFeather: 0.28, whiteFeather: 0.78, white: 0.92 },
+      },
+    },
+  };
   layer.ai = {
     id: "ai-proof",
     operation: "harmonize",
@@ -141,8 +154,14 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
   const warm = graph.commit("Warm", {
     label: "Warm",
-    before: [{ layerId: layer.id, opacity: 1, blendStack: null }],
-    after: [{ layerId: layer.id, opacity: 0.6, blendStack: layer.blendStack.map((pass) => ({ ...pass })) }],
+    before: [{ layerId: layer.id, opacity: 1, fillOpacity: null, blendStack: null, blendIf: null }],
+    after: [{
+      layerId: layer.id,
+      opacity: 0.6,
+      fillOpacity: layer.fillOpacity,
+      blendStack: layer.blendStack.map((pass) => ({ ...pass })),
+      blendIf: structuredClone(layer.blendIf),
+    }],
     selectionBefore: null,
     selectionAfter: { mask: selectionMask, bounds: { x: 1, y: 1, w: 2, h: 2 } },
   });
@@ -175,6 +194,8 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
   assert.equal(decoded.doc.layers[0].blend, "multiply");
   assert.deepEqual(decoded.doc.layers[0].blendStack, layer.blendStack);
+  assert.equal(decoded.doc.layers[0].fillOpacity, 0.64);
+  assert.deepEqual(decoded.doc.layers[0].blendIf, layer.blendIf);
   assert.equal(decoded.doc.layers[0].ai?.requestId, "req_fixture");
   assert.equal(decoded.doc.layers[0].ai?.inputSha256, "a".repeat(64));
   assert.equal(decoded.doc.guides[0].id, "guide-z");
@@ -187,6 +208,8 @@ test("v2 projects round-trip stable ids, pixels, and nonlinear history", async (
   assert.deepEqual(restoredWarm.redo.map((node) => node.label), ["Warm"]);
   assert.deepEqual(restoredWarm.redo[0].value?.selectionAfter?.bounds, { x: 1, y: 1, w: 2, h: 2 });
   assert.deepEqual(restoredWarm.redo[0].value?.after[0].blendStack, layer.blendStack);
+  assert.equal(restoredWarm.redo[0].value?.after[0].fillOpacity, 0.64);
+  assert.deepEqual(restoredWarm.redo[0].value?.after[0].blendIf, layer.blendIf);
   const restoredCool = decoded.history!.tree().find((node) => node.label === "Cool")!;
   decoded.history!.checkout(restoredCool.id);
   const coolPayload = decoded.history!.lineage().at(-1)!.value!;

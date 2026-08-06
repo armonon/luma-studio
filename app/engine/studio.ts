@@ -1,6 +1,7 @@
 import {
   BlendMode,
   BlendPass,
+  BlendIf,
   AiProvenance,
   Curves,
   Document,
@@ -39,7 +40,10 @@ import {
   newCanvas,
   nextId,
   resolvedBlendPasses,
+  resolvedBlendIf,
+  resolvedFillOpacity,
 } from "./document";
+import { isNeutralBlendIf } from "./blend";
 import { BrushParams, paintSegment } from "./brush";
 import { render, renderClean } from "./renderer";
 import { bumpBitmapVersion, isGLSupported, renderGL } from "./gl-renderer";
@@ -77,8 +81,10 @@ export type LayerSnapshot = {
   levels?: LevelsParams;
   hsl?: HslParams;
   opacity?: number;
+  fillOpacity?: number | null;
   blend?: BlendMode;
   blendStack?: BlendPass[] | null;
+  blendIf?: BlendIf | null;
   visible?: boolean;
   name?: string;
   transform?: Transform;
@@ -239,6 +245,8 @@ export class Studio {
       tiles += grid.totalTiles;
       workingSetBytes += grid.estimatedBytes("rgba8");
     }
+    const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
+    const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     return {
       renderer: this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
       tileSize: DEFAULT_TILE_SIZE,
@@ -246,6 +254,8 @@ export class Studio {
       surfaces: surfaces.length,
       workingSetBytes,
       layers: this.doc.layers.length,
+      blendPasses,
+      advancedBlendLayers,
       colorSpace: this.doc.colorSpace,
       bitDepth: this.doc.bitDepth,
       history: this.history.summary(),
@@ -321,8 +331,10 @@ export class Studio {
       };
       if (snap.effects) layer.effects = cloneEffects(snap.effects);
       if (snap.opacity !== undefined) layer.opacity = snap.opacity;
+      if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
       if (snap.blend) layer.blend = snap.blend;
       if (snap.blendStack !== undefined) layer.blendStack = snap.blendStack ? cloneBlendStack(snap.blendStack) : undefined;
+      if (snap.blendIf !== undefined) layer.blendIf = snap.blendIf ? cloneBlendIf(snap.blendIf) : undefined;
       if (snap.visible !== undefined) layer.visible = snap.visible;
       if (snap.name) layer.name = snap.name;
       if (snap.transform) layer.transform = { ...snap.transform };
@@ -857,9 +869,13 @@ export class Studio {
     if (!layer) return;
     const before: LayerSnapshot = { layerId: id };
     const after: LayerSnapshot = { layerId: id };
-    if (key === "opacity" || key === "blend" || key === "visible" || key === "name" || key === "locked" || key === "clipping") {
+    if (key === "opacity" || key === "fillOpacity" || key === "blend" || key === "visible" || key === "name" || key === "locked" || key === "clipping") {
       (before as Record<string, unknown>)[key as string] = layer[key];
       (after as Record<string, unknown>)[key as string] = value;
+    }
+    if (key === "fillOpacity") {
+      before.fillOpacity = layer.fillOpacity ?? null;
+      after.fillOpacity = value as number;
     }
     if (key === "blend") {
       before.blendStack = layer.blendStack ? cloneBlendStack(layer.blendStack) : null;
@@ -943,6 +959,35 @@ export class Studio {
     const [pass] = passes.splice(index, 1);
     passes.splice(nextIndex, 0, pass);
     return this.setBlendStack(id, passes, "Blend passes reordered");
+  }
+
+  setLayerFillOpacity(id: string, opacity: number) {
+    return this.setLayerProp(id, "fillOpacity", Math.max(0, Math.min(1, opacity)), "Fill opacity");
+  }
+
+  setLayerBlendIf(id: string, settings: BlendIf) {
+    const layer = this.findLayer(id);
+    if (!layer || layer.kind === "group") return false;
+    const before: LayerSnapshot = {
+      layerId: id,
+      blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
+    };
+    const normalized = resolvedBlendIf({ blendIf: settings });
+    layer.blendIf = cloneBlendIf(normalized);
+    const after: LayerSnapshot = { layerId: id, blendIf: cloneBlendIf(normalized) };
+    this.commit({ label: "Blend If", before: [before], after: [after] });
+    this.requestRender();
+    return true;
+  }
+
+  resetLayerBlendIf(id: string) {
+    const layer = this.findLayer(id);
+    if (!layer?.blendIf) return false;
+    const before: LayerSnapshot = { layerId: id, blendIf: cloneBlendIf(layer.blendIf) };
+    layer.blendIf = undefined;
+    this.commit({ label: "Blend If reset", before: [before], after: [{ layerId: id, blendIf: null }] });
+    this.requestRender();
+    return true;
   }
 
   updateTransform(id: string, patch: Partial<Transform>) {
@@ -1555,6 +1600,7 @@ function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
     blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
+    blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : undefined,
     transform: { ...layer.transform },
     tone: layer.tone ? { ...layer.tone } : undefined,
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
@@ -1614,8 +1660,10 @@ function snapshotLayer(layer: Layer): LayerSnapshot {
     levels: layer.levels ? { ...layer.levels } : undefined,
     hsl: layer.hsl ? { ...layer.hsl } : undefined,
     opacity: layer.opacity,
+    fillOpacity: layer.fillOpacity ?? null,
     blend: layer.blend,
     blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
+    blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
     visible: layer.visible,
     name: layer.name,
     transform: { ...layer.transform },
@@ -1645,6 +1693,18 @@ function cloneEffects(effects: LayerEffect[]): LayerEffect[] {
 
 function cloneBlendStack(passes: ReadonlyArray<BlendPass>): BlendPass[] {
   return passes.map((pass) => ({ ...pass }));
+}
+
+function cloneBlendIf(settings: BlendIf): BlendIf {
+  return {
+    activeChannel: settings.activeChannel,
+    channels: {
+      gray: { source: { ...settings.channels.gray.source }, underlying: { ...settings.channels.gray.underlying } },
+      red: { source: { ...settings.channels.red.source }, underlying: { ...settings.channels.red.underlying } },
+      green: { source: { ...settings.channels.green.source }, underlying: { ...settings.channels.green.underlying } },
+      blue: { source: { ...settings.channels.blue.source }, underlying: { ...settings.channels.blue.underlying } },
+    },
+  };
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {

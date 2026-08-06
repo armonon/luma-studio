@@ -8,10 +8,12 @@ import {
   effectiveLayerVisible,
   findClippingBase,
   newCanvas,
+  resolvedBlendIf,
   resolvedBlendPasses,
+  resolvedFillOpacity,
 } from "./document";
 import { applySmartFilters } from "./filters";
-import { blendPassSeed } from "./blend";
+import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, VS } from "./gl-shaders";
 
 // A single-doc-size WebGL2 float compositor.
@@ -86,6 +88,7 @@ function ensureCache(width: number, height: number): Cache | null {
 
   const comp = compileProgram(gl, VS, COMPOSITE_FS, [
     "u_base", "u_layer", "u_mask", "u_hasMask", "u_opacity", "u_mode", "u_seed", "u_linear",
+    "u_blend_if_enabled", "u_source_ranges[0]", "u_underlying_ranges[0]",
   ], ["a_pos", "a_uv"]);
   const adj = compileProgram(gl, VS, ADJUST_FS, [
     "u_src", "u_mask", "u_hasMask", "u_opacity", "u_linear",
@@ -245,19 +248,29 @@ function uploadCanvasTex(
 function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
   const c = newCanvas(doc.width, doc.height);
   const ctx = c.getContext("2d")!;
+  const content = newCanvas(doc.width, doc.height);
+  const contentCtx = content.getContext("2d")!;
+  drawLayerContent(contentCtx, layer);
+  applySmartFilters(content, layer.filters);
   for (const effect of layer.effects ?? []) {
     if (!effect.enabled || effect.opacity <= 0 || effect.kind !== "drop-shadow") continue;
-    ctx.save();
-    ctx.globalAlpha = effect.opacity;
-    ctx.shadowColor = effect.color;
-    ctx.shadowBlur = effect.blur;
-    ctx.shadowOffsetX = effect.offsetX;
-    ctx.shadowOffsetY = effect.offsetY;
-    drawLayerContent(ctx, layer);
-    ctx.restore();
+    const effectCanvas = newCanvas(doc.width, doc.height);
+    const effectCtx = effectCanvas.getContext("2d")!;
+    effectCtx.globalAlpha = effect.opacity;
+    effectCtx.shadowColor = effect.color;
+    effectCtx.shadowBlur = effect.blur;
+    effectCtx.shadowOffsetX = effect.offsetX;
+    effectCtx.shadowOffsetY = effect.offsetY;
+    effectCtx.drawImage(content, 0, 0);
+    effectCtx.shadowColor = "transparent";
+    effectCtx.globalCompositeOperation = "destination-out";
+    effectCtx.globalAlpha = 1;
+    effectCtx.drawImage(content, 0, 0);
+    ctx.drawImage(effectCanvas, 0, 0);
   }
-  drawLayerContent(ctx, layer);
-  applySmartFilters(c, layer.filters);
+  ctx.globalAlpha = resolvedFillOpacity(layer);
+  ctx.drawImage(content, 0, 0);
+  ctx.globalAlpha = 1;
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
     if (base) {
@@ -278,26 +291,27 @@ function layerVersion(layer: Layer): string {
   const tKey = `${t.tx.toFixed(2)}|${t.ty.toFixed(2)}|${t.sx.toFixed(4)}|${t.sy.toFixed(4)}|${t.rotation.toFixed(4)}`;
   const filterKey = layer.filters?.map((filter) => `${filter.id}:${filter.enabled ? 1 : 0}:${filter.opacity}:${filter.kind}:${JSON.stringify(filter.params)}`).join("|") ?? "";
   const effectKey = layer.effects?.map((effect) => `${effect.id}:${effect.enabled ? 1 : 0}:${effect.opacity}:${effect.kind}:${effect.color}:${effect.blur}:${effect.offsetX}:${effect.offsetY}`).join("|") ?? "";
+  const fillKey = resolvedFillOpacity(layer).toFixed(4);
   if (layer.kind === "raster" || layer.kind === "smart-object") {
     // Use canvas identity as a coarse invalidator (any pixel edit clones).
-    return `raster:${(layer.bitmap as unknown as { __v?: number } | undefined)?.__v ?? "0"}:${tKey}:${filterKey}:${effectKey}`;
+    return `raster:${(layer.bitmap as unknown as { __v?: number } | undefined)?.__v ?? "0"}:${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "text" && layer.text) {
     const s = layer.text;
-    return `text:${s.text}|${s.font}|${s.color}|${s.align}|${s.x}|${s.y}|${s.lineHeight}|${tKey}:${filterKey}:${effectKey}`;
+    return `text:${s.text}|${s.font}|${s.color}|${s.align}|${s.x}|${s.y}|${s.lineHeight}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "shape" && layer.shape) {
     const sh = layer.shape;
-    return `shape:${sh.kind}|${sh.x}|${sh.y}|${sh.w}|${sh.h}|${sh.fill}|${sh.stroke}|${sh.strokeWidth}|${sh.radius}|${tKey}:${filterKey}:${effectKey}`;
+    return `shape:${sh.kind}|${sh.x}|${sh.y}|${sh.w}|${sh.h}|${sh.fill}|${sh.stroke}|${sh.strokeWidth}|${sh.radius}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "path" && layer.path) {
     const p = layer.path;
     const anchorsKey = p.anchors
       .map((a) => `${a.x.toFixed(1)},${a.y.toFixed(1)}|${a.hIn.dx.toFixed(1)},${a.hIn.dy.toFixed(1)}|${a.hOut.dx.toFixed(1)},${a.hOut.dy.toFixed(1)}`)
       .join(";");
-    return `path:${p.closed ? 1 : 0}|${p.fill}|${p.stroke}|${p.strokeWidth}|${anchorsKey}|${tKey}:${filterKey}:${effectKey}`;
+    return `path:${p.closed ? 1 : 0}|${p.fill}|${p.stroke}|${p.strokeWidth}|${anchorsKey}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
-  return `unknown:${tKey}`;
+  return `unknown:${tKey}:${fillKey}`;
 }
 
 function curvesKey(layer: Layer): string {
@@ -382,7 +396,8 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
   if (doc.layers.some((layer) => {
     if (!layer.kind.startsWith("adjustment-")) return false;
     const enabled = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
-    return enabled.length !== 1 || enabled[0].mode !== "source-over" || enabled[0].opacity !== 1;
+    return enabled.length !== 1 || enabled[0].mode !== "source-over" || enabled[0].opacity !== 1
+      || !isNeutralBlendIf(resolvedBlendIf(layer));
   })) return false;
   const c = ensureCache(doc.width, doc.height);
   if (!c) return false;
@@ -421,7 +436,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.levels.uniforms["u_mask"], 1);
       gl.uniform1i(c.levels.uniforms["u_hasMask"], maskTex ? 1 : 0);
-      gl.uniform1f(c.levels.uniforms["u_opacity"], layer.opacity);
+      gl.uniform1f(c.levels.uniforms["u_opacity"], layer.opacity * resolvedFillOpacity(layer));
       gl.uniform1f(c.levels.uniforms["u_inBlack"], layer.levels.inBlack);
       gl.uniform1f(c.levels.uniforms["u_inWhite"], layer.levels.inWhite);
       gl.uniform1f(c.levels.uniforms["u_gamma"], layer.levels.gamma);
@@ -439,7 +454,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.hsl.uniforms["u_mask"], 1);
       gl.uniform1i(c.hsl.uniforms["u_hasMask"], maskTex ? 1 : 0);
-      gl.uniform1f(c.hsl.uniforms["u_opacity"], layer.opacity);
+      gl.uniform1f(c.hsl.uniforms["u_opacity"], layer.opacity * resolvedFillOpacity(layer));
       gl.uniform1f(c.hsl.uniforms["u_hueDeg"], layer.hsl.hue);
       gl.uniform1f(c.hsl.uniforms["u_satAmt"], layer.hsl.saturation / 100);
       gl.uniform1f(c.hsl.uniforms["u_lightAmt"], layer.hsl.lightness / 100);
@@ -459,7 +474,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.curves.uniforms["u_mask"], 2);
       gl.uniform1i(c.curves.uniforms["u_hasMask"], maskTex ? 1 : 0);
-      gl.uniform1f(c.curves.uniforms["u_opacity"], layer.opacity);
+      gl.uniform1f(c.curves.uniforms["u_opacity"], layer.opacity * resolvedFillOpacity(layer));
       drawFullscreen(gl);
     } else if (layer.kind === "adjustment-tone" && layer.tone) {
       gl.useProgram(c.adj.program);
@@ -473,7 +488,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
       gl.uniform1i(c.adj.uniforms["u_mask"], 1);
       gl.uniform1i(c.adj.uniforms["u_hasMask"], maskTex ? 1 : 0);
       gl.uniform1i(c.adj.uniforms["u_linear"], linearCompositing ? 1 : 0);
-      gl.uniform1f(c.adj.uniforms["u_opacity"], layer.opacity);
+      gl.uniform1f(c.adj.uniforms["u_opacity"], layer.opacity * resolvedFillOpacity(layer));
       gl.uniform1f(c.adj.uniforms["u_exposure"], layer.tone.exposure);
       gl.uniform1f(c.adj.uniforms["u_contrast"], layer.tone.contrast);
       gl.uniform1f(c.adj.uniforms["u_highlights"], layer.tone.highlights);
@@ -484,6 +499,10 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
     } else {
       const layerTex = ensureLayerTex(gl, c, doc, layer);
       const maskTex = ensureMaskTex(gl, c, layer);
+      const blendIf = resolvedBlendIf(layer);
+      const blendIfChannels = (["gray", "red", "green", "blue"] as const).map((channel) => blendIf.channels[channel]);
+      const sourceRanges = new Float32Array(blendIfChannels.flatMap(({ source }) => [source.black, source.blackFeather, source.whiteFeather, source.white]));
+      const underlyingRanges = new Float32Array(blendIfChannels.flatMap(({ underlying }) => [underlying.black, underlying.blackFeather, underlying.whiteFeather, underlying.white]));
       for (const pass of resolvedBlendPasses(layer)) {
         if (!pass.enabled || pass.opacity <= 0) continue;
         gl.bindFramebuffer(gl.FRAMEBUFFER, scratch.fb);
@@ -504,6 +523,9 @@ export function renderGL(doc: Document, target: HTMLCanvasElement): boolean {
         gl.uniform1i(c.comp.uniforms["u_hasMask"], maskTex ? 1 : 0);
         gl.uniform1f(c.comp.uniforms["u_opacity"], layer.opacity * pass.opacity);
         gl.uniform1i(c.comp.uniforms["u_linear"], linearCompositing ? 1 : 0);
+        gl.uniform1i(c.comp.uniforms["u_blend_if_enabled"], isNeutralBlendIf(blendIf) ? 0 : 1);
+        gl.uniform4fv(c.comp.uniforms["u_source_ranges[0]"], sourceRanges);
+        gl.uniform4fv(c.comp.uniforms["u_underlying_ranges[0]"], underlyingRanges);
         const modeIndex = Math.max(0, GL_BLEND_ORDER.indexOf(pass.mode as BlendMode));
         gl.uniform1i(c.comp.uniforms["u_mode"], modeIndex);
         gl.uniform1f(c.comp.uniforms["u_seed"], blendPassSeed(pass.id) / 4294967296);

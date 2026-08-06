@@ -10,7 +10,9 @@ import {
   effectiveLayerVisible,
   findClippingBase,
   newCanvas,
+  resolvedBlendIf,
   resolvedBlendPasses,
+  resolvedFillOpacity,
 } from "./document";
 import { applySmartFilters } from "./filters";
 import { compositeBlendStack } from "./blend";
@@ -21,6 +23,8 @@ type Scratch = {
   a: HTMLCanvasElement;
   b: HTMLCanvasElement;
   layerBuf: HTMLCanvasElement;
+  contentBuf: HTMLCanvasElement;
+  effectBuf: HTMLCanvasElement;
 };
 
 function scratch(width: number, height: number, cache: Scratch | null): Scratch {
@@ -29,6 +33,8 @@ function scratch(width: number, height: number, cache: Scratch | null): Scratch 
     a: newCanvas(width, height),
     b: newCanvas(width, height),
     layerBuf: newCanvas(width, height),
+    contentBuf: newCanvas(width, height),
+    effectBuf: newCanvas(width, height),
   };
 }
 
@@ -112,7 +118,7 @@ export function render(
     } else if (layer.kind === "adjustment-hsl" && layer.hsl) {
       drawPixelAdjustment(composite, s, doc, layer, (img) => applyHslToImageData(img, layer.hsl!));
     } else {
-      drawContentLayer(composite, s.layerBuf, doc, layer);
+      drawContentLayer(composite, s, doc, layer);
     }
   }
 
@@ -136,29 +142,50 @@ export function renderClean(doc: Document, target: HTMLCanvasElement) {
 
 function drawContentLayer(
   composite: CanvasRenderingContext2D,
-  layerBuf: HTMLCanvasElement,
+  scratch: Scratch,
   doc: Document,
   layer: Layer,
 ) {
+  const { layerBuf, contentBuf, effectBuf } = scratch;
   const bctx = layerBuf.getContext("2d")!;
   bctx.save();
   bctx.setTransform(1, 0, 0, 1, 0, 0);
   bctx.globalCompositeOperation = "source-over";
   bctx.globalAlpha = 1;
   bctx.clearRect(0, 0, doc.width, doc.height);
+  const contentCtx = contentBuf.getContext("2d")!;
+  contentCtx.save();
+  contentCtx.setTransform(1, 0, 0, 1, 0, 0);
+  contentCtx.globalCompositeOperation = "source-over";
+  contentCtx.globalAlpha = 1;
+  contentCtx.clearRect(0, 0, doc.width, doc.height);
+  drawLayerContent(contentCtx, layer);
+  contentCtx.restore();
+  applySmartFilters(contentBuf, layer.filters);
+
   for (const effect of layer.effects ?? []) {
     if (!effect.enabled || effect.opacity <= 0 || effect.kind !== "drop-shadow") continue;
-    bctx.save();
-    bctx.globalAlpha = effect.opacity;
-    bctx.shadowColor = effect.color;
-    bctx.shadowBlur = effect.blur;
-    bctx.shadowOffsetX = effect.offsetX;
-    bctx.shadowOffsetY = effect.offsetY;
-    drawLayerContent(bctx, layer);
-    bctx.restore();
+    const ectx = effectBuf.getContext("2d")!;
+    ectx.save();
+    ectx.setTransform(1, 0, 0, 1, 0, 0);
+    ectx.globalCompositeOperation = "source-over";
+    ectx.globalAlpha = effect.opacity;
+    ectx.clearRect(0, 0, doc.width, doc.height);
+    ectx.shadowColor = effect.color;
+    ectx.shadowBlur = effect.blur;
+    ectx.shadowOffsetX = effect.offsetX;
+    ectx.shadowOffsetY = effect.offsetY;
+    ectx.drawImage(contentBuf, 0, 0);
+    ectx.shadowColor = "transparent";
+    ectx.globalCompositeOperation = "destination-out";
+    ectx.globalAlpha = 1;
+    ectx.drawImage(contentBuf, 0, 0);
+    ectx.restore();
+    bctx.drawImage(effectBuf, 0, 0);
   }
-  drawLayerContent(bctx, layer);
-  applySmartFilters(layerBuf, layer.filters);
+  bctx.globalAlpha = resolvedFillOpacity(layer);
+  bctx.drawImage(contentBuf, 0, 0);
+  bctx.globalAlpha = 1;
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
     if (base) {
@@ -176,7 +203,7 @@ function drawContentLayer(
   }
   bctx.restore();
 
-  compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity);
+  compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
 }
 
 function drawAdjustment(
@@ -212,11 +239,11 @@ function drawAdjustment(
     bctx.drawImage(layer.mask, 0, 0);
     bctx.restore();
 
-    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity);
+    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity * resolvedFillOpacity(layer), resolvedBlendIf(layer));
     return;
   }
 
-  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity);
+  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity * resolvedFillOpacity(layer), resolvedBlendIf(layer));
 }
 
 function drawPixelAdjustment(
@@ -250,10 +277,10 @@ function drawPixelAdjustment(
     bctx.globalCompositeOperation = "destination-in";
     bctx.drawImage(layer.mask, 0, 0);
     bctx.restore();
-    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity);
+    compositeBlendStack(composite, s.layerBuf, resolvedBlendPasses(layer), layer.opacity * resolvedFillOpacity(layer), resolvedBlendIf(layer));
     return;
   }
-  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity);
+  compositeBlendStack(composite, snap, resolvedBlendPasses(layer), layer.opacity * resolvedFillOpacity(layer), resolvedBlendIf(layer));
 }
 
 function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {

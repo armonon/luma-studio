@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { blendRgb } from "../app/engine/blend.ts";
+import { blendIfFactor, blendIfOpacity, blendRgb, isNeutralBlendIf } from "../app/engine/blend.ts";
 import {
   BLEND_MODES,
   MAX_LAYER_BLEND_PASSES,
   resolvedBlendPasses,
+  resolvedBlendIf,
+  resolvedFillOpacity,
 } from "../app/engine/document.ts";
 import { GL_BLEND_ORDER } from "../app/engine/gl-shaders.ts";
 
@@ -47,4 +49,36 @@ test("legacy layers resolve to one pass and stored pass opacity is bounded", () 
       { id: "high", mode: "screen", opacity: 3, enabled: false },
     ],
   }).map((pass) => pass.opacity), [0, 1]);
+});
+
+test("Blend If uses split feather ramps on both ends", () => {
+  const range = { black: 0.2, blackFeather: 0.4, whiteFeather: 0.7, white: 0.9 };
+  assert.equal(blendIfFactor(0.1, range), 0);
+  assert.equal(Number(blendIfFactor(0.3, range).toFixed(4)), 0.5);
+  assert.equal(blendIfFactor(0.5, range), 1);
+  assert.equal(Number(blendIfFactor(0.8, range).toFixed(4)), 0.5);
+  assert.equal(blendIfFactor(0.95, range), 0);
+});
+
+test("Blend If can gate by source and underlying color channels", () => {
+  const settings = resolvedBlendIf({
+    blendIf: {
+      activeChannel: "red",
+      channels: {
+        gray: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+        red: { source: { black: 0.2, blackFeather: 0.4, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 0.7, white: 0.9 } },
+        green: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+        blue: { source: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 }, underlying: { black: 0, blackFeather: 0, whiteFeather: 1, white: 1 } },
+      },
+    },
+  });
+  assert.equal(Number(blendIfOpacity([0.8, 0, 0], [0.3, 1, 1], settings).toFixed(4)), 0.25);
+  assert.equal(isNeutralBlendIf(resolvedBlendIf({})), true);
+  assert.equal(isNeutralBlendIf(settings), false);
+});
+
+test("fill opacity defaults to full and clamps imported values", () => {
+  assert.equal(resolvedFillOpacity({}), 1);
+  assert.equal(resolvedFillOpacity({ fillOpacity: -2 }), 0);
+  assert.equal(resolvedFillOpacity({ fillOpacity: 4 }), 1);
 });

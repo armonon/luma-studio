@@ -15,6 +15,8 @@ import {
   AiProvenance,
   BLEND_MODE_GROUPS,
   BLEND_LABELS,
+  BlendIf,
+  BlendIfRange,
   BlendMode,
   Curves,
   HslParams,
@@ -33,7 +35,10 @@ import {
   curveToLut,
   layerCorners,
   resolvedBlendPasses,
+  resolvedBlendIf,
+  resolvedFillOpacity,
 } from "@/app/engine/document";
+import { isNeutralBlendIf } from "@/app/engine/blend";
 import { BrushParams } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
@@ -112,8 +117,71 @@ const filmstrip = [
   { name: "Lake", src: "/film-lake.jpg" },
 ] as const;
 
+function BlendIfRangeEditor({
+  label,
+  range,
+  onChange,
+}: {
+  label: string;
+  range: BlendIfRange;
+  onChange: (range: BlendIfRange) => void;
+}) {
+  const fields: ReadonlyArray<readonly [keyof BlendIfRange, string]> = [
+    ["black", "Black hide"],
+    ["blackFeather", "Black fade"],
+    ["whiteFeather", "White fade"],
+    ["white", "White hide"],
+  ];
+  const update = (key: keyof BlendIfRange, value: number) => onChange({ ...range, [key]: value / 255 });
+  return (
+    <div className="blend-if-range">
+      <div className="blend-if-range-heading">
+        <strong>{label}</strong>
+        <span>{Math.round(range.black * 255)} · {Math.round(range.blackFeather * 255)} / {Math.round(range.whiteFeather * 255)} · {Math.round(range.white * 255)}</span>
+      </div>
+      <div
+        className="blend-if-preview"
+        style={{
+          "--black": `${range.black * 100}%`,
+          "--black-feather": `${range.blackFeather * 100}%`,
+          "--white-feather": `${range.whiteFeather * 100}%`,
+          "--white": `${range.white * 100}%`,
+        } as React.CSSProperties}
+      />
+      {fields.map(([key, name]) => (
+        <label key={key}>
+          <span>{name}</span>
+          <input
+            type="range"
+            min="0"
+            max="255"
+            value={Math.round(range[key] * 255)}
+            onChange={(event) => update(key, Number(event.target.value))}
+            aria-label={`${label} ${name}`}
+          />
+          <output>{Math.round(range[key] * 255)}</output>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   const passes = resolvedBlendPasses(layer);
+  const blendIf = resolvedBlendIf(layer);
+  const fillOpacity = resolvedFillOpacity(layer);
+  const hasAdvancedSettings = !isNeutralBlendIf(blendIf) || fillOpacity < 1;
+  const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedSettings);
+  const activeBlendIf = blendIf.channels[blendIf.activeChannel];
+  const setRange = (key: "source" | "underlying", range: BlendIfRange) => {
+    studio.setLayerBlendIf(layer.id, {
+      ...blendIf,
+      channels: {
+        ...blendIf.channels,
+        [blendIf.activeChannel]: { ...activeBlendIf, [key]: range },
+      },
+    });
+  };
   return (
     <div className="blend-stack-editor">
       <div className="blend-stack-heading">
@@ -169,6 +237,43 @@ function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
           </div>
         ))}
       </div>
+      <details className="advanced-blending" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
+        <summary><span>Advanced blending</span><small>Fill · Blend If</small></summary>
+        <div className="advanced-blending-body">
+          <label className="fill-opacity-control">
+            <span>Fill opacity</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(fillOpacity * 100)}
+              onChange={(event) => studio.setLayerFillOpacity(layer.id, Number(event.target.value) / 100)}
+            />
+            <output>{Math.round(fillOpacity * 100)}%</output>
+          </label>
+          <div className="blend-if-heading">
+            <span><strong>Blend If</strong><small>Feathered tonal visibility</small></span>
+            <select
+              value={blendIf.activeChannel}
+              onChange={(event) => studio.setLayerBlendIf(layer.id, { ...blendIf, activeChannel: event.target.value as BlendIf["activeChannel"] })}
+              aria-label="Blend If channel"
+            >
+              <option value="gray">Gray</option>
+              <option value="red">Red</option>
+              <option value="green">Green</option>
+              <option value="blue">Blue</option>
+            </select>
+          </div>
+          <BlendIfRangeEditor label="This layer" range={activeBlendIf.source} onChange={(range) => setRange("source", range)} />
+          <BlendIfRangeEditor label="Underlying" range={activeBlendIf.underlying} onChange={(range) => setRange("underlying", range)} />
+          <button
+            type="button"
+            className="blend-if-reset"
+            onClick={() => studio.resetLayerBlendIf(layer.id)}
+            disabled={!layer.blendIf}
+          >Reset Blend If</button>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1521,7 +1626,7 @@ export default function SpatialStudio() {
                 <div className="canvas-status">
                   <span title={engineState ? `${engineState.surfaces} pixel surfaces · ${engineState.tiles} addressable tiles · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
                     {doc
-                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${useGL ? "GPU RGBA16F" : "CPU 8-bit"} · ${engineState?.tiles ?? 0} tiles · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${useGL ? "GPU RGBA16F" : "CPU 8-bit"} · ${engineState?.tiles ?? 0} tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
                       : "Loading…"}
                   </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
@@ -1606,7 +1711,7 @@ export default function SpatialStudio() {
                     </span>
                     <span className="layer-name">
                       <strong>{layer.name}</strong>
-                      <small>{layer.kind}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
+                      <small>{layer.kind}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
                     </span>
                     <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
                       {layer.visible ? "◉" : "○"}
@@ -1623,7 +1728,7 @@ export default function SpatialStudio() {
                   </label>
                   {activeLayer.kind === "group"
                     ? <div className="blend-group-note">Group opacity · children pass through</div>
-                    : studio && <BlendStackEditor layer={activeLayer} studio={studio} />}
+                    : studio && <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />}
                   <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
                     <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
                       {activeLayer.locked ? "🔒 Locked" : "◇ Lock"}

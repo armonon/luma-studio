@@ -80,6 +80,50 @@ export type BlendPass = {
 
 export const MAX_LAYER_BLEND_PASSES = 8;
 
+export type BlendIfChannel = "gray" | "red" | "green" | "blue";
+
+export type BlendIfRange = {
+  /** Pixels below this value are hidden. */
+  black: number;
+  /** Pixels reach full opacity at this value. */
+  blackFeather: number;
+  /** Pixels begin fading out at this value. */
+  whiteFeather: number;
+  /** Pixels above this value are hidden. */
+  white: number;
+};
+
+export type BlendIf = {
+  activeChannel: BlendIfChannel;
+  channels: Record<BlendIfChannel, {
+    source: BlendIfRange;
+    underlying: BlendIfRange;
+  }>;
+};
+
+type LegacyBlendIf = {
+  channel: BlendIfChannel;
+  source: BlendIfRange;
+  underlying: BlendIfRange;
+};
+
+export const NEUTRAL_BLEND_IF_RANGE: BlendIfRange = {
+  black: 0,
+  blackFeather: 0,
+  whiteFeather: 1,
+  white: 1,
+};
+
+export const NEUTRAL_BLEND_IF: BlendIf = {
+  activeChannel: "gray",
+  channels: {
+    gray: { source: { ...NEUTRAL_BLEND_IF_RANGE }, underlying: { ...NEUTRAL_BLEND_IF_RANGE } },
+    red: { source: { ...NEUTRAL_BLEND_IF_RANGE }, underlying: { ...NEUTRAL_BLEND_IF_RANGE } },
+    green: { source: { ...NEUTRAL_BLEND_IF_RANGE }, underlying: { ...NEUTRAL_BLEND_IF_RANGE } },
+    blue: { source: { ...NEUTRAL_BLEND_IF_RANGE }, underlying: { ...NEUTRAL_BLEND_IF_RANGE } },
+  },
+};
+
 export type ToneParams = {
   exposure: number;
   contrast: number;
@@ -251,9 +295,12 @@ export type Layer = {
   kind: LayerKind;
   visible: boolean;
   opacity: number;
+  /** Content opacity; unlike layer opacity, effects remain fully present. */
+  fillOpacity?: number;
   blend: BlendMode;
   /** Ordered blend passes. Missing means one legacy pass using `blend`. */
   blendStack?: BlendPass[];
+  blendIf?: BlendIf;
   transform: Transform;
   parentId?: string;
   locked?: boolean;
@@ -280,6 +327,46 @@ export function resolvedBlendPasses(layer: Pick<Layer, "id" | "blend" | "blendSt
     }));
   }
   return [{ id: `${layer.id}-blend-0`, mode: layer.blend, opacity: 1, enabled: true }];
+}
+
+export function resolvedFillOpacity(layer: Pick<Layer, "fillOpacity">) {
+  return Math.max(0, Math.min(1, Number.isFinite(layer.fillOpacity) ? layer.fillOpacity! : 1));
+}
+
+function normalizedBlendIfRange(range?: Partial<BlendIfRange>): BlendIfRange {
+  const clamp = (value: number | undefined, fallback: number) => Math.max(0, Math.min(1, Number.isFinite(value) ? value! : fallback));
+  const black = clamp(range?.black, 0);
+  const blackFeather = Math.max(black, clamp(range?.blackFeather, black));
+  const whiteFeather = Math.max(blackFeather, clamp(range?.whiteFeather, 1));
+  const white = Math.max(whiteFeather, clamp(range?.white, 1));
+  return { black, blackFeather, whiteFeather, white };
+}
+
+export function resolvedBlendIf(layer: Pick<Layer, "blendIf">): BlendIf {
+  const source = layer.blendIf as (Partial<BlendIf> & Partial<LegacyBlendIf>) | undefined;
+  const candidateChannel = source?.activeChannel ?? source?.channel;
+  const activeChannel: BlendIfChannel = (["gray", "red", "green", "blue"] as const).includes(candidateChannel as BlendIfChannel)
+    ? candidateChannel as BlendIfChannel
+    : "gray";
+  const legacyBand = source?.source || source?.underlying
+    ? { source: normalizedBlendIfRange(source.source), underlying: normalizedBlendIfRange(source.underlying) }
+    : undefined;
+  const channel = (name: BlendIfChannel) => {
+    const band = source?.channels?.[name] ?? (name === activeChannel ? legacyBand : undefined);
+    return {
+      source: normalizedBlendIfRange(band?.source),
+      underlying: normalizedBlendIfRange(band?.underlying),
+    };
+  };
+  return {
+    activeChannel,
+    channels: {
+      gray: channel("gray"),
+      red: channel("red"),
+      green: channel("green"),
+      blue: channel("blue"),
+    },
+  };
 }
 
 export type Selection = {

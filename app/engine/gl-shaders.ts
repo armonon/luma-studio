@@ -28,6 +28,9 @@ uniform float u_opacity;
 uniform int u_mode;
 uniform float u_seed;
 uniform bool u_linear;
+uniform bool u_blend_if_enabled;
+uniform vec4 u_source_ranges[4];
+uniform vec4 u_underlying_ranges[4];
 
 // ---- color space (piecewise sRGB transfer) ----
 vec3 srgbToLinear(vec3 c) {
@@ -92,6 +95,20 @@ vec3 setSat(vec3 c, float s) {
   return vec3(0.0);
 }
 
+float blendIfValue(vec3 c, int channel) {
+  if (channel == 1) return c.r;
+  if (channel == 2) return c.g;
+  if (channel == 3) return c.b;
+  return lum(c);
+}
+
+float blendIfGate(float value, vec4 range) {
+  if (value < range.x || value > range.w) return 0.0;
+  if (value < range.y) return (value - range.x) / max(0.00001, range.y - range.x);
+  if (value <= range.z) return 1.0;
+  return (range.w - value) / max(0.00001, range.w - range.z);
+}
+
 vec3 blend(vec3 b, vec3 s, int mode) {
   if (mode <= 1) return s;                                    // normal, dissolve
   if (mode == 2) return min(b, s);                            // darken
@@ -127,14 +144,20 @@ void main() {
   vec4 layer = texture(u_layer, v_uv);
   float m = u_hasMask ? texture(u_mask, v_uv).a : 1.0;
   float alpha = layer.a * u_opacity * m;
-  if (u_mode == 1) {
-    float randomValue = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + u_seed) * 43758.5453);
-    alpha = randomValue < alpha ? 1.0 : 0.0;
-  }
 
   // Unpremultiply for blend math, and optionally convert to linear light.
   vec3 baseColor = base.a > 0.0 ? base.rgb / base.a : vec3(0.0);
   vec3 layerColor = layer.a > 0.0 ? layer.rgb / layer.a : vec3(0.0);
+  if (u_blend_if_enabled) {
+    for (int channel = 0; channel < 4; channel++) {
+      alpha *= blendIfGate(blendIfValue(layerColor, channel), u_source_ranges[channel])
+        * blendIfGate(blendIfValue(baseColor, channel), u_underlying_ranges[channel]);
+    }
+  }
+  if (u_mode == 1) {
+    float randomValue = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + u_seed) * 43758.5453);
+    alpha = randomValue < alpha ? 1.0 : 0.0;
+  }
   if (u_linear) {
     baseColor = srgbToLinear(baseColor);
     layerColor = srgbToLinear(layerColor);
