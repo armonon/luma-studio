@@ -42,8 +42,15 @@ export type OperationHistorySnapshot<T> = {
   nodes: OperationNode<T>[];
 };
 
-export type OperationHistoryOptions = {
+export type OperationHistoryOptions<T = unknown> = {
   maxNodes?: number;
+  /**
+   * Optional byte budget for stored operation payloads. When exceeded, the
+   * oldest removable leaves are evicted (in addition to the maxNodes cap).
+   * Requires `sizeOf` to be provided.
+   */
+  maxBytes?: number;
+  sizeOf?: (value: T) => number;
   idFactory?: () => string;
   now?: () => number;
 };
@@ -60,14 +67,20 @@ export class OperationHistory<T> {
 
   private readonly nodes = new Map<string, OperationNode<T>>();
   private readonly preferredChildren = new Map<string, string>();
+  private readonly nodeBytes = new Map<string, number>();
   private readonly maxNodes: number;
+  private readonly maxBytes: number;
+  private readonly sizeOf: ((value: T) => number) | null;
   private readonly idFactory: () => string;
   private readonly now: () => number;
   private currentId: string;
   private sequence = 0;
+  private totalBytes = 0;
 
-  constructor(options: OperationHistoryOptions = {}) {
+  constructor(options: OperationHistoryOptions<T> = {}) {
     this.maxNodes = Math.max(1, Math.floor(options.maxNodes ?? 500));
+    this.maxBytes = Math.max(0, Math.floor(options.maxBytes ?? 0));
+    this.sizeOf = options.sizeOf ?? null;
     this.idFactory = options.idFactory ?? defaultIdFactory;
     this.now = options.now ?? Date.now;
     this.rootId = this.uniqueId("history-root");
@@ -85,7 +98,7 @@ export class OperationHistory<T> {
 
   static fromSnapshot<T>(
     snapshot: OperationHistorySnapshot<T>,
-    options: OperationHistoryOptions = {},
+    options: OperationHistoryOptions<T> = {},
   ) {
     if (!snapshot || snapshot.format !== "luma-operation-history" || snapshot.version !== 1) {
       throw new Error("Unsupported Luma operation history");
@@ -119,8 +132,24 @@ export class OperationHistory<T> {
       }
     }
     graph.validateTopology();
+    // Re-bill restored payloads. Without this, a project loaded from disk is
+    // exempt from the byte budget for the rest of the session and evicting
+    // those nodes releases nothing.
+    graph.rebuildByteAccounting();
     graph.trim();
     return graph;
+  }
+
+  private rebuildByteAccounting() {
+    this.nodeBytes.clear();
+    this.totalBytes = 0;
+    if (!this.sizeOf) return;
+    for (const node of this.nodes.values()) {
+      if (node.value === null) continue;
+      const bytes = Math.max(0, Math.floor(this.sizeOf(node.value)));
+      this.nodeBytes.set(node.id, bytes);
+      this.totalBytes += bytes;
+    }
   }
 
   get current() { return this.currentId; }
@@ -146,9 +175,15 @@ export class OperationHistory<T> {
     parent.childIds.push(node.id);
     this.preferredChildren.set(parent.id, node.id);
     this.currentId = node.id;
+    const bytes = this.sizeOf ? Math.max(0, Math.floor(this.sizeOf(value))) : 0;
+    this.nodeBytes.set(node.id, bytes);
+    this.totalBytes += bytes;
     this.trim();
     return node;
   }
+
+  /** Total byte size across all currently-stored operation payloads. */
+  get byteSize() { return this.totalBytes; }
 
   undo(): OperationNode<T> | null {
     const node = this.currentNode();
@@ -337,7 +372,9 @@ export class OperationHistory<T> {
   }
 
   private trim() {
-    while (this.size > this.maxNodes) {
+    const overNodes = () => this.size > this.maxNodes;
+    const overBytes = () => this.maxBytes > 0 && this.totalBytes > this.maxBytes;
+    while (overNodes() || overBytes()) {
       const protectedIds = new Set(this.lineageIds(this.currentId));
       const removableLeaf = [...this.nodes.values()]
         .filter((node) => node.id !== this.rootId && node.childIds.length === 0 && !protectedIds.has(node.id))
@@ -348,12 +385,24 @@ export class OperationHistory<T> {
       }
 
       const root = this.requireNode(this.rootId);
+      // Never collapse the node the cursor is sitting on: deleting it leaves
+      // `currentId` dangling and every later call throws. If the only thing
+      // left to drop is the current node, we intentionally stay over budget
+      // rather than corrupt the graph.
       const oldest = root.childIds
         .map((id) => this.requireNode(id))
+        .filter((node) => node.id !== this.currentId)
         .sort((a, b) => a.sequence - b.sequence)[0];
       if (!oldest) break;
       this.collapseIntoRoot(oldest);
     }
+  }
+
+  /** True when the byte budget is set and currently exceeded. Trim keeps the
+   *  current node alive even at the cost of overshooting, so callers that care
+   *  (telemetry, "history is full" UI) can observe it. */
+  overBudget() {
+    return this.maxBytes > 0 && this.totalBytes > this.maxBytes;
   }
 
   private removeLeaf(node: OperationNode<T>) {
@@ -367,9 +416,20 @@ export class OperationHistory<T> {
     }
     this.preferredChildren.delete(node.id);
     this.nodes.delete(node.id);
+    this.releaseBytes(node.id);
+  }
+
+  private releaseBytes(nodeId: string) {
+    const bytes = this.nodeBytes.get(nodeId) ?? 0;
+    if (bytes > 0) this.totalBytes = Math.max(0, this.totalBytes - bytes);
+    this.nodeBytes.delete(nodeId);
   }
 
   private collapseIntoRoot(node: OperationNode<T>) {
+    // Defensive: deleting the cursor's node dangles `currentId`. Callers are
+    // expected to filter it out, but this is cheap insurance against the
+    // failure mode being reintroduced.
+    if (node.id === this.currentId) return;
     const root = this.requireNode(this.rootId);
     const index = root.childIds.indexOf(node.id);
     const children = [...node.childIds];
@@ -384,6 +444,7 @@ export class OperationHistory<T> {
     }
     this.preferredChildren.delete(node.id);
     this.nodes.delete(node.id);
+    this.releaseBytes(node.id);
   }
 }
 

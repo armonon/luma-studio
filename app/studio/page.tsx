@@ -1401,7 +1401,13 @@ export default function SpatialStudio() {
       setCustomName(name);
       setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
-      notify(raw ? `${raw.toUpperCase()} preview imported · provenance tagged` : `${name} imported${profileLabel}`);
+      notify(
+        raw
+          // Only DNG gets a sensor decode; everything else is the camera's own
+          // embedded JPEG, so say so plainly rather than implying RAW develop.
+          ? `${raw.toUpperCase()}: embedded JPEG preview — sensor decode is DNG-only`
+          : `${name} imported${profileLabel}`,
+      );
     } catch (error) {
       notify(error instanceof Error ? error.message : "Failed to import");
     } finally {
@@ -2138,9 +2144,9 @@ export default function SpatialStudio() {
                   </div>
                 )}
                 <div className="canvas-status">
-                  <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.tiles} addressable preview tiles · ${engineState.precisionTiles} resident precision tiles · ${engineState.previewCache.hits} tile-cache hits · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
+                  <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.precisionTiles} resident precision tiles · ${engineState.previewCache.hits} tile-cache hits · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
                     {doc
-                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · ${engineState?.renderer === "viewport-tiled-canvas2d" ? "Tiled viewport" : useGL ? "GPU preview" : "CPU preview"} · ${engineState?.precisionTiles ?? 0} precision tiles · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}`
+                      ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · CPU tiled preview · ${useGL && glSupported ? "GPU 16F export" : "CPU export"} · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}${engineState?.historyOverBudget ? " · history over budget" : ""}`
                       : "Loading…"}
                   </span>
                   <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>

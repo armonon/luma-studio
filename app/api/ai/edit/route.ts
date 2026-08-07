@@ -8,7 +8,10 @@ import {
 export const dynamic = "force-dynamic";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
-const MODEL = "gpt-image-2";
+// OpenAI's image editing model. `gpt-image-2` was never a released id and made
+// every request 404 — override with AI_IMAGE_MODEL if you deploy against a
+// different model.
+const MODEL = process.env.AI_IMAGE_MODEL || "gpt-image-1";
 
 function error(message: string, status: number) {
   return Response.json({ error: message }, { status });

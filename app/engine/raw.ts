@@ -1,4 +1,10 @@
+// Camera RAW extensions the picker accepts. Only "dng" gets a real sensor
+// decode via decodeDng(); every other extension falls through to
+// extractEmbeddedRawPreview(), which returns the largest embedded JPEG and is
+// tagged as "embedded-raw-preview" by ingestRaw. See DNG_DECODED_EXTENSIONS
+// if you need the narrower list for UI copy that promises full RAW develop.
 export const RAW_EXTENSIONS = ["dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "pef"] as const;
+export const DNG_DECODED_EXTENSIONS = ["dng"] as const;
 
 export type RawPreview = {
   blob: Blob;
@@ -10,6 +16,17 @@ export type RawPreview = {
 export function rawExtension(name: string) {
   const extension = name.split(".").pop()?.toLowerCase() ?? "";
   return (RAW_EXTENSIONS as readonly string[]).includes(extension) ? extension : null;
+}
+
+/**
+ * Whether this file will get a real sensor decode (Bayer demosaic to a float
+ * master) as opposed to having its embedded JPEG preview lifted out. Callers
+ * should use this to set expectations *before* import rather than explaining
+ * after the fact.
+ */
+export function supportsSensorDecode(name: string): boolean {
+  const extension = rawExtension(name);
+  return !!extension && (DNG_DECODED_EXTENSIONS as readonly string[]).includes(extension);
 }
 
 /**

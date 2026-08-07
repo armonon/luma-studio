@@ -27,7 +27,6 @@ import {
   TextStyle,
   ToneParams,
   Transform,
-  cloneCanvas,
   cloneCurves,
   createAdjustmentLayer,
   createCurvesLayer,
@@ -81,6 +80,31 @@ import {
   unsharpMask,
 } from "./filters";
 import { Action, ActionRecorder, ActionStep } from "./actions";
+import {
+  cloneBlendIf,
+  cloneBlendStack,
+  cloneDocument,
+  cloneEffects,
+  cloneFilters,
+  cloneRawSettings,
+  cloneSelection,
+  deepClonePath,
+  historyEntrySize,
+  shallowCloneLayer,
+  snapshotLayer,
+} from "./history-payload";
+import { paintTarget } from "./stroke-target";
+import { applyLayerSnapshot } from "./layer-snapshot-apply";
+import {
+  AdjustmentKind,
+  AdjustmentParams,
+  adjustmentLabel,
+  applyAdjustment,
+  isAdjustmentLayer,
+  snapshotForAdjustment,
+} from "./layer-mutations";
+import { autoLumaMaskInPlace, clearMaskInPlace, invertMaskInPlace } from "./mask-ops";
+import { withSelectionCommit } from "./selection-driver";
 import {
   exportPhotoshopDocument,
   exportPsd,
@@ -200,6 +224,15 @@ type DocumentSession = {
 };
 
 export const HISTORY_LIMIT = 80;
+export const HISTORY_MAX_BYTES = 512 * 1024 * 1024; // 512 MB across all entries
+
+export function newHistory() {
+  return new OperationHistory<HistoryEntry>({
+    maxNodes: HISTORY_LIMIT,
+    maxBytes: HISTORY_MAX_BYTES,
+    sizeOf: historyEntrySize,
+  });
+}
 
 export type LumaPlugin = {
   id: string;
@@ -214,10 +247,11 @@ export class Studio {
   actions = new ActionRecorder();
   useGL = false; // GPU compositing (RGBA16F) when true and supported
   private subscribers = new Set<SubscribeFn>();
-  private history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+  private history = newHistory();
   private renderScheduled = false;
   private renderRevision = 0;
   private disposed = false;
+  private antsTimer: number | null = null;
   private strokeTiles: Map<string, StrokeTile> | null = null;
   private lastPoint: BrushPoint | null = null;
   private paintSegmentState: PaintSegmentState | null = null;
@@ -263,26 +297,28 @@ export class Studio {
     };
     this.sessions = [session];
     this.activeSessionId = session.id;
-    // Keep marching ants animating even between edits (2D path only; GL path
-    // draws a static frame — ants will still update via requestRender on
-    // selection changes).
-    const tick = () => {
+    // Marching ants: instead of running a full-viewport recomposite at 60 Hz,
+    // schedule a cheap re-render only every ~200 ms while a selection exists,
+    // and only if we're not already scheduled. Composite-vs-ant repaint could
+    // eventually be split so ants animate over a cached bitmap, but this alone
+    // is a ~12x CPU cut vs. the old RAF path.
+    const ants = () => {
       if (this.disposed) return;
-      if (this.doc.selection && !this.useGL) {
-        renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
-          cacheRevision: this.renderRevision,
-        });
-      }
-      requestAnimationFrame(tick);
+      if (this.doc.selection && !this.renderScheduled) this.requestRender();
+      this.antsTimer = window.setTimeout(ants, 200);
     };
-    requestAnimationFrame(tick);
+    this.antsTimer = window.setTimeout(ants, 200);
   }
 
   static canUseGL() { return isGLSupported(); }
 
+  /**
+   * Enable GPU (RGBA16F, linear-light) compositing for **export and flatten
+   * only**. The interactive viewport stays on the CPU tiled renderer because
+   * `renderGL` has no viewport concept — see the note in `requestRender`.
+   */
   setUseGL(v: boolean) {
     this.useGL = v;
-    this.requestRender();
     this.emit();
   }
 
@@ -293,6 +329,10 @@ export class Studio {
 
   dispose() {
     this.disposed = true;
+    if (this.antsTimer !== null) {
+      window.clearTimeout(this.antsTimer);
+      this.antsTimer = null;
+    }
     for (const entry of this.plugins.values()) entry.dispose?.();
     this.plugins.clear();
     this.subscribers.clear();
@@ -338,6 +378,15 @@ export class Studio {
     this.renderScheduled = true;
     requestAnimationFrame(() => {
       this.renderScheduled = false;
+      // GPU preview when the user has asked for it AND the platform actually
+      // supports RGBA16F FBOs. Any failure falls straight back to the CPU path
+      // so the toggle can't visually break the app.
+      // The interactive viewport is CPU-only on purpose. `renderGL` composites
+      // the whole document 1:1 and takes no DisplayViewport, so routing the
+      // preview through it silently discards zoom/pan, distorts aspect ratio,
+      // desynchronises the overlay plane and pointer mapping, and drops the
+      // selection outline. Until renderGL accepts a viewport, GPU compositing
+      // is used only for export/flatten (see exportImage/flatten).
       renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
         cacheRevision: this.renderRevision,
       });
@@ -383,9 +432,16 @@ export class Studio {
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     const photoshop = photoshopCompatibilityReport(this.doc, { format: "auto" });
     return {
+      // The interactive viewport is always the CPU tiled renderer; `useGL`
+      // only selects the export/flatten path, so it is reported separately
+      // rather than being conflated with what is on screen.
       renderer: this.displayViewport
         ? "viewport-tiled-canvas2d" as const
-        : this.useGL ? "webgl2-rgba16f" as const : "canvas2d-rgba8" as const,
+        : "canvas2d-rgba8" as const,
+      exportRenderer: this.useGL && isGLSupported()
+        ? "webgl2-rgba16f" as const
+        : "canvas2d-rgba8" as const,
+      historyOverBudget: this.history.overBudget(),
       tileSize: DEFAULT_TILE_SIZE,
       tiles,
       precisionTiles,
@@ -480,32 +536,8 @@ export class Studio {
     for (const snap of snaps) {
       const layer = this.doc.layers.find((l) => l.id === snap.layerId);
       if (!layer) continue;
-      if (snap.bitmap) { layer.bitmap = cloneCanvas(snap.bitmap); bumpBitmapVersion(layer.bitmap); }
-      if (snap.surface) layer.surface = snap.surface.clone();
-      if (snap.mask) { layer.mask = cloneCanvas(snap.mask); bumpBitmapVersion(layer.mask); }
-      if (snap.tone) layer.tone = { ...snap.tone };
-      if (snap.curves) layer.curves = cloneCurves(snap.curves);
-      if (snap.levels) layer.levels = { ...snap.levels };
-      if (snap.hsl) layer.hsl = { ...snap.hsl };
-      if (snap.path) layer.path = { ...snap.path, anchors: snap.path.anchors.map((a) => ({ ...a, hIn: { ...a.hIn }, hOut: { ...a.hOut } })) };
-      if (snap.parentId !== undefined) layer.parentId = snap.parentId ?? undefined;
-      if (snap.locked !== undefined) layer.locked = snap.locked;
-      if (snap.clipping !== undefined) layer.clipping = snap.clipping;
-      if (snap.filters) layer.filters = cloneFilters(snap.filters);
-      if (snap.ai) layer.ai = cloneAiProvenance(snap.ai);
-      if (snap.raw) layer.raw = cloneRawLayerSource(snap.raw);
-      if (snap.effects) layer.effects = cloneEffects(snap.effects);
-      if (snap.opacity !== undefined) layer.opacity = snap.opacity;
-      if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
-      if (snap.blend) layer.blend = snap.blend;
-      if (snap.blendStack !== undefined) layer.blendStack = snap.blendStack ? cloneBlendStack(snap.blendStack) : undefined;
-      if (snap.blendIf !== undefined) layer.blendIf = snap.blendIf ? cloneBlendIf(snap.blendIf) : undefined;
-      if (snap.visible !== undefined) layer.visible = snap.visible;
-      if (snap.name) layer.name = snap.name;
-      if (snap.transform) layer.transform = { ...snap.transform };
-      if (snap.text) layer.text = { ...snap.text };
-      if (snap.shape) layer.shape = { ...snap.shape };
-      if (snap.bitmap && !snap.surface) this.syncLayerSurface(layer);
+      const { bitmapReplaced } = applyLayerSnapshot(layer, snap);
+      if (bitmapReplaced && !snap.surface) this.syncLayerSurface(layer);
       this.checkpointLayerSurface(layer);
     }
   }
@@ -595,7 +627,7 @@ export class Studio {
     if (current && current.doc.layers.length === 0) {
       current.name = name;
       current.doc = doc;
-      current.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+      current.history = newHistory();
       this.doc = doc;
       this.history = current.history;
       this.checkpointDocumentSurfaces(true);
@@ -605,7 +637,7 @@ export class Studio {
       id: nextId("doc"),
       name,
       doc,
-      history: new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT }),
+      history: newHistory(),
     };
     this.sessions.push(session);
     this.activeSessionId = session.id;
@@ -617,7 +649,7 @@ export class Studio {
   resetDocument(width: number, height: number) {
     const next = createDocument(width, height);
     this.installDocument(next, "Untitled");
-    this.history = new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+    this.history = newHistory();
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session) session.history = this.history;
     this.requestRender();
@@ -1212,66 +1244,12 @@ export class Studio {
     return layer;
   }
 
-  liveUpdateLevels(id: string, levels: LevelsParams) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-levels") return;
-    const key = `levels:${id}`;
-    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, levels: layer.levels ? { ...layer.levels } : undefined });
-    layer.levels = { ...levels };
-    this.requestRender();
-  }
-  updateLevels(id: string, levels: LevelsParams) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-levels") return;
-    const key = `levels:${id}`;
-    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId: id, levels: layer.levels ? { ...layer.levels } : undefined };
-    this.liveSnapshots.delete(key);
-    layer.levels = { ...levels };
-    const after: LayerSnapshot = { layerId: id, levels: { ...levels } };
-    this.commit({ label: "Levels adjusted", before: [before], after: [after] });
-    this.requestRender();
-  }
-
-  liveUpdateHsl(id: string, hsl: HslParams) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-hsl") return;
-    const key = `hsl:${id}`;
-    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, hsl: layer.hsl ? { ...layer.hsl } : undefined });
-    layer.hsl = { ...hsl };
-    this.requestRender();
-  }
-  updateHsl(id: string, hsl: HslParams) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-hsl") return;
-    const key = `hsl:${id}`;
-    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId: id, hsl: layer.hsl ? { ...layer.hsl } : undefined };
-    this.liveSnapshots.delete(key);
-    layer.hsl = { ...hsl };
-    const after: LayerSnapshot = { layerId: id, hsl: { ...hsl } };
-    this.commit({ label: "HSL adjusted", before: [before], after: [after] });
-    this.requestRender();
-  }
-
-  updateCurves(id: string, curves: Curves) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-curves") return;
-    const key = `curves:${id}`;
-    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId: id, curves: layer.curves ? cloneCurves(layer.curves) : undefined };
-    this.liveSnapshots.delete(key);
-    layer.curves = cloneCurves(curves);
-    const after: LayerSnapshot = { layerId: id, curves: cloneCurves(curves) };
-    this.commit({ label: "Curves adjusted", before: [before], after: [after] });
-    this.requestRender();
-  }
-
-  liveUpdateCurves(id: string, curves: Curves) {
-    const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-curves") return;
-    const key = `curves:${id}`;
-    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, curves: layer.curves ? cloneCurves(layer.curves) : undefined });
-    layer.curves = cloneCurves(curves);
-    this.requestRender();
-  }
+  liveUpdateLevels(id: string, levels: LevelsParams) { this.liveAdjustment(id, "levels", levels); }
+  updateLevels(id: string, levels: LevelsParams) { this.commitAdjustment(id, "levels", levels); }
+  liveUpdateHsl(id: string, hsl: HslParams) { this.liveAdjustment(id, "hsl", hsl); }
+  updateHsl(id: string, hsl: HslParams) { this.commitAdjustment(id, "hsl", hsl); }
+  updateCurves(id: string, curves: Curves) { this.commitAdjustment(id, "curves", curves); }
+  liveUpdateCurves(id: string, curves: Curves) { this.liveAdjustment(id, "curves", curves); }
 
   addPathLayer(path: PathStyle) {
     const layer = createPathLayer("Path", path);
@@ -1676,24 +1654,33 @@ export class Studio {
     this.requestRender();
   }
 
-  updateTone(id: string, tone: ToneParams) {
+  updateTone(id: string, tone: ToneParams) { this.commitAdjustment(id, "tone", tone); }
+  liveUpdateTone(id: string, tone: ToneParams) { this.liveAdjustment(id, "tone", tone); }
+
+  /** Live tick during a slider drag — stores an initial snapshot the first
+   *  time so the committing call can undo cleanly. */
+  private liveAdjustment<K extends AdjustmentKind>(id: string, kind: K, params: AdjustmentParams[K]) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-tone") return;
-    const key = `tone:${id}`;
-    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId: id, tone: layer.tone ? { ...layer.tone } : undefined };
-    this.liveSnapshots.delete(key);
-    layer.tone = { ...tone };
-    const after: LayerSnapshot = { layerId: id, tone: { ...tone } };
-    this.commit({ label: "Tone adjusted", before: [before], after: [after] });
+    if (!isAdjustmentLayer(layer, kind)) return;
+    const key = `${kind}:${id}`;
+    if (!this.liveSnapshots.has(key)) {
+      this.liveSnapshots.set(key, snapshotForAdjustment(layer, kind));
+    }
+    applyAdjustment(layer, kind, params);
     this.requestRender();
   }
 
-  liveUpdateTone(id: string, tone: ToneParams) {
+  /** Slider release — consumes the live snapshot (if any) as the "before"
+   *  side of the commit, ensuring a single history entry per drag. */
+  private commitAdjustment<K extends AdjustmentKind>(id: string, kind: K, params: AdjustmentParams[K]) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind !== "adjustment-tone") return;
-    const key = `tone:${id}`;
-    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, tone: layer.tone ? { ...layer.tone } : undefined });
-    layer.tone = { ...tone };
+    if (!isAdjustmentLayer(layer, kind)) return;
+    const key = `${kind}:${id}`;
+    const before = this.liveSnapshots.get(key) ?? snapshotForAdjustment(layer, kind);
+    this.liveSnapshots.delete(key);
+    applyAdjustment(layer, kind, params);
+    const after = snapshotForAdjustment(layer, kind);
+    this.commit({ label: adjustmentLabel(kind), before: [before], after: [after] });
     this.requestRender();
   }
 
@@ -2101,15 +2088,8 @@ export class Studio {
   invertMask(layerId: string) {
     const layer = this.findLayer(layerId);
     if (!layer) return;
-    ensureMask(layer, this.doc.width, this.doc.height);
-    const mask = layer.mask!;
     const before = [snapshotLayer(layer)];
-    const ctx = mask.getContext("2d")!;
-    const img = ctx.getImageData(0, 0, mask.width, mask.height);
-    const d = img.data;
-    for (let i = 0; i < d.length; i += 4) d[i + 3] = 255 - d[i + 3];
-    ctx.putImageData(img, 0, 0);
-    bumpBitmapVersion(mask);
+    invertMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask inverted", before, after: [snapshotLayer(layer)] });
     this.requestRender();
   }
@@ -2118,14 +2098,7 @@ export class Studio {
     const layer = this.findLayer(layerId);
     if (!layer || !layer.mask) return;
     const before = [snapshotLayer(layer)];
-    const ctx = layer.mask.getContext("2d")!;
-    ctx.save();
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-    ctx.fillStyle = "rgba(0,0,0,1)";
-    ctx.fillRect(0, 0, this.doc.width, this.doc.height);
-    ctx.restore();
-    bumpBitmapVersion(layer.mask);
+    clearMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask cleared", before, after: [snapshotLayer(layer)] });
     this.requestRender();
   }
@@ -2311,91 +2284,48 @@ export class Studio {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
     const before = [snapshotLayer(layer)];
-    ensureMask(layer, this.doc.width, this.doc.height);
-    const src = layer.bitmap.getContext("2d")!;
-    const img = src.getImageData(0, 0, layer.bitmap.width, layer.bitmap.height);
-    const d = img.data;
-    let sum = 0;
-    for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-    const mean = sum / (d.length / 4);
-    const mask = layer.mask!;
-    const mctx = mask.getContext("2d")!;
-    const mimg = mctx.createImageData(mask.width, mask.height);
-    const m = mimg.data;
-    for (let i = 0, j = 0; i < d.length; i += 4, j += 4) {
-      const luma = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
-      const t = Math.max(0, Math.min(1, (luma - (mean - 40)) / 80));
-      m[j] = 255; m[j + 1] = 255; m[j + 2] = 255; m[j + 3] = Math.round(t * 255);
-    }
-    mctx.putImageData(mimg, 0, 0);
-    bumpBitmapVersion(mask);
+    if (!autoLumaMaskInPlace(layer, this.doc.width, this.doc.height)) return;
     this.commit({ label: "Auto subject mask", before, after: [snapshotLayer(layer)] });
     this.actions.push({ op: "autoSubject" });
     this.requestRender();
   }
 
   // --- selection ---
-  selectRect(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    const before = cloneSelection(this.doc.selection);
-    selectRect(this.doc, x, y, w, h, mode, feather);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Selection", before: [], after: [], selectionBefore: before, selectionAfter: after });
+  private commitSelection(label: string, mutate: () => void) {
+    this.commit(withSelectionCommit(this.doc, label, mutate));
     this.requestRender();
+  }
+
+  selectRect(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
+    this.commitSelection("Selection", () => selectRect(this.doc, x, y, w, h, mode, feather));
   }
   selectEllipse(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    const before = cloneSelection(this.doc.selection);
-    selectEllipse(this.doc, x, y, w, h, mode, feather);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Selection (ellipse)", before: [], after: [], selectionBefore: before, selectionAfter: after });
-    this.requestRender();
+    this.commitSelection("Selection (ellipse)", () => selectEllipse(this.doc, x, y, w, h, mode, feather));
   }
   selectLasso(points: Array<{ x: number; y: number }>, mode: SelectionMode = "replace", feather = 0) {
-    const before = cloneSelection(this.doc.selection);
-    selectLasso(this.doc, points, mode, feather);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Selection (lasso)", before: [], after: [], selectionBefore: before, selectionAfter: after });
-    this.requestRender();
+    this.commitSelection("Selection (lasso)", () => selectLasso(this.doc, points, mode, feather));
   }
   selectByColor(layerId: string, x: number, y: number, tolerance: number, mode: SelectionMode = "replace", contiguous = true) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
-    const before = cloneSelection(this.doc.selection);
-    selectByColor(this.doc, layer.bitmap, x, y, tolerance, mode, contiguous);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Magic wand", before: [], after: [], selectionBefore: before, selectionAfter: after });
-    this.requestRender();
+    this.commitSelection("Magic wand", () => selectByColor(this.doc, layer.bitmap!, x, y, tolerance, mode, contiguous));
   }
   selectAll() {
-    const before = cloneSelection(this.doc.selection);
-    selectAll(this.doc);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Select all", before: [], after: [], selectionBefore: before, selectionAfter: after });
+    this.commitSelection("Select all", () => selectAll(this.doc));
     this.actions.push({ op: "selectAll" });
-    this.requestRender();
   }
   deselect() {
     if (!this.doc.selection) return;
-    const before = cloneSelection(this.doc.selection);
-    deselect(this.doc);
-    this.commit({ label: "Deselect", before: [], after: [], selectionBefore: before, selectionAfter: null });
+    this.commitSelection("Deselect", () => deselect(this.doc));
     this.actions.push({ op: "deselect" });
-    this.requestRender();
   }
   invertSelectionArea() {
-    const before = cloneSelection(this.doc.selection);
-    invertSelection(this.doc);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: "Invert selection", before: [], after: [], selectionBefore: before, selectionAfter: after });
+    this.commitSelection("Invert selection", () => invertSelection(this.doc));
     this.actions.push({ op: "invertSelection" });
-    this.requestRender();
   }
   featherSelection(radius: number) {
-    const before = cloneSelection(this.doc.selection);
-    featherSelection(this.doc, radius);
-    const after = cloneSelection(this.doc.selection);
-    this.commit({ label: `Feather ${radius}px`, before: [], after: [], selectionBefore: before, selectionAfter: after });
+    this.commitSelection(`Feather ${radius}px`, () => featherSelection(this.doc, radius));
     this.actions.push({ op: "featherSelection", radius });
-    this.requestRender();
   }
   refineSelection(params: RefineSelectionParams) {
     if (!this.doc.selection) return false;
@@ -2504,7 +2434,7 @@ export class Studio {
     const { decodeLumaProject } = await import("./project");
     const project = await decodeLumaProject(blob);
     this.installDocument(project.doc, project.name);
-    this.history = project.history ?? new OperationHistory<HistoryEntry>({ maxNodes: HISTORY_LIMIT });
+    this.history = project.history ?? newHistory();
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session) session.history = this.history;
     this.actions.fromJSON(JSON.stringify(project.actions));
@@ -2548,135 +2478,13 @@ export class Studio {
   }
 }
 
-function shallowCloneLayer(layer: Layer): Layer {
-  return {
-    ...layer,
-    surface: layer.surface?.clone(),
-    source: layer.source ? {
-      ...layer.source,
-      colorProfile: layer.source.colorProfile ? {
-        ...layer.source.colorProfile,
-        warnings: [...layer.source.colorProfile.warnings],
-      } : undefined,
-    } : undefined,
-    photoshop: layer.photoshop ? { ...layer.photoshop } : undefined,
-    raw: layer.raw ? cloneRawLayerSource(layer.raw) : undefined,
-    blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : undefined,
-    blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : undefined,
-    transform: { ...layer.transform },
-    tone: layer.tone ? { ...layer.tone } : undefined,
-    curves: layer.curves ? cloneCurves(layer.curves) : undefined,
-    levels: layer.levels ? { ...layer.levels } : undefined,
-    hsl: layer.hsl ? { ...layer.hsl } : undefined,
-    text: layer.text ? { ...layer.text } : undefined,
-    shape: layer.shape ? { ...layer.shape } : undefined,
-    path: layer.path ? deepClonePath(layer.path) : undefined,
-    filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? cloneAiProvenance(layer.ai) : undefined,
-    effects: layer.effects ? cloneEffects(layer.effects) : undefined,
-  };
-}
-
-function cloneDocument(doc: Document): Document {
-  return {
-    ...doc,
-    resolution: { ...doc.resolution },
-    guides: doc.guides.map((guide) => ({ ...guide })),
-    proofing: { ...doc.proofing },
-    layers: doc.layers.map((layer) => ({
-      ...shallowCloneLayer(layer),
-      bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,
-      mask: layer.mask ? cloneCanvas(layer.mask) : undefined,
-    })),
-    selection: doc.selection ? {
-      mask: cloneCanvas(doc.selection.mask),
-      bounds: { ...doc.selection.bounds },
-    } : null,
-  };
-}
-
-function cloneSelection(selection: Selection | null | undefined): Selection | null {
-  return selection ? {
-    mask: cloneCanvas(selection.mask),
-    bounds: { ...selection.bounds },
-  } : null;
-}
-
-function deepClonePath(p: PathStyle): PathStyle {
-  return {
-    ...p,
-    anchors: p.anchors.map((a) => ({ ...a, hIn: { ...a.hIn }, hOut: { ...a.hOut } })),
-  };
-}
-
-function snapshotLayer(layer: Layer): LayerSnapshot {
-  return {
-    layerId: layer.id,
-    bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,
-    surface: layer.surface?.clone(),
-    mask: layer.mask ? cloneCanvas(layer.mask) : undefined,
-    tone: layer.tone ? { ...layer.tone } : undefined,
-    curves: layer.curves ? cloneCurves(layer.curves) : undefined,
-    levels: layer.levels ? { ...layer.levels } : undefined,
-    hsl: layer.hsl ? { ...layer.hsl } : undefined,
-    opacity: layer.opacity,
-    fillOpacity: layer.fillOpacity ?? null,
-    blend: layer.blend,
-    blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
-    blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
-    visible: layer.visible,
-    name: layer.name,
-    transform: { ...layer.transform },
-    text: layer.text ? { ...layer.text } : undefined,
-    shape: layer.shape ? { ...layer.shape } : undefined,
-    path: layer.path ? deepClonePath(layer.path) : undefined,
-    parentId: layer.parentId ?? null,
-    locked: layer.locked,
-    clipping: layer.clipping,
-    filters: layer.filters ? cloneFilters(layer.filters) : undefined,
-    ai: layer.ai ? cloneAiProvenance(layer.ai) : undefined,
-    raw: layer.raw ? cloneRawLayerSource(layer.raw) : undefined,
-    effects: layer.effects ? cloneEffects(layer.effects) : undefined,
-  };
-}
+// Snapshot / clone helpers moved to ./history-payload for testability.
 
 function pixelFormatForDepth(bitDepth: Document["bitDepth"]): PixelFormat {
   return bitDepth === 32 ? "rgba32f" : bitDepth === 16 ? "rgba16f" : "rgba8";
 }
 
-function cloneRawSettings(settings: RawDevelopSettings): RawDevelopSettings {
-  return {
-    ...settings,
-    customWhiteBalance: [...settings.customWhiteBalance],
-  };
-}
-
-function cloneAiProvenance(ai: AiProvenance): AiProvenance {
-  return {
-    ...ai,
-    sourceLayerIds: [...ai.sourceLayerIds],
-    parameters: ai.parameters ? {
-      ...ai.parameters,
-      controls: ai.parameters.controls ? { ...ai.parameters.controls } : undefined,
-      selection: ai.parameters.selection ? {
-        ...ai.parameters.selection,
-        bounds: ai.parameters.selection.bounds ? { ...ai.parameters.selection.bounds } : undefined,
-      } : undefined,
-    } : undefined,
-  };
-}
-
-function cloneRawLayerSource(raw: RawLayerSource): RawLayerSource {
-  return {
-    ...raw,
-    // Sensor sources are immutable and may be hundreds of megabytes. History
-    // nodes intentionally share this byte buffer; .luma serialization dedupes it.
-    original: raw.original,
-    settings: cloneRawSettings(raw.settings),
-    sensor: { ...raw.sensor, warnings: [...raw.sensor.warnings] },
-  };
-}
-
+// Deep clone helpers moved to ./history-payload for testability.
 function developedDngPreviewCanvas(developed: DevelopedDng) {
   const canvas = newCanvas(developed.width, developed.height);
   const context = canvas.getContext("2d")!;
@@ -2684,30 +2492,6 @@ function developedDngPreviewCanvas(developed: DevelopedDng) {
   image.data.set(previewDisplayRgba(developed));
   context.putImageData(image, 0, 0);
   return canvas;
-}
-
-function cloneFilters(filters: SmartFilter[]): SmartFilter[] {
-  return filters.map((filter) => ({ ...filter, params: { ...filter.params } }));
-}
-
-function cloneEffects(effects: LayerEffect[]): LayerEffect[] {
-  return effects.map((effect) => ({ ...effect }));
-}
-
-function cloneBlendStack(passes: ReadonlyArray<BlendPass>): BlendPass[] {
-  return passes.map((pass) => ({ ...pass }));
-}
-
-function cloneBlendIf(settings: BlendIf): BlendIf {
-  return {
-    activeChannel: settings.activeChannel,
-    channels: {
-      gray: { source: { ...settings.channels.gray.source }, underlying: { ...settings.channels.gray.underlying } },
-      red: { source: { ...settings.channels.red.source }, underlying: { ...settings.channels.red.underlying } },
-      green: { source: { ...settings.channels.green.source }, underlying: { ...settings.channels.green.underlying } },
-      blue: { source: { ...settings.channels.blue.source }, underlying: { ...settings.channels.blue.underlying } },
-    },
-  };
 }
 
 function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
@@ -2730,12 +2514,7 @@ async function sha256Blob(blob: Blob) {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function paintTarget(layer: Layer, params: BrushParams, width: number, height: number): HTMLCanvasElement | null {
-  if (params.mode === "mask-add" || params.mode === "mask-remove") {
-    return ensureMask(layer, width, height);
-  }
-  return layer.bitmap ?? null;
-}
+// paintTarget moved to ./stroke-target for testability.
 
 // Scripting surface — installed on window as `window.luma` in the studio page.
 export type LumaAPI = {

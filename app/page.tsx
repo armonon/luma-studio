@@ -8,36 +8,36 @@ const showcaseModes = [
     name: "Photo",
     eyebrow: "RAW DEVELOP",
     title: "Every photon, still yours.",
-    copy: "Develop RAW, composite at full precision, and shape color in Display P3 with a live, nondestructive adjustment graph.",
+    copy: "Decode DNG straight off the sensor — Bayer demosaic, camera matrices and highlight recovery into a floating-point master.",
     metric: "32-bit",
-    metricLabel: "floating-point color",
+    metricLabel: "float DNG master",
     accent: "#f06d3b",
   },
   {
     name: "Retouch",
-    eyebrow: "SCENE INTELLIGENCE",
+    eyebrow: "ON-DEVICE MATTING",
     title: "Retouch meaning, not pixels.",
-    copy: "Luma recognizes light, depth, materials and subjects so complex masks become simple, editable decisions.",
-    metric: "0.8s",
-    metricLabel: "subject isolation",
+    copy: "Subject matting runs in your browser. Point at what you want and it becomes a mask you can paint, invert and refine.",
+    metric: "0",
+    metricLabel: "uploads — matting is local",
     accent: "#7c5ce7",
   },
   {
     name: "Design",
     eyebrow: "PIXEL + VECTOR",
     title: "One canvas. No boundaries.",
-    copy: "Mix typography, paths, shapes, smart objects and high-resolution raster layers without changing applications.",
-    metric: "∞",
-    metricLabel: "canvas precision",
+    copy: "Mix typography, bezier paths, shapes and high-resolution raster layers without changing applications.",
+    metric: "27",
+    metricLabel: "spec-exact blend modes",
     accent: "#2385f4",
   },
   {
     name: "AI",
     eyebrow: "NEURAL LAB",
     title: "Intelligence you can edit.",
-    copy: "Generate, relight, restore and expand. Every result arrives as transparent masks, layers and adjustments—not a flattened answer.",
-    metric: "10",
-    metricLabel: "creative models",
+    copy: "Every result arrives as an editable mask or layer — never a flattened answer you have to accept or discard.",
+    metric: "2",
+    metricLabel: "on-device models",
     accent: "#9a4ce1",
   },
 ] as const;
@@ -57,25 +57,27 @@ const bentoFeatures = [
   },
   {
     className: "bento-scene",
-    kicker: "SCENE MAP",
-    title: "The image understands itself.",
-    copy: "Select sky, light, sand, hair, glass or fabric as naturally as naming it.",
+    kicker: "CLICK TO SELECT",
+    title: "Point at what you mean.",
+    copy: "Click a subject and segmentation turns it into an editable mask. Shift to add, option to subtract.",
   },
   {
     className: "bento-history",
-    kicker: "INFINITE HISTORY",
+    kicker: "BRANCHING HISTORY",
     title: "Explore without fear.",
-    copy: "Branch any idea. Compare directions. Merge the best parts.",
+    copy: "Undo never throws work away — step back, take a different path, and the old branch is still there.",
   },
 ] as const;
 
+// Mirrors AiEditOperation in app/engine/ai-edit.ts. Keep these in sync — every
+// entry here must be an operation the engine can actually dispatch.
 const neuralActions = [
   ["✦", "Generative fill"],
   ["↔", "Expand"],
   ["⌫", "Remove"],
   ["◐", "Relight"],
-  ["◉", "Depth studio"],
-  ["↑", "Super resolution"],
+  ["◑", "Harmonize"],
+  ["↑", "Upscale"],
 ] as const;
 
 export default function MarketingHome() {
