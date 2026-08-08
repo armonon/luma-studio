@@ -10,7 +10,7 @@ import {
   useState,
 } from "react";
 import NextImage from "next/image";
-import { LumaAPI, Studio } from "@/app/engine/studio";
+import { LUMA_API_VERSION, LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
   BLEND_MODE_GROUPS,
@@ -789,7 +789,7 @@ export default function SpatialStudio() {
     const s = new Studio(1600, 1067, target);
     const unsub = s.subscribe(forceUpdate);
     const api: LumaAPI = {
-      version: "0.3",
+      version: LUMA_API_VERSION,
       studio: s,
       layers: () => s.doc.layers,
       active: () => (activeLayerIdRef.current ? s.findLayer(activeLayerIdRef.current) ?? null : null),
@@ -802,7 +802,18 @@ export default function SpatialStudio() {
       plugins: () => s.listPlugins(),
       export: (type, quality) => s.exportImage(type, quality),
     };
-    (window as unknown as { luma?: LumaAPI }).luma = api;
+    // The scripting surface hands out full document access plus export(), so
+    // it is a development tool by default. Ship it in production only when the
+    // user has explicitly opted in — see README "Scripting surface".
+    const devBuild = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
+    let optedIn = false;
+    try {
+      optedIn = window.localStorage?.getItem("luma.scripting") === "on";
+    } catch {
+      optedIn = false; // storage can throw under strict privacy settings
+    }
+    const scriptingEnabled = devBuild || optedIn;
+    if (scriptingEnabled) (window as unknown as { luma?: LumaAPI }).luma = api;
     setStudio(s);
     (async () => {
       try {

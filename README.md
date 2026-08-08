@@ -96,3 +96,57 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
 - [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+
+## Scripting surface
+
+Luma exposes a scripting hook on `window.luma` for automating the editor from
+the devtools console. It is an **internal tool, not a third-party extension
+point**: `activate(studio)` receives the whole `Studio`, with no capability
+scoping or sandboxing. Only run scripts you trust.
+
+Because it grants full document access plus `export()`, it is enabled in
+development builds only. To turn it on in a production build:
+
+```js
+localStorage.setItem("luma.scripting", "on"); // then reload
+```
+
+### Example
+
+```js
+luma.version;                 // "0.3" — the API version
+luma.layers();                // Layer[]
+luma.active();                // the selected layer, or null
+luma.engine();                // renderer / memory / plugin telemetry
+await luma.export("image/png");
+```
+
+### Plugins
+
+```js
+luma.registerPlugin({
+  id: "auto-contrast",
+  name: "Auto Contrast",
+  version: "1.0.0",
+  apiVersion: "0.3",          // checked against LUMA_API_VERSION
+  activate(studio) {
+    const layer = studio.doc.layers[0];
+    if (layer) studio.addLevelsLayer();
+    return () => { /* optional teardown */ };
+  },
+});
+```
+
+`registerPlugin` returns an unregister function. `apiVersion` is optional; when
+present it must match the running build's `LUMA_API_VERSION` on major.minor
+(pre-1.0, the minor is the breaking-change axis) or registration throws.
+
+A plugin's teardown is run defensively — a handler that throws is logged and
+skipped, and cannot abort Studio teardown or strand other plugins.
+
+### Limitations
+
+- Plugins are session-only. They are not persisted in `.luma` projects and must
+  be re-registered after reload.
+- There is no lifecycle hook for document switching. `switchDocument` swaps the
+  active document underneath a plugin; hold ids, not layer references.

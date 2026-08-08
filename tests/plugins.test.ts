@@ -1,0 +1,129 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  LUMA_API_VERSION,
+  Studio,
+  isCompatibleApiVersion,
+  type LumaPlugin,
+} from "../app/engine/studio.ts";
+
+// Studio is DOM-optional: render and export need a canvas, but document,
+// history and plugin work do not. A bare stub is enough for these.
+function studio() {
+  return new Studio(64, 48, {} as HTMLCanvasElement);
+}
+
+function plugin(id: string, overrides: Partial<LumaPlugin> = {}): LumaPlugin {
+  return { id, name: id, activate: () => undefined, ...overrides };
+}
+
+test("register / list / unregister round-trips", () => {
+  const s = studio();
+  const off = s.registerPlugin(plugin("a", { name: "Alpha", version: "1.2.3" }));
+  assert.deepEqual(s.listPlugins(), [{ id: "a", name: "Alpha", version: "1.2.3" }]);
+  off();
+  assert.deepEqual(s.listPlugins(), []);
+  s.dispose();
+});
+
+test("listPlugins never leaks the plugin object or its dispose handle", () => {
+  const s = studio();
+  s.registerPlugin(plugin("a", { activate: () => () => {} }));
+  const [entry] = s.listPlugins() as unknown as Array<Record<string, unknown>>;
+  assert.deepEqual(Object.keys(entry).sort(), ["id", "name", "version"]);
+  assert.equal("activate" in entry, false);
+  assert.equal("dispose" in entry, false);
+  s.dispose();
+});
+
+test("duplicate ids are rejected", () => {
+  const s = studio();
+  s.registerPlugin(plugin("dup"));
+  assert.throws(() => s.registerPlugin(plugin("dup")), /already registered/i);
+  s.dispose();
+});
+
+test("a plugin whose dispose throws can still be unregistered", () => {
+  const s = studio();
+  s.registerPlugin(plugin("bad", {
+    activate: () => () => { throw new Error("boom"); },
+  }));
+
+  // The throw must not prevent removal, and must not be re-thrown at the
+  // caller — otherwise the plugin is wedged in the map forever and every
+  // retry fails at the same line.
+  assert.doesNotThrow(() => s.unregisterPlugin("bad"));
+  assert.deepEqual(s.listPlugins(), [], "plugin must be gone despite the throw");
+  s.dispose();
+});
+
+test("one plugin's throwing dispose does not strand the others", () => {
+  const s = studio();
+  const disposed: string[] = [];
+  s.registerPlugin(plugin("first", { activate: () => () => { disposed.push("first"); } }));
+  s.registerPlugin(plugin("bad", { activate: () => () => { throw new Error("boom"); } }));
+  s.registerPlugin(plugin("last", { activate: () => () => { disposed.push("last"); } }));
+
+  assert.doesNotThrow(() => s.dispose());
+  assert.deepEqual(
+    disposed.sort(),
+    ["first", "last"],
+    "plugins after the throwing one must still be disposed",
+  );
+});
+
+test("a throwing dispose does not leak subscribers on teardown", () => {
+  const s = studio();
+  let notified = 0;
+  s.subscribe(() => { notified += 1; });
+  s.registerPlugin(plugin("bad", { activate: () => () => { throw new Error("boom"); } }));
+
+  s.dispose();
+  const before = notified;
+  // After dispose, nothing should still be wired to this Studio. Registering
+  // would emit; if subscribers survived teardown the count moves.
+  s.registerPlugin(plugin("later"));
+  assert.equal(notified, before, "subscribers must be cleared even if a dispose threw");
+});
+
+test("a plugin whose activate throws is not registered", () => {
+  const s = studio();
+  assert.throws(() => s.registerPlugin(plugin("explodes", {
+    activate: () => { throw new Error("nope"); },
+  })));
+  assert.deepEqual(s.listPlugins(), []);
+  // The id must remain claimable after a failed activation.
+  assert.doesNotThrow(() => s.registerPlugin(plugin("explodes")));
+  s.dispose();
+});
+
+test("isCompatibleApiVersion treats the 0.x minor as the breaking axis", () => {
+  assert.equal(isCompatibleApiVersion("0.3", "0.3"), true);
+  assert.equal(isCompatibleApiVersion("0.3.9", "0.3.1"), true, "patch is not breaking");
+  assert.equal(isCompatibleApiVersion(" 0.3 ", "0.3"), true, "whitespace tolerated");
+  assert.equal(isCompatibleApiVersion("0.2", "0.3"), false);
+  assert.equal(isCompatibleApiVersion("1.0", "0.3"), false);
+});
+
+test("a plugin targeting a different API version is rejected at register time", () => {
+  const s = studio();
+  assert.throws(
+    () => s.registerPlugin(plugin("stale", { apiVersion: "0.1" })),
+    /targets Luma API 0\.1/,
+  );
+  assert.deepEqual(s.listPlugins(), []);
+  s.dispose();
+});
+
+test("a plugin targeting the current API version registers", () => {
+  const s = studio();
+  assert.doesNotThrow(() => s.registerPlugin(plugin("ok", { apiVersion: LUMA_API_VERSION })));
+  assert.equal(s.listPlugins().length, 1);
+  s.dispose();
+});
+
+test("apiVersion is optional and omitting it still registers", () => {
+  const s = studio();
+  assert.doesNotThrow(() => s.registerPlugin(plugin("legacy")));
+  s.dispose();
+});

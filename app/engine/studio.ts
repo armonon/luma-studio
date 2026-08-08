@@ -234,12 +234,33 @@ export function newHistory() {
   });
 }
 
+/**
+ * Version of the scripting/plugin surface. Bump the minor on any breaking
+ * change to `LumaAPI` or to what `activate(studio)` may rely on. While we are
+ * pre-1.0, minor bumps are breaking (standard 0.x semantics).
+ */
+export const LUMA_API_VERSION = "0.3";
+
 export type LumaPlugin = {
   id: string;
   name: string;
+  /** The plugin's own version. Informational; not used for compatibility. */
   version?: string;
+  /**
+   * The Luma API version this plugin was written against, e.g. "0.3". When
+   * present it is checked against LUMA_API_VERSION and registration is
+   * rejected on mismatch, so a stale plugin fails loudly at register time
+   * rather than misbehaving somewhere deep in an edit.
+   */
+  apiVersion?: string;
   activate(studio: Studio): void | (() => void);
 };
+
+/** 0.x semantics: the minor is the breaking-change axis. */
+export function isCompatibleApiVersion(declared: string, current = LUMA_API_VERSION) {
+  const key = (v: string) => v.trim().split(".").slice(0, 2).join(".");
+  return key(declared) === key(current);
+}
 
 export class Studio {
   doc: Document;
@@ -302,12 +323,23 @@ export class Studio {
     // and only if we're not already scheduled. Composite-vs-ant repaint could
     // eventually be split so ants animate over a cached bitmap, but this alone
     // is a ~12x CPU cut vs. the old RAF path.
-    const ants = () => {
-      if (this.disposed) return;
-      if (this.doc.selection && !this.renderScheduled) this.requestRender();
+    // Headless (unit-test / worker) construction is supported: everything that
+    // needs a DOM is deferred, so a Studio can be built and driven for
+    // document, history and plugin work without a browser. Only the render and
+    // export paths require a real canvas.
+    if (Studio.hasDom()) {
+      const ants = () => {
+        if (this.disposed) return;
+        if (this.doc.selection && !this.renderScheduled) this.requestRender();
+        this.antsTimer = window.setTimeout(ants, 200);
+      };
       this.antsTimer = window.setTimeout(ants, 200);
-    };
-    this.antsTimer = window.setTimeout(ants, 200);
+    }
+  }
+
+  /** Whether a DOM with animation timing is available. False under node. */
+  private static hasDom() {
+    return typeof window !== "undefined" && typeof requestAnimationFrame === "function";
   }
 
   static canUseGL() { return isGLSupported(); }
@@ -333,7 +365,10 @@ export class Studio {
       window.clearTimeout(this.antsTimer);
       this.antsTimer = null;
     }
-    for (const entry of this.plugins.values()) entry.dispose?.();
+    // Third-party dispose handlers must not be able to abort teardown — an
+    // uncaught throw here previously skipped both clear() calls below, leaking
+    // every React subscriber onto a disposed Studio.
+    for (const [id, entry] of this.plugins) runPluginDispose(id, entry.dispose);
     this.plugins.clear();
     this.subscribers.clear();
   }
@@ -374,6 +409,9 @@ export class Studio {
 
   requestRender() {
     this.renderRevision += 1;
+    // Headless: there is nothing to paint into and no frame clock. Bumping the
+    // revision is still correct so cache invalidation stays consistent.
+    if (!Studio.hasDom()) return;
     if (this.renderScheduled) return;
     this.renderScheduled = true;
     requestAnimationFrame(() => {
@@ -442,6 +480,7 @@ export class Studio {
         ? "webgl2-rgba16f" as const
         : "canvas2d-rgba8" as const,
       historyOverBudget: this.history.overBudget(),
+      plugins: this.plugins.size,
       tileSize: DEFAULT_TILE_SIZE,
       tiles,
       precisionTiles,
@@ -1181,6 +1220,11 @@ export class Studio {
 
   registerPlugin(plugin: LumaPlugin) {
     if (!plugin.id || this.plugins.has(plugin.id)) throw new Error(`Plugin already registered: ${plugin.id}`);
+    if (plugin.apiVersion && !isCompatibleApiVersion(plugin.apiVersion)) {
+      throw new Error(
+        `Plugin "${plugin.id}" targets Luma API ${plugin.apiVersion}, but this build is ${LUMA_API_VERSION}`,
+      );
+    }
     const dispose = plugin.activate(this) || undefined;
     this.plugins.set(plugin.id, { plugin, dispose });
     this.emit();
@@ -1190,8 +1234,10 @@ export class Studio {
   unregisterPlugin(id: string) {
     const entry = this.plugins.get(id);
     if (!entry) return;
-    entry.dispose?.();
+    // Remove first: a dispose that throws must not be able to wedge the plugin
+    // in the map, where every retry would fail at the same line.
     this.plugins.delete(id);
+    runPluginDispose(id, entry.dispose);
     this.emit();
   }
 
@@ -2478,6 +2524,20 @@ export class Studio {
   }
 }
 
+/**
+ * Run a plugin's dispose handler without letting it break the host. Plugin code
+ * is not trusted to be well-behaved; a throw here must never abort Studio
+ * teardown or strand other plugins.
+ */
+function runPluginDispose(id: string, dispose: (() => void) | undefined) {
+  if (!dispose) return;
+  try {
+    dispose();
+  } catch (error) {
+    console.error(`Luma plugin "${id}" threw while disposing`, error);
+  }
+}
+
 // Snapshot / clone helpers moved to ./history-payload for testability.
 
 function pixelFormatForDepth(bitDepth: Document["bitDepth"]): PixelFormat {
@@ -2518,7 +2578,7 @@ async function sha256Blob(blob: Blob) {
 
 // Scripting surface — installed on window as `window.luma` in the studio page.
 export type LumaAPI = {
-  version: "0.3";
+  version: typeof LUMA_API_VERSION;
   studio: Studio;
   layers(): Layer[];
   active(): Layer | null;
