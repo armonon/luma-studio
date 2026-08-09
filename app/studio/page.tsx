@@ -82,9 +82,12 @@ import {
 const ExportPopover = lazy(() => import("./export-popover"));
 const ToolDock = lazy(() => import("./tool-dock"));
 const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
+const StudioTitlebar = lazy(() => import("./studio-titlebar"));
+const ContextToolbar = lazy(() => import("./context-toolbar"));
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
+type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect";
 type Tool =
   | "move"
   | "brush"
@@ -332,6 +335,7 @@ function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   const fillOpacity = resolvedFillOpacity(layer);
   const hasAdvancedSettings = !isNeutralBlendIf(blendIf) || fillOpacity < 1;
   const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedSettings);
+  const [draggedPass, setDraggedPass] = useState<string | null>(null);
   const activeBlendIf = blendIf.channels[blendIf.activeChannel];
   const setRange = (key: "source" | "underlying", range: BlendIfRange) => {
     studio.setLayerBlendIf(layer.id, {
@@ -345,18 +349,31 @@ function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   return (
     <div className="blend-stack-editor">
       <div className="blend-stack-heading">
-        <span><strong>Blend stack</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} passes</small></span>
+        <span><strong>Blending</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} modes</small></span>
         <button
           type="button"
           onClick={() => studio.addBlendPass(layer.id)}
           disabled={passes.length >= MAX_LAYER_BLEND_PASSES}
           title="Add another blend pass"
-        >＋ Pass</button>
+        >＋ Add blend mode</button>
       </div>
       <p>Pass 1 is applied first. Every pass blends this layer again with its own mode and opacity.</p>
       <div className="blend-pass-list">
         {passes.map((pass, index) => (
-          <div className={`blend-pass ${pass.enabled ? "" : "disabled"}`} key={pass.id}>
+          <div
+            className={`blend-pass ${pass.enabled ? "" : "disabled"}`}
+            key={pass.id}
+            draggable
+            onDragStart={() => setDraggedPass(pass.id)}
+            onDragEnd={() => setDraggedPass(null)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={() => {
+              if (!draggedPass || draggedPass === pass.id) return;
+              const from = passes.findIndex((candidate) => candidate.id === draggedPass);
+              studio.moveBlendPass(layer.id, draggedPass, index - from);
+              setDraggedPass(null);
+            }}
+          >
             <div className="blend-pass-topline">
               <button
                 type="button"
@@ -790,6 +807,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const psdInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
   const captureInput = useRef<HTMLInputElement>(null);
+  const inspectorRef = useRef<HTMLElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
   const [, setVersion] = useState(0);
   const forceUpdate = useCallback(() => setVersion((n) => n + 1), []);
@@ -803,6 +821,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
   const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
+  const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const activeLayerIdRef = useRef<string | null>(null);
   const setActiveLayerId = useCallback((id: string | null) => {
     activeLayerIdRef.current = id;
@@ -859,12 +878,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [selectionSmooth, setSelectionSmooth] = useState(2);
   const [selectionContrast, setSelectionContrast] = useState(12);
   const [selectionShift, setSelectionShift] = useState(0);
+  const [selectionMode, setSelectionMode] = useState<SelectionCombineMode>("replace");
   const [toast, setToast] = useState("");
   const [activePreset, setActivePreset] = useState(0);
   const [customName, setCustomName] = useState<string | null>(null);
   const [layerCompName, setLayerCompName] = useState("Layer Comp");
   const [artboardName, setArtboardName] = useState("Artboard");
   const [textDraft, setTextDraft] = useState("WANDER FARTHER");
+  const [textSize, setTextSize] = useState(96);
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -912,6 +933,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [drag, setDrag] = useState<Drag | null>(null);
   const dragRef = useRef<Drag | null>(null);
   const setDragBoth = (d: Drag | null) => { dragRef.current = d; setDrag(d); };
+  const resolvedSelectionMode = useCallback((event: { shiftKey: boolean; altKey: boolean }): SelectionCombineMode => (
+    event.shiftKey ? "add" : event.altKey ? "subtract" : selectionMode
+  ), [selectionMode]);
 
   // Free-transform drag state (handles overlay).
   type FTDrag =
@@ -1322,7 +1346,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     if (wandTool) {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("Wand needs a raster layer"); return; }
-      studio.selectByColor(activeLayer.id, p.x, p.y, activeTool === "sel-quick" ? Math.max(6, wandTolerance / 2) : wandTolerance, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace", activeTool === "sel-quick" ? true : !e.metaKey);
+      studio.selectByColor(activeLayer.id, p.x, p.y, activeTool === "sel-quick" ? Math.max(6, wandTolerance / 2) : wandTolerance, resolvedSelectionMode(e), activeTool === "sel-quick" ? true : !e.metaKey);
       notify(activeTool === "sel-quick" ? "Quick selection painted" : "Selection updated");
       return;
     }
@@ -1334,7 +1358,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         nextPoint = snapPointToEdge({ width: image.width, height: image.height, data: image.data }, p, Math.max(6, brushSize / 4));
       }
       if (pointDraft.length >= 2 && Math.hypot(nextPoint.x - pointDraft[0].x, nextPoint.y - pointDraft[0].y) < Math.max(8, (doc?.width ?? 1000) * 0.008)) {
-        studio.selectLasso(pointDraft, e.shiftKey ? "add" : e.altKey ? "subtract" : "replace", feather);
+        studio.selectLasso(pointDraft, resolvedSelectionMode(e), feather);
         setPointDraft([]);
         notify("Polygon selection committed");
       } else setPointDraft((points) => [...points, nextPoint]);
@@ -1356,7 +1380,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     if (activeTool === "sel-sam") {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("SAM needs a raster layer"); return; }
-      const mode = e.shiftKey ? "add" : e.altKey ? "subtract" : "replace";
+      const mode = resolvedSelectionMode(e);
       setNeural({ msg: "SAM click", pct: 0 });
       (async () => {
         try {
@@ -1387,17 +1411,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (["text", "vertical-text", "path-text", "type-mask"].includes(activeTool)) {
-      if (activeTool === "type-mask") studio.selectTextMask(textDraft, p.x, p.y, "700 96px 'Inter', system-ui, sans-serif", false);
+      if (activeTool === "type-mask") studio.selectTextMask(textDraft, p.x, p.y, `700 ${textSize}px 'Inter', system-ui, sans-serif`, false);
       else if (activeTool === "path-text") {
         if (!activeLayer?.path) { notify("Select a path layer first"); return; }
         const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
         if (!local) return;
         studio.addTextLayer(
           textDraft,
-          { x: local.x, y: local.y, layout: "path", path: activeLayer.path, color: brushColor },
+          { x: local.x, y: local.y, layout: "path", path: activeLayer.path, color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` },
           activeLayer.transform,
         );
-      } else studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor });
+      } else studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` });
       notify(activeTool === "type-mask" ? "Type selection created" : "Text added");
       return;
     }
@@ -1556,7 +1580,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const y = Math.min(d.y0, d.y1);
     const w = Math.abs(d.x1 - d.x0);
     const h = Math.abs(d.y1 - d.y0);
-    const mode = e.shiftKey ? "add" : e.altKey ? "subtract" : "replace";
+    const mode = resolvedSelectionMode(e);
     if (d.kind === "sel-rect" && w > 2 && h > 2) studio.selectRect(x, y, w, h, mode, feather);
     else if (d.kind === "sel-ellipse" && w > 2 && h > 2) studio.selectEllipse(x, y, w, h, mode, feather);
     else if (d.kind === "sel-lasso" && d.path && d.path.length > 4) studio.selectLasso(d.path, mode, feather);
@@ -1564,7 +1588,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     else if (d.kind === "ellipse" && w > 2 && h > 2) studio.addShapeLayer({ kind: "ellipse", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
     else if (["triangle", "polygon", "line", "custom-shape"].includes(d.kind) && w > 2 && h > 2) studio.addPathLayer(geometricPath(d.kind as "triangle" | "polygon" | "line" | "custom-shape", x, y, w, h, brushColor));
     else if (d.kind === "frame" && w > 2 && h > 2) studio.addFrame(x, y, w, h, e.shiftKey);
-    else if (d.kind === "paragraph-text" && w > 8 && h > 8) studio.addTextLayer(textDraft, { x, y, layout: "paragraph", boxWidth: w, boxHeight: h, color: brushColor });
+    else if (d.kind === "paragraph-text" && w > 8 && h > 8) studio.addTextLayer(textDraft, { x, y, layout: "paragraph", boxWidth: w, boxHeight: h, color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` });
     else if (d.kind === "gradient" && activeLayer?.kind === "raster") studio.gradientFill(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, brushColor, secondaryColor, gradientType);
     else if (d.kind === "crop" && w > 2 && h > 2) studio.cropRect(x, y, w, h);
     else if (d.kind === "straighten") studio.straightenDocument(-Math.atan2(d.y1 - d.y0, d.x1 - d.x0));
@@ -1993,6 +2017,22 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     notify(`Played ${a.name}`);
   };
 
+  const focusInspector = (tab: "layers" | "properties" | "ai") => {
+    setInspectorTab(tab);
+    requestAnimationFrame(() => {
+      const selector = tab === "layers" ? ".layers-card" : tab === "ai" ? ".neural-card" : ".glass-card:not(.layers-card):not(.neural-card)";
+      inspectorRef.current?.querySelector(selector)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const runStudioCommand = (command: string) => {
+    if (command === "select-subject") { activateTool("sel-sam", "select"); focusInspector("ai"); void runNeuralSubject(); return; }
+    if (command === "curves" && studio) { const layer = studio.addCurvesLayer(); setActiveLayerId(layer.id); focusInspector("properties"); return; }
+    if (command === "levels" && studio) { const layer = studio.addLevelsLayer(); setActiveLayerId(layer.id); focusInspector("properties"); return; }
+    if (command === "history") { setShowHistory(true); return; }
+    if (command === "export") setShowExportMenu(true);
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -2001,6 +2041,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         if (e.shiftKey) studio?.redo(); else studio?.undo();
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); void saveProject(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") { e.preventDefault(); requestDocumentOpen(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") { e.preventDefault(); setShowExportMenu(true); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); studio?.selectAll(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); studio?.deselect(); return; }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); studio?.invertSelectionArea(); return; }
@@ -2011,7 +2054,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
       if (e.key === "Enter" && pointSelectionTool && pointDraft.length >= 3) {
         e.preventDefault();
-        studio?.selectLasso(pointDraft, "replace", feather);
+        studio?.selectLasso(pointDraft, resolvedSelectionMode(e), feather);
         setPointDraft([]);
         notify("Polygon selection committed");
         return;
@@ -2055,7 +2098,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences]);
+    // The open/save closures are fully represented by studio, projectName and notify.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspace, studio, projectName, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -2335,52 +2380,29 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       <div className="spatial-aura aura-violet" />
 
       <section className="spatial-window">
-        <header className="spatial-topbar">
-          {desktop && <div className="desktop-titlebar-drag" data-tauri-drag-region="true" aria-hidden="true" />}
-          <div className="studio-brand-area">
-            <button className="studio-app-mark" onClick={() => history.back()} aria-label="Back to Luma home">L</button>
-            <div className="studio-project-title">
-              <strong>{projectName}</strong>
-              <span aria-live="polite">{saveState === "saving" ? "Saving changes…" : saveState === "error" ? "Save needs attention" : "All changes saved locally"}</span>
-            </div>
-            <button className="studio-header-button" onClick={requestDocumentOpen} aria-label="Open image, PSD, RAW, or Luma project">
-              <span>＋</span> Open
-            </button>
-          </div>
-
-          <nav className="workspace-switcher" aria-label="Studio workspace">
-            {orderedWorkspaces.map(([id, label, description]) => (
-              <button
-                key={id}
-                className={workspace === id ? "active" : ""}
-                onClick={() => switchWorkspace(id)}
-                title={description}
-                aria-current={workspace === id ? "page" : undefined}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-
-          <div className="spatial-share-actions">
-            <button className="studio-icon-button" onClick={() => studio?.undo()} title="Undo (⌘Z)" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
-            <button className="studio-icon-button" onClick={() => studio?.redo()} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
-            <span className="studio-action-divider" />
-            <button className={`studio-header-button ${showFilters ? "active" : ""}`} onClick={() => setShowFilters((value) => !value)} aria-pressed={showFilters}>
-              <span>◐</span> Filters
-            </button>
-            <button className="studio-header-button" onClick={() => setShowBatch(true)}>
-              <span>▦</span> Batch
-            </button>
-            <button className="studio-icon-button" onClick={saveProject} title="Save Luma project" aria-label="Save Luma project">
-              {saveState === "saving" ? "•••" : saveState === "error" ? "!" : "⌘"}
-            </button>
-            <button className="studio-icon-button" onClick={() => setShowWorkspaceSettings(true)} title="Customize workspaces and shortcuts" aria-label="Customize workspaces and shortcuts">⚙</button>
-            <button className="spatial-export" onClick={() => setShowExportMenu((value) => !value)} aria-haspopup="dialog" aria-expanded={showExportMenu}>
-              Export <span>⌄</span>
-            </button>
-          </div>
-        </header>
+        <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
+          <StudioTitlebar
+            desktop={desktop}
+            projectName={projectName}
+            saveState={saveState}
+            zoom={Math.round(view.zoom * 100)}
+            canUndo={studio?.canUndo() ?? false}
+            canRedo={studio?.canRedo() ?? false}
+            exportOpen={showExportMenu}
+            filtersOpen={showFilters}
+            onBack={() => history.back()}
+            onOpen={requestDocumentOpen}
+            onUndo={() => studio?.undo()}
+            onRedo={() => studio?.redo()}
+            onFit={() => setView({ zoom: 1, panX: 0, panY: 0 })}
+            onSave={saveProject}
+            onFilters={() => setShowFilters((value) => !value)}
+            onBatch={() => setShowBatch(true)}
+            onHistory={() => setShowHistory(true)}
+            onSettings={() => setShowWorkspaceSettings(true)}
+            onExport={() => setShowExportMenu((value) => !value)}
+          />
+        </Suspense>
 
         <div className="spatial-workspace">
           <Suspense fallback={<aside className="spatial-toolbar" aria-label="Loading tools" />}>
@@ -2389,50 +2411,63 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               activeWorkspace={workspace}
               activeTool={activeTool}
               onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
-              onAiSelect={() => { setInspectorTab("ai"); void runSubject(); }}
+              onAiSelect={() => { activateTool("sel-sam", "select"); focusInspector("ai"); }}
+              onCommand={runStudioCommand}
             />
           </Suspense>
 
           <section className="spatial-canvas-column" data-assets-open={assetsOpen}>
-            <div className="studio-contextbar" aria-label={`${activeToolMeta?.[2] ?? "Tool"} options`}>
-              <div className="studio-context-identity">
-                <span>{activeToolMeta?.[1] ?? "•"}</span>
-                <div>
-                  <strong>{activeToolMeta?.[2] ?? "Tool"}</strong>
-                  <small>{activeWorkspaceMeta[2]}</small>
-                </div>
-              </div>
-
-              {(paintingTool || retouchTool) && (
-                <div className="studio-context-controls">
-                  <label className="context-color" title="Brush color">
-                    <input type="color" value={brushColor} onChange={(event) => setBrushColor(event.target.value)} aria-label="Brush color" />
-                  </label>
-                  <label><span>Size</span><input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} /><output>{brushSize}px</output></label>
-                  <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
-                </div>
-              )}
-
-              {(marqueeTool || lassoTool || wandTool || pointSelectionTool) && (
-                <div className="studio-context-controls">
-                  <label><span>Feather</span><input type="range" min="0" max="128" value={feather} onChange={(event) => setFeather(Number(event.target.value))} /><output>{feather}px</output></label>
-                  {wandTool && <label><span>Tolerance</span><input type="range" min="0" max="255" value={wandTolerance} onChange={(event) => setWandTolerance(Number(event.target.value))} /><output>{wandTolerance}</output></label>}
-                </div>
-              )}
-
-              {!paintingTool && !retouchTool && !marqueeTool && !lassoTool && !wandTool && !pointSelectionTool && (
-                <div className="studio-context-summary">
-                  <span>{activeLayer?.name ?? "No active layer"}</span>
-                  <small>{activeLayer?.kind.replaceAll("-", " ") ?? "Open an image to begin"}</small>
-                </div>
-              )}
-
-              <div className="studio-context-actions">
-                <button onClick={() => setView({ zoom: 1, panX: 0, panY: 0 })} title="Fit document to view">Fit</button>
-                <button className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} aria-pressed={showGuides}>Guides</button>
-                <button className={assetsOpen ? "active" : ""} onClick={() => setAssetsOpen((value) => !value)} aria-pressed={assetsOpen}>Assets</button>
-              </div>
-            </div>
+            <Suspense fallback={<div className="studio-contextbar" />}>
+              <ContextToolbar
+                tool={activeTool}
+                label={activeToolMeta?.[2] ?? "Tool"}
+                description={activeWorkspaceMeta[2]}
+                layerName={activeLayer?.name ?? "No active layer"}
+                layerKind={activeLayer?.kind.replaceAll("-", " ") ?? "Open an image to begin"}
+                mode={(paintingTool || retouchTool || workspace === "mask") ? "paint" : (marqueeTool || lassoTool || wandTool || pointSelectionTool) ? "selection" : workspace === "vector" && ["text", "paragraph-text", "vertical-text", "path-text", "type-mask"].includes(activeTool) ? "type" : ["crop", "perspective-crop"].includes(activeTool) ? "crop" : "general"}
+                selectionMode={selectionMode}
+                values={{
+                  color: brushColor,
+                  size: brushSize,
+                  hardness: Math.round(hardness * 100),
+                  flow: Math.round(brushFlow * 100),
+                  opacity: Math.round(brushOpacity * 100),
+                  smoothing: Math.round(brushSmoothing * 100),
+                  symmetry: brushSymmetry,
+                  feather,
+                  smooth: selectionSmooth,
+                  contrast: selectionContrast,
+                  shiftEdge: selectionShift,
+                  tolerance: wandTolerance,
+                  textSize,
+                }}
+                showGuides={showGuides}
+                assetsOpen={assetsOpen}
+                onValue={(key, value) => {
+                  if (key === "color") setBrushColor(String(value));
+                  else if (key === "size") setBrushSize(Number(value));
+                  else if (key === "hardness") setHardness(Number(value) / 100);
+                  else if (key === "flow") setBrushFlow(Number(value) / 100);
+                  else if (key === "opacity") setBrushOpacity(Number(value) / 100);
+                  else if (key === "smoothing") setBrushSmoothing(Number(value) / 100);
+                  else if (key === "symmetry") setBrushSymmetry(value as typeof brushSymmetry);
+                  else if (key === "feather") setFeather(Number(value));
+                  else if (key === "smooth") setSelectionSmooth(Number(value));
+                  else if (key === "contrast") setSelectionContrast(Number(value));
+                  else if (key === "shiftEdge") setSelectionShift(Number(value));
+                  else if (key === "tolerance") setWandTolerance(Number(value));
+                  else if (key === "textSize") {
+                    const size = Number(value);
+                    setTextSize(size);
+                    if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, { font: activeLayer.text.font.replace(/\d+px/, `${size}px`) });
+                  }
+                }}
+                onSelectionMode={setSelectionMode}
+                onFit={() => setView({ zoom: 1, panX: 0, panY: 0 })}
+                onToggleGuides={() => setShowGuides((value) => !value)}
+                onToggleAssets={() => setAssetsOpen((value) => !value)}
+              />
+            </Suspense>
 
             <div className="spatial-document-tabs">
               {openDocuments.map((documentTab) => (
@@ -2584,8 +2619,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
             <div className="spatial-filmstrip">
               <div className="filmstrip-mode">
-                <strong>{workspaces.find(([id]) => id === workspace)?.[1]}</strong>
-                <span>{layers.length} layers</span>
+                <strong>Variations</strong>
+                <span>{filmstrip.length} items</span>
+                <button onClick={() => setAssetsOpen(false)} aria-label="Collapse variations tray">⌄</button>
               </div>
               {filmstrip.map((photo, index) => (
                 <button
@@ -2604,11 +2640,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </div>
           </section>
 
-          <aside className="spatial-inspector" data-tab={inspectorTab}>
+          <aside ref={inspectorRef} className="spatial-inspector" data-tab={inspectorTab}>
             <nav className="inspector-tabs" aria-label="Inspector panels">
-              <button className={inspectorTab === "layers" ? "active" : ""} onClick={() => setInspectorTab("layers")} aria-pressed={inspectorTab === "layers"}>Layers</button>
-              <button className={inspectorTab === "properties" ? "active" : ""} onClick={() => setInspectorTab("properties")} aria-pressed={inspectorTab === "properties"}>Properties</button>
-              <button className={inspectorTab === "ai" ? "active" : ""} onClick={() => setInspectorTab("ai")} aria-pressed={inspectorTab === "ai"}><span>✦</span> AI</button>
+              <button className={inspectorTab === "properties" ? "active" : ""} onClick={() => focusInspector("properties")} aria-pressed={inspectorTab === "properties"}>Inspector</button>
+              <button className={inspectorTab === "layers" ? "active" : ""} onClick={() => focusInspector("layers")} aria-pressed={inspectorTab === "layers"}>Layers</button>
+              <button className={inspectorTab === "ai" ? "active" : ""} onClick={() => focusInspector("ai")} aria-pressed={inspectorTab === "ai"}><span>✦</span> Neural</button>
             </nav>
             <section className="glass-card layers-card">
               <header>
@@ -2633,7 +2669,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               </header>
               <div className="layer-stack">
-                {layers.map((layer) => (
+                {layers.map((layer, targetIndex) => (
                   <button
                     key={layer.id}
                     className={`spatial-layer ${activeLayerId === layer.id ? "active" : ""}`}
@@ -2641,6 +2677,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     title={layer.ai
                       ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}${layer.ai.inputSha256 ? ` · input ${layer.ai.inputSha256.slice(0, 12)}…` : ""}`
                       : undefined}
+                    draggable
+                    onDragStart={() => setDraggedLayerId(layer.id)}
+                    onDragEnd={() => setDraggedLayerId(null)}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={() => {
+                      if (!studio || !draggedLayerId || draggedLayerId === layer.id) return;
+                      const sourceIndex = layers.findIndex((candidate) => candidate.id === draggedLayerId);
+                      studio.reorderLayer(draggedLayerId, targetIndex - sourceIndex);
+                      setDraggedLayerId(null);
+                    }}
                     onClick={() => {
                       setActiveLayerId(layer.id);
                       setInspectorTab("layers");
@@ -2648,6 +2694,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                         setActiveAdjustmentId(layer.id);
                         if (layer.tone) setTone({ ...layer.tone });
                       }
+                    }}
+                    onDoubleClick={() => {
+                      const name = window.prompt("Layer name", layer.name)?.trim();
+                      if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
                     }}
                   >
                     <span className={`spatial-layer-thumb kind-${layer.kind}`}>
@@ -2683,7 +2733,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     : studio && <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />}
                   <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
                     <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
-                      {activeLayer.locked ? "🔒 Locked" : "◇ Lock"}
+                      {activeLayer.locked ? "Locked" : "Lock layer"}
                     </button>
                     {activeLayer.kind !== "group" && (
                       <button onClick={() => studio?.setLayerProp(activeLayer.id, "clipping", !activeLayer.clipping, "Clipping mask")} style={{ flex: 1 }}>

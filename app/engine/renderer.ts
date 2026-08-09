@@ -816,9 +816,9 @@ function drawDocumentCheckerboard(
   ctx.beginPath();
   ctx.rect(left, top, width, height);
   ctx.clip();
-  ctx.fillStyle = "#1c1c22";
+  ctx.fillStyle = "#e9eaed";
   ctx.fillRect(left, top, width, height);
-  ctx.fillStyle = "#26262e";
+  ctx.fillStyle = "#dfe1e5";
   const firstX = Math.floor(left / tile) * tile;
   const firstY = Math.floor(top / tile) * tile;
   for (let y = firstY; y < top + height; y += tile) {

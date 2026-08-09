@@ -1,0 +1,122 @@
+"use client";
+
+import type { LucideIcon } from "lucide-react";
+import {
+  Aperture,
+  Blend,
+  BoxSelect,
+  Brush,
+  Circle,
+  Crop,
+  Eraser,
+  Eye,
+  Focus,
+  Frame,
+  Grid2X2,
+  Highlighter,
+  LassoSelect,
+  Magnet,
+  MousePointer2,
+  Move,
+  PaintBucket,
+  Paintbrush,
+  Palette,
+  PenTool,
+  Pencil,
+  Pipette,
+  Radius,
+  Ratio,
+  Ruler,
+  Scan,
+  ScanSearch,
+  Scissors,
+  Shapes,
+  Sparkles,
+  Stamp,
+  SunMedium,
+  Type,
+  WandSparkles,
+  Waves,
+  Zap,
+} from "lucide-react";
+
+const toolIcons: Record<string, LucideIcon> = {
+  move: Move,
+  brush: Brush,
+  "capture-brush": Scan,
+  pencil: Pencil,
+  mixer: Blend,
+  erase: Eraser,
+  gradient: Ratio,
+  pattern: Grid2X2,
+  fill: PaintBucket,
+  clone: Stamp,
+  heal: Highlighter,
+  "spot-heal": Focus,
+  patch: BoxSelect,
+  remove: Scissors,
+  dodge: SunMedium,
+  burn: Aperture,
+  "blur-brush": Radius,
+  "sharpen-brush": Zap,
+  smudge: Waves,
+  sponge: Circle,
+  liquify: Waves,
+  "sel-rect": BoxSelect,
+  "sel-ellipse": Circle,
+  "sel-lasso": LassoSelect,
+  "sel-polygon": PenTool,
+  "sel-magnetic": Magnet,
+  "sel-quick": ScanSearch,
+  "sel-wand": WandSparkles,
+  "sel-sam": Sparkles,
+  "mask-add": Eye,
+  "mask-remove": Eraser,
+  tone: SunMedium,
+  text: Type,
+  "paragraph-text": Type,
+  "vertical-text": Type,
+  "path-text": Type,
+  "type-mask": Type,
+  rect: Shapes,
+  ellipse: Circle,
+  triangle: Shapes,
+  polygon: Shapes,
+  line: PenTool,
+  "custom-shape": Shapes,
+  frame: Frame,
+  pen: PenTool,
+  "path-select": MousePointer2,
+  "direct-select": MousePointer2,
+  crop: Crop,
+  "perspective-crop": Crop,
+  straighten: Ruler,
+  "content-move": Move,
+  "perspective-warp": Grid2X2,
+  "puppet-warp": Focus,
+  eyedropper: Pipette,
+  "color-sampler": Palette,
+  ruler: Ruler,
+};
+
+const categoryIcons: Record<string, LucideIcon> = {
+  move: MousePointer2,
+  paint: Paintbrush,
+  select: LassoSelect,
+  retouch: Highlighter,
+  create: Shapes,
+  ai: Sparkles,
+  more: Grid2X2,
+};
+
+function Icon({ icon: IconComponent, size = 20, className }: { icon: LucideIcon; size?: number; className?: string }) {
+  return <IconComponent className={className} width={size} height={size} strokeWidth={1.65} aria-hidden="true" />;
+}
+
+export function ToolIcon({ id, size, className }: { id: string; size?: number; className?: string }) {
+  return <Icon icon={toolIcons[id] ?? Focus} size={size} className={className} />;
+}
+
+export function CategoryIcon({ id, size, className }: { id: string; size?: number; className?: string }) {
+  return <Icon icon={categoryIcons[id] ?? Focus} size={size} className={className} />;
+}

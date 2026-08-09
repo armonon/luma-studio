@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ToolIcon } from "./studio-icons";
 
 export type ToolPaletteGroup = {
   id: string;
@@ -18,11 +19,13 @@ export default function ToolPalette({
   groups,
   activeTool,
   onSelect,
+  onCommand,
   onClose,
 }: {
   groups: ToolPaletteGroup[];
   activeTool: string;
   onSelect: (tool: string, workspace: string) => void;
+  onCommand: (command: string) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -44,6 +47,14 @@ export default function ToolPalette({
       }))
       .filter((group) => group.tools.length > 0);
   }, [groups, query]);
+
+  const commands = [
+    { id: "select-subject", icon: "sel-sam", label: "Select Subject", detail: "AI selection", shortcut: "" },
+    { id: "curves", icon: "tone", label: "Curves Adjustment", detail: "New adjustment layer", shortcut: "" },
+    { id: "levels", icon: "tone", label: "Levels Adjustment", detail: "New adjustment layer", shortcut: "" },
+    { id: "history", icon: "content-move", label: "Version History", detail: "History branches", shortcut: "" },
+    { id: "export", icon: "frame", label: "Export", detail: "Raster or Photoshop", shortcut: "⌘E" },
+  ].filter((command) => !query.trim() || `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
   return (
     <div className="tool-palette-scrim" onPointerDown={onClose}>
@@ -74,6 +85,23 @@ export default function ToolPalette({
           {query && <button onClick={() => setQuery("")} aria-label="Clear tool search">×</button>}
         </label>
         <div className="tool-palette-groups">
+          {commands.length > 0 && (
+            <section className="tool-palette-group tool-command-group">
+              <header>
+                <div><strong>Commands</strong><span>Actions and adjustments</span></div>
+                <small>{commands.length}</small>
+              </header>
+              <div>
+                {commands.map((command) => (
+                  <button key={command.id} onClick={() => onCommand(command.id)}>
+                    <span className="tool-glyph"><ToolIcon id={command.icon} size={16} /></span>
+                    <span><strong>{command.label}</strong><small>{command.detail}</small></span>
+                    {command.shortcut && <kbd>{command.shortcut}</kbd>}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {visibleGroups.map((group) => (
             <section key={group.id} className="tool-palette-group">
               <header>
@@ -91,7 +119,7 @@ export default function ToolPalette({
                     onClick={() => onSelect(tool.id, group.id)}
                     aria-pressed={activeTool === tool.id}
                   >
-                    <span className="tool-glyph" aria-hidden="true">{tool.icon}</span>
+                    <span className="tool-glyph" aria-hidden="true"><ToolIcon id={tool.id} size={16} /></span>
                     <span>
                       <strong>{tool.label}</strong>
                       <small>{group.label}</small>
@@ -102,7 +130,7 @@ export default function ToolPalette({
               </div>
             </section>
           ))}
-          {visibleGroups.length === 0 && (
+          {visibleGroups.length === 0 && commands.length === 0 && (
             <div className="tool-palette-empty">
               <span>⌕</span>
               <strong>No tools found</strong>

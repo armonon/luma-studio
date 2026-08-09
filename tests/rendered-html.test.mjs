@@ -41,18 +41,21 @@ test("renders the unified interactive studio route", async () => {
   assert.equal(response.status, 200);
 
   const html = await response.text();
-  assert.match(html, /Studio workspace/);
-  assert.match(html, />Edit</);
-  assert.match(html, />Mask</);
-  assert.match(html, />Develop</);
-  assert.match(html, />Type</);
-  assert.match(html, /Batch/);
+  assert.match(html, /Primary tools/);
+  assert.match(html, />Move</);
+  assert.match(html, />Paint</);
+  assert.match(html, />Select</);
+  assert.match(html, />Retouch</);
+  assert.match(html, />Create</);
+  assert.match(html, /More Tools/);
+  assert.match(html, /Batch processing/);
   assert.match(html, /Neural Lab/);
   assert.match(html, /Layers/);
-  assert.match(html, /All changes saved locally/);
+  assert.match(html, /Saved locally/);
   assert.match(html, /Inspector panels/);
-  assert.match(html, />Properties</);
-  assert.match(html, />Assets</);
+  assert.match(html, />Inspector</);
+  assert.match(html, />Tray</);
+  assert.match(html, />Variations</);
 });
 
 test("protects the generative image endpoint", async () => {
