@@ -192,6 +192,11 @@ export function cloneDocument(doc: Document): Document {
     // Captured tips are immutable assets, so history snapshots share their
     // canvases and only copy the small metadata records.
     capturedBrushes: doc.capturedBrushes?.map((brush) => ({ ...brush })),
+    layerComps: doc.layerComps?.map((comp) => ({
+      ...comp,
+      layers: comp.layers.map((layer) => ({ ...layer, transform: { ...layer.transform } })),
+    })),
+    artboards: doc.artboards?.map((artboard) => ({ ...artboard })),
     layers: doc.layers.map((layer) => ({
       ...shallowCloneLayer(layer),
       bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,

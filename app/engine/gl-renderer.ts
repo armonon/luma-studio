@@ -28,6 +28,13 @@ type Program = {
 };
 
 type FBO = { fb: WebGLFramebuffer; tex: WebGLTexture; w: number; h: number };
+type TextureCacheEntry = { tex: WebGLTexture; version: string; bytes: number; used: number };
+
+export const GPU_TEXTURE_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
+let gpuTextureClock = 0;
+let gpuTextureHits = 0;
+let gpuTextureMisses = 0;
+let gpuTextureEvictions = 0;
 
 type Cache = {
   gl: WebGL2RenderingContext;
@@ -45,8 +52,11 @@ type Cache = {
   b: FBO;
   displayCanvas: HTMLCanvasElement | null; // last blit target
   // Per-layer content textures (keyed by layer.id + version tag)
-  layerTex: Map<string, { tex: WebGLTexture; version: string }>;
-  maskTex: Map<string, { tex: WebGLTexture; version: string }>;
+  layerTex: Map<string, TextureCacheEntry>;
+  maskTex: Map<string, TextureCacheEntry>;
+  textureBytes: number;
+  transientTex: Set<WebGLTexture>;
+  pinnedTex: Set<WebGLTexture>;
   neutralMask: WebGLTexture;
 };
 
@@ -125,6 +135,9 @@ function ensureCache(width: number, height: number): Cache | null {
     displayCanvas: null,
     layerTex: new Map(),
     maskTex: new Map(),
+    textureBytes: 0,
+    transientTex: new Set(),
+    pinnedTex: new Set(),
     neutralMask,
     curvesLut,
     curvesLutKey: "",
@@ -149,6 +162,7 @@ function disposeCache() {
   gl.deleteTexture(cache.b.tex);
   for (const v of cache.layerTex.values()) gl.deleteTexture(v.tex);
   for (const v of cache.maskTex.values()) gl.deleteTexture(v.tex);
+  for (const tex of cache.transientTex) gl.deleteTexture(tex);
   gl.deleteTexture(cache.neutralMask);
   cache = null;
 }
@@ -396,11 +410,31 @@ function ensureLayerTex(
   const key = layer.id;
   const version = layerVersion(layer);
   const cached = c.layerTex.get(key);
-  if (cached && cached.version === version) return cached.tex;
+  gpuTextureClock += 1;
+  if (cached && cached.version === version) {
+    cached.used = gpuTextureClock;
+    gpuTextureHits += 1;
+    return cached.tex;
+  }
+  gpuTextureMisses += 1;
+  const bytes = doc.width * doc.height * (canUploadPrecisionDirect(layer, doc) ? 8 : 4);
   const tex = cached?.tex ?? gl.createTexture()!;
   if (canUploadPrecisionDirect(layer, doc)) uploadPrecisionTex(gl, tex, doc, layer);
   else uploadCanvasTex(gl, tex, rasterizeLayer(doc, layer));
-  c.layerTex.set(key, { tex, version });
+  if (cached) {
+    c.layerTex.delete(key);
+    c.textureBytes -= cached.bytes;
+  }
+  if (bytes <= GPU_TEXTURE_CACHE_BUDGET_BYTES) {
+    if (evictGpuTextures(gl, c, bytes)) {
+      c.layerTex.set(key, { tex, version, bytes, used: gpuTextureClock });
+      c.textureBytes += bytes;
+    } else {
+      c.transientTex.add(tex);
+    }
+  } else {
+    c.transientTex.add(tex);
+  }
   return tex;
 }
 
@@ -412,11 +446,84 @@ function ensureMaskTex(
   if (!layer.mask) return null;
   const version = `mask:${(layer.mask as unknown as { __v?: number }).__v ?? "0"}`;
   const cached = c.maskTex.get(layer.id);
-  if (cached && cached.version === version) return cached.tex;
+  gpuTextureClock += 1;
+  if (cached && cached.version === version) {
+    cached.used = gpuTextureClock;
+    gpuTextureHits += 1;
+    return cached.tex;
+  }
+  gpuTextureMisses += 1;
+  const bytes = layer.mask.width * layer.mask.height * 4;
   const tex = cached?.tex ?? gl.createTexture()!;
   uploadCanvasTex(gl, tex, layer.mask);
-  c.maskTex.set(layer.id, { tex, version });
+  if (cached) {
+    c.maskTex.delete(layer.id);
+    c.textureBytes -= cached.bytes;
+  }
+  if (bytes <= GPU_TEXTURE_CACHE_BUDGET_BYTES) {
+    if (evictGpuTextures(gl, c, bytes)) {
+      c.maskTex.set(layer.id, { tex, version, bytes, used: gpuTextureClock });
+      c.textureBytes += bytes;
+    } else {
+      c.transientTex.add(tex);
+    }
+  } else {
+    c.transientTex.add(tex);
+  }
   return tex;
+}
+
+function evictGpuTextures(gl: WebGL2RenderingContext, c: Cache, requiredBytes: number) {
+  while (c.textureBytes + requiredBytes > GPU_TEXTURE_CACHE_BUDGET_BYTES) {
+    let oldest: { map: Map<string, TextureCacheEntry>; key: string; entry: TextureCacheEntry } | null = null;
+    for (const map of [c.layerTex, c.maskTex]) {
+      for (const [key, entry] of map) {
+        if (c.pinnedTex.has(entry.tex)) continue;
+        if (!oldest || entry.used < oldest.entry.used) oldest = { map, key, entry };
+      }
+    }
+    if (!oldest) return false;
+    oldest.map.delete(oldest.key);
+    c.textureBytes -= oldest.entry.bytes;
+    gl.deleteTexture(oldest.entry.tex);
+    gpuTextureEvictions += 1;
+  }
+  return true;
+}
+
+function pruneGpuTextures(gl: WebGL2RenderingContext, c: Cache, doc: Document) {
+  const liveLayers = new Set(doc.layers.map((layer) => layer.id));
+  const liveMasks = new Set(doc.layers.filter((layer) => !!layer.mask).map((layer) => layer.id));
+  for (const [key, entry] of c.layerTex) {
+    if (liveLayers.has(key)) continue;
+    c.layerTex.delete(key);
+    c.textureBytes -= entry.bytes;
+    gl.deleteTexture(entry.tex);
+  }
+  for (const [key, entry] of c.maskTex) {
+    if (liveMasks.has(key)) continue;
+    c.maskTex.delete(key);
+    c.textureBytes -= entry.bytes;
+    gl.deleteTexture(entry.tex);
+  }
+}
+
+function clearTransientGpuTextures(gl: WebGL2RenderingContext, c: Cache) {
+  for (const tex of c.transientTex) gl.deleteTexture(tex);
+  c.transientTex.clear();
+  c.pinnedTex.clear();
+}
+
+export function gpuTextureCacheStats() {
+  return {
+    budgetBytes: GPU_TEXTURE_CACHE_BUDGET_BYTES,
+    residentBytes: cache?.textureBytes ?? 0,
+    residentTextures: (cache?.layerTex.size ?? 0) + (cache?.maskTex.size ?? 0),
+    framebufferBytes: cache ? cache.a.w * cache.a.h * 8 * 2 : 0,
+    hits: gpuTextureHits,
+    misses: gpuTextureMisses,
+    evictions: gpuTextureEvictions,
+  };
 }
 
 function drawFullscreen(gl: WebGL2RenderingContext) {
@@ -443,6 +550,8 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
   const c = ensureCache(doc.width, doc.height);
   if (!c) return false;
   const { gl } = c;
+  clearTransientGpuTextures(gl, c);
+  pruneGpuTextures(gl, c, doc);
   gl.disable(gl.BLEND);
 
   // Start with the composite (A) cleared to transparent.
@@ -539,7 +648,9 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       drawFullscreen(gl);
     } else {
       const layerTex = ensureLayerTex(gl, c, doc, layer);
+      c.pinnedTex.add(layerTex);
       const maskTex = ensureMaskTex(gl, c, layer);
+      if (maskTex) c.pinnedTex.add(maskTex);
       const blendIf = resolvedBlendIf(layer);
       const blendIfChannels = (["gray", "red", "green", "blue"] as const).map((channel) => blendIf.channels[channel]);
       const sourceRanges = new Float32Array(blendIfChannels.flatMap(({ source }) => [source.black, source.blackFeather, source.whiteFeather, source.white]));
@@ -575,6 +686,8 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
         composite = scratch;
         scratch = tmp;
       }
+      c.pinnedTex.delete(layerTex);
+      if (maskTex) c.pinnedTex.delete(maskTex);
       continue;
     }
 
@@ -616,6 +729,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
     dctx.drawImage(c.canvas, 0, 0);
   }
   c.displayCanvas = target;
+  clearTransientGpuTextures(gl, c);
   return true;
 }
 

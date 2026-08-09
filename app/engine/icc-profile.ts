@@ -35,17 +35,28 @@ export type IccTagInfo = {
 };
 
 export type ColorProfileCapabilities = {
-  readonly model: "matrix-trc" | "unsupported-lut" | "metadata-only";
+  readonly model: "matrix-trc" | "lut" | "unsupported-lut" | "metadata-only";
   readonly canTransform: boolean;
   readonly canUseAsSource: boolean;
   readonly canUseAsDestination: boolean;
   readonly renderingIntents: Readonly<Record<RenderingIntent, "native" | "approximate" | "fallback-relative" | "unsupported">>;
   readonly blackPointCompensation: "heuristic" | "unavailable";
-  readonly extendedRange: "linear-extrapolated" | "unavailable";
+  readonly extendedRange: "linear-extrapolated" | "clamped" | "unavailable";
   readonly fallback: null | {
     readonly reason: string;
     readonly suggestedEngine: "LittleCMS/WASM" | "OpenColorIO/WASM";
   };
+};
+
+export type IccLut3D = {
+  readonly type: "mft1" | "mft2";
+  readonly inputChannels: 3;
+  readonly outputChannels: 3;
+  readonly gridPoints: number;
+  readonly matrix: ColorMatrix3;
+  readonly inputTables: readonly [Float32Array, Float32Array, Float32Array];
+  readonly clut: Float32Array;
+  readonly outputTables: readonly [Float32Array, Float32Array, Float32Array];
 };
 
 export type ColorProfile = {
@@ -61,6 +72,10 @@ export type ColorProfile = {
   readonly matrixToPcs: ColorMatrix3 | null;
   readonly matrixFromPcs: ColorMatrix3 | null;
   readonly trc: readonly [ToneCurve, ToneCurve, ToneCurve] | null;
+  /** Classic ICC AToB LUTs keyed by their native rendering intent. */
+  readonly lutToPcs: Readonly<Partial<Record<RenderingIntent, IccLut3D>>>;
+  /** Classic ICC BToA LUTs keyed by their native rendering intent. */
+  readonly lutFromPcs: Readonly<Partial<Record<RenderingIntent, IccLut3D>>>;
   readonly mediaWhitePoint: ColorVector3;
   readonly mediaBlackPoint: ColorVector3;
   readonly chromaticAdaptationMatrix?: ColorMatrix3;
@@ -220,6 +235,8 @@ export function createMatrixTrcProfile(definition: MatrixTrcProfileDefinition): 
     matrixToPcs,
     matrixFromPcs: invertColorMatrix(matrixToPcs),
     trc: curves,
+    lutToPcs: {},
+    lutFromPcs: {},
     mediaWhitePoint: definition.mediaWhitePoint ?? D50_WHITE,
     mediaBlackPoint: definition.mediaBlackPoint ?? [0, 0, 0],
     chromaticAdaptationMatrix: adaptation,
@@ -282,10 +299,17 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
 
   const hasLut = ["A2B0", "A2B1", "A2B2", "B2A0", "B2A1", "B2A2", "D2B0", "B2D0"]
     .some((signature) => tags[signature]);
-  const canTransform = Boolean(matrix && matrixFromPcs && trc && curvesInvertible);
+  const lutToPcs = pcsSignature === "XYZ "
+    ? parseIntentLuts(view, tags, "A2B", warnings)
+    : {};
+  const lutFromPcs = pcsSignature === "XYZ "
+    ? parseIntentLuts(view, tags, "B2A", warnings)
+    : {};
+  const hasParsedLut = Object.keys(lutToPcs).length > 0 || Object.keys(lutFromPcs).length > 0;
+  const hasMatrixTransform = Boolean(matrix && matrixFromPcs && trc && curvesInvertible);
   const unsupportedModel: "unsupported-lut" | "metadata-only" = hasLut ? "unsupported-lut" : "metadata-only";
-  if (hasLut && !canTransform) {
-    warnings.push("LUT/multi-process ICC transforms are recognized but require a full ICC CMM.");
+  if (hasLut && !hasParsedLut && !hasMatrixTransform) {
+    warnings.push("No supported classic RGB-to-XYZ LUT transform could be decoded; multi-process profiles still require a full ICC CMM.");
   }
 
   const headerProfileId = Array.from(bytes.subarray(84, 100), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -309,9 +333,11 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
     deviceClass: signatureName(readSignature(bytes, 12)),
     colorSpace: signatureName(colorSpaceSignature),
     connectionSpace: connectionSpaceName(pcsSignature),
-    matrixToPcs: canTransform ? matrix : null,
-    matrixFromPcs: canTransform ? matrixFromPcs : null,
-    trc: canTransform ? trc : null,
+    matrixToPcs: hasMatrixTransform ? matrix : null,
+    matrixFromPcs: hasMatrixTransform ? matrixFromPcs : null,
+    trc: hasMatrixTransform ? trc : null,
+    lutToPcs,
+    lutFromPcs,
     mediaWhitePoint,
     mediaBlackPoint,
     chromaticAdaptationMatrix: chad,
@@ -319,9 +345,100 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
     tags,
     profileId,
     warnings,
-    capabilities: canTransform
-      ? matrixTrcCapabilities()
+    capabilities: hasParsedLut
+      ? lutCapabilities(lutToPcs, lutFromPcs, hasMatrixTransform)
+      : hasMatrixTransform
+        ? matrixTrcCapabilities()
       : unsupportedCapabilities(unsupportedModel, colorSpaceSignature, pcsSignature, hasLut),
+  };
+}
+
+const LUT_INTENT_TAGS = {
+  A2B: {
+    perceptual: "A2B0",
+    "relative-colorimetric": "A2B1",
+    saturation: "A2B2",
+  },
+  B2A: {
+    perceptual: "B2A0",
+    "relative-colorimetric": "B2A1",
+    saturation: "B2A2",
+  },
+} as const;
+
+function parseIntentLuts(
+  view: DataView,
+  tags: Readonly<Record<string, IccTagInfo>>,
+  direction: keyof typeof LUT_INTENT_TAGS,
+  warnings: string[],
+) {
+  const result: Partial<Record<RenderingIntent, IccLut3D>> = {};
+  for (const [intent, signature] of Object.entries(LUT_INTENT_TAGS[direction])) {
+    const tag = tags[signature];
+    if (!tag) continue;
+    const lut = parseClassicLut(view, tag, warnings);
+    if (lut) result[intent as RenderingIntent] = lut;
+  }
+  return result;
+}
+
+function parseClassicLut(view: DataView, tag: IccTagInfo, warnings: string[]): IccLut3D | null {
+  if (tag.type !== "mft1" && tag.type !== "mft2") {
+    warnings.push(`LUT tag ${tag.signature} uses unsupported type ${tag.type}.`);
+    return null;
+  }
+  const headerSize = tag.type === "mft1" ? 48 : 52;
+  if (tag.size < headerSize) {
+    warnings.push(`LUT tag ${tag.signature} is truncated.`);
+    return null;
+  }
+  const inputChannels = view.getUint8(tag.offset + 8);
+  const outputChannels = view.getUint8(tag.offset + 9);
+  const gridPoints = view.getUint8(tag.offset + 10);
+  if (inputChannels !== 3 || outputChannels !== 3 || gridPoints < 2 || gridPoints > 65) {
+    warnings.push(`LUT tag ${tag.signature} must be a 3-channel RGB/XYZ table with 2–65 grid points.`);
+    return null;
+  }
+  const matrix = Array.from(
+    { length: 9 },
+    (_, index) => readS15Fixed16(view, tag.offset + 12 + index * 4),
+  ) as unknown as ColorMatrix3;
+  const inputEntries = tag.type === "mft1" ? 256 : view.getUint16(tag.offset + 48, false);
+  const outputEntries = tag.type === "mft1" ? 256 : view.getUint16(tag.offset + 50, false);
+  if (inputEntries < 2 || outputEntries < 2 || inputEntries > 65_536 || outputEntries > 65_536) {
+    warnings.push(`LUT tag ${tag.signature} has invalid one-dimensional table sizes.`);
+    return null;
+  }
+  const bytesPerEntry = tag.type === "mft1" ? 1 : 2;
+  const clutEntries = gridPoints ** inputChannels * outputChannels;
+  const tableEntries = inputChannels * inputEntries + clutEntries + outputChannels * outputEntries;
+  if (tableEntries > 20_000_000 || headerSize + tableEntries * bytesPerEntry > tag.size) {
+    warnings.push(`LUT tag ${tag.signature} is truncated or exceeds the safe table limit.`);
+    return null;
+  }
+  let offset = tag.offset + headerSize;
+  const readTable = (count: number) => {
+    const table = new Float32Array(count);
+    for (let index = 0; index < count; index += 1) {
+      table[index] = tag.type === "mft1"
+        ? view.getUint8(offset++) / 255
+        : view.getUint16(offset + index * 2, false) / 65535;
+    }
+    if (tag.type === "mft2") offset += count * 2;
+    return table;
+  };
+  const inputTables = [readTable(inputEntries), readTable(inputEntries), readTable(inputEntries)] as const;
+  const clut = readTable(clutEntries);
+  const outputTables = [readTable(outputEntries), readTable(outputEntries), readTable(outputEntries)] as const;
+  return {
+    type: tag.type,
+    inputChannels: 3,
+    outputChannels: 3,
+    gridPoints,
+    matrix,
+    inputTables,
+    clut,
+    outputTables,
   };
 }
 
@@ -447,6 +564,31 @@ function matrixTrcCapabilities(): ColorProfileCapabilities {
   };
 }
 
+function lutCapabilities(
+  toPcs: Readonly<Partial<Record<RenderingIntent, IccLut3D>>>,
+  fromPcs: Readonly<Partial<Record<RenderingIntent, IccLut3D>>>,
+  hasMatrixFallback: boolean,
+): ColorProfileCapabilities {
+  const has = (intent: RenderingIntent) => Boolean(toPcs[intent] || fromPcs[intent]);
+  const canUseAsSource = hasMatrixFallback || Object.keys(toPcs).length > 0;
+  const canUseAsDestination = hasMatrixFallback || Object.keys(fromPcs).length > 0;
+  return {
+    model: "lut",
+    canTransform: canUseAsSource || canUseAsDestination,
+    canUseAsSource,
+    canUseAsDestination,
+    renderingIntents: {
+      perceptual: has("perceptual") ? "native" : "fallback-relative",
+      "relative-colorimetric": has("relative-colorimetric") || hasMatrixFallback ? "native" : "unsupported",
+      saturation: has("saturation") ? "native" : "fallback-relative",
+      "absolute-colorimetric": has("relative-colorimetric") || hasMatrixFallback ? "approximate" : "unsupported",
+    },
+    blackPointCompensation: "heuristic",
+    extendedRange: "clamped",
+    fallback: null,
+  };
+}
+
 function unsupportedCapabilities(
   model: "unsupported-lut" | "metadata-only",
   colorSpace: string,
@@ -492,6 +634,47 @@ function ascii(bytes: Uint8Array) {
 
 function readS15Fixed16(view: DataView, offset: number) {
   return view.getInt32(offset, false) / 65536;
+}
+
+export const ICC_XYZ_LUT_SCALE = 65535 / 32768;
+
+/** Evaluates a decoded classic ICC LUT in normalized table coordinates. */
+export function evaluateIccLut(lut: IccLut3D, input: ColorVector3): [number, number, number] {
+  const tabled = input.map((value, channel) => sampleTable(lut.inputTables[channel], value)) as [number, number, number];
+  const transformed = multiplyMatrixVector(lut.matrix, tabled).map(clampUnit) as [number, number, number];
+  const grid = lut.gridPoints;
+  const positions = transformed.map((value) => value * (grid - 1));
+  const lower = positions.map((value) => Math.min(grid - 1, Math.floor(value)));
+  const upper = lower.map((value) => Math.min(grid - 1, value + 1));
+  const fractions = positions.map((value, channel) => value - lower[channel]);
+  const clutValue = [0, 0, 0];
+  for (let redSide = 0; redSide <= 1; redSide += 1) {
+    const red = redSide ? upper[0] : lower[0];
+    const redWeight = redSide ? fractions[0] : 1 - fractions[0];
+    for (let greenSide = 0; greenSide <= 1; greenSide += 1) {
+      const green = greenSide ? upper[1] : lower[1];
+      const greenWeight = greenSide ? fractions[1] : 1 - fractions[1];
+      for (let blueSide = 0; blueSide <= 1; blueSide += 1) {
+        const blue = blueSide ? upper[2] : lower[2];
+        const weight = redWeight * greenWeight * (blueSide ? fractions[2] : 1 - fractions[2]);
+        const offset = ((red * grid + green) * grid + blue) * 3;
+        for (let channel = 0; channel < 3; channel += 1) clutValue[channel] += lut.clut[offset + channel] * weight;
+      }
+    }
+  }
+  return clutValue.map((value, channel) => sampleTable(lut.outputTables[channel], value)) as [number, number, number];
+}
+
+function sampleTable(table: Float32Array, value: number) {
+  const position = clampUnit(value) * (table.length - 1);
+  const lower = Math.floor(position);
+  const upper = Math.min(table.length - 1, lower + 1);
+  const fraction = position - lower;
+  return table[lower] * (1 - fraction) + table[upper] * fraction;
+}
+
+function clampUnit(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
 function fnv1a(bytes: Uint8Array) {

@@ -174,6 +174,13 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
     sourceDiameter: 96,
     createdAt: "2026-08-09T00:00:00.000Z",
   }];
+  doc.layerComps = [{
+    id: "layer-comp-proof",
+    name: "Hero",
+    createdAt: "2026-08-09T01:00:00.000Z",
+    layers: [{ layerId: layer.id, visible: true, opacity: 0.8, transform: { ...layer.transform } }],
+  }];
+  doc.artboards = [{ id: "artboard-proof", name: "Square", x: 1, y: 1, width: 2, height: 2 }];
   const selectionMask = newCanvas(4, 4);
 
   const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
@@ -236,6 +243,9 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.equal(decoded.doc.capturedBrushes?.[0].name, "Project brush");
   assert.equal(decoded.doc.capturedBrushes?.[0].sourceDiameter, 96);
   assert.equal(decoded.doc.capturedBrushes?.[0].bitmap.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 230);
+  assert.equal(decoded.doc.layerComps?.[0].name, "Hero");
+  assert.equal(decoded.doc.layerComps?.[0].layers[0].layerId, layer.id);
+  assert.deepEqual(decoded.doc.artboards?.[0], doc.artboards[0]);
   assert.equal(decoded.doc.layers[0].bitmap!.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 18);
   const hdrPixel = decoded.doc.layers[0].surface!.readPixel(0, 0);
   assert.ok(Math.abs(hdrPixel[0] - 1.5) < 0.002);

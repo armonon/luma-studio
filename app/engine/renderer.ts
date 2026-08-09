@@ -17,6 +17,7 @@ import { compositeBlendStack } from "./blend";
 import { getDisplayCtx } from "./gl-renderer";
 import { softProofDisplayRgb } from "./color";
 import { DEFAULT_TILE_SIZE } from "./tile-store";
+import type { PixelRect } from "./tile-store";
 import type { DisplayViewport } from "./viewport";
 import {
   DISPLAY_P3_PROFILE,
@@ -139,7 +140,95 @@ export type RenderOptions = {
   proofing?: boolean;
   /** Stable document-content revision. Enables bounded viewport tile reuse. */
   cacheRevision?: number;
+  /** Document-space regions changed since the last frame on this target. */
+  dirtyRegions?: readonly PixelRect[];
+  /** Non-destructive channel inspection; omitted for the RGB composite. */
+  channelView?: "rgb" | "red" | "green" | "blue" | "alpha";
 };
+
+export const INTERACTIVE_PERFORMANCE_TARGETS = {
+  brushFrameMs: 16.7,
+  navigationFrameMs: 33.3,
+  maximumDocumentEdge: 50_000,
+} as const;
+
+type ViewportRenderSample = {
+  durationMs: number;
+  renderedTiles: number;
+  totalTiles: number;
+  partial: boolean;
+};
+
+const viewportRenderSamples: ViewportRenderSample[] = [];
+const MAX_RENDER_SAMPLES = 120;
+const viewportTargetState = new WeakMap<HTMLCanvasElement, string>();
+
+function viewportSignature(viewport: DisplayViewport) {
+  return [
+    viewport.x.toFixed(5),
+    viewport.y.toFixed(5),
+    viewport.width.toFixed(5),
+    viewport.height.toFixed(5),
+    viewport.outputWidth,
+    viewport.outputHeight,
+  ].join(":");
+}
+
+function recordViewportRender(sample: ViewportRenderSample) {
+  viewportRenderSamples.push(sample);
+  if (viewportRenderSamples.length > MAX_RENDER_SAMPLES) viewportRenderSamples.shift();
+}
+
+export function viewportRenderPerformanceStats() {
+  const durations = viewportRenderSamples.map((sample) => sample.durationMs).sort((a, b) => a - b);
+  const latest = viewportRenderSamples.at(-1);
+  const averageMs = durations.length
+    ? durations.reduce((sum, duration) => sum + duration, 0) / durations.length
+    : 0;
+  const p95Ms = durations.length
+    ? durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.95))]
+    : 0;
+  return {
+    samples: durations.length,
+    latestMs: latest?.durationMs ?? 0,
+    averageMs,
+    p95Ms,
+    latestRenderedTiles: latest?.renderedTiles ?? 0,
+    latestTotalTiles: latest?.totalTiles ?? 0,
+    latestPartial: latest?.partial ?? false,
+    targets: INTERACTIVE_PERFORMANCE_TARGETS,
+  };
+}
+
+/** Screen-tile keys intersecting document-space dirty regions. */
+export function viewportTileKeysForDirtyRegions(
+  viewport: DisplayViewport,
+  dirtyRegions: readonly PixelRect[],
+  overscanPixels = 0,
+  tilePixels = DEFAULT_TILE_SIZE,
+) {
+  const keys = new Set<string>();
+  const scaleX = viewport.outputWidth / viewport.width;
+  const scaleY = viewport.outputHeight / viewport.height;
+  const columns = Math.ceil(viewport.outputWidth / tilePixels);
+  const rows = Math.ceil(viewport.outputHeight / tilePixels);
+  for (const region of dirtyRegions) {
+    if (region.width <= 0 || region.height <= 0) continue;
+    const left = (region.x - viewport.x) * scaleX - overscanPixels;
+    const top = (region.y - viewport.y) * scaleY - overscanPixels;
+    const right = (region.x + region.width - viewport.x) * scaleX + overscanPixels;
+    const bottom = (region.y + region.height - viewport.y) * scaleY + overscanPixels;
+    if (right <= 0 || bottom <= 0 || left >= viewport.outputWidth || top >= viewport.outputHeight) continue;
+    const firstColumn = Math.max(0, Math.floor(left / tilePixels));
+    const lastColumn = Math.min(columns - 1, Math.floor(Math.max(0, right - 0.000001) / tilePixels));
+    const firstRow = Math.max(0, Math.floor(top / tilePixels));
+    const lastRow = Math.min(rows - 1, Math.floor(Math.max(0, bottom - 0.000001) / tilePixels));
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let column = firstColumn; column <= lastColumn; column += 1) keys.add(`${column}:${row}`);
+    }
+  }
+  return keys;
+}
 
 type ViewportCacheEntry = { canvas: HTMLCanvasElement; used: number };
 const viewportCaches = new WeakMap<Document, Map<string, ViewportCacheEntry>>();
@@ -159,6 +248,7 @@ function viewportCacheKey(frame: RenderFrame, options: RenderOptions) {
     frame.outputWidth,
     frame.outputHeight,
     options.proofing ?? true,
+    options.channelView ?? "rgb",
   ].join(":");
 }
 
@@ -219,7 +309,27 @@ function renderCompositeRegion(doc: Document, frame: RenderFrame, options: Rende
   renderLayerSequence(composite, s, doc, frame, undefined);
 
   if (options.proofing ?? true) applySoftProof(composite, doc, frame.outputWidth, frame.outputHeight);
+  applyChannelView(composite, frame.outputWidth, frame.outputHeight, options.channelView ?? "rgb");
   return s.a;
+}
+
+function applyChannelView(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  channel: NonNullable<RenderOptions["channelView"]>,
+) {
+  if (channel === "rgb") return;
+  const image = context.getImageData(0, 0, width, height);
+  const index = channel === "red" ? 0 : channel === "green" ? 1 : channel === "blue" ? 2 : 3;
+  for (let offset = 0; offset < image.data.length; offset += 4) {
+    const value = image.data[offset + index];
+    image.data[offset] = value;
+    image.data[offset + 1] = value;
+    image.data[offset + 2] = value;
+    if (channel === "alpha") image.data[offset + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
 }
 
 function renderLayerSequence(
@@ -316,22 +426,48 @@ export function renderViewport(
   viewport: DisplayViewport,
   options: RenderOptions = {},
 ) {
+  const startedAt = typeof performance === "undefined" ? Date.now() : performance.now();
+  const signature = viewportSignature(viewport);
+  const sameViewport = viewportTargetState.get(target) === signature;
+  const resized = target.width !== viewport.outputWidth || target.height !== viewport.outputHeight;
   if (target.width !== viewport.outputWidth) target.width = viewport.outputWidth;
   if (target.height !== viewport.outputHeight) target.height = viewport.outputHeight;
   const out = getDisplayCtx(target)!;
-  clearContext(out, viewport.outputWidth, viewport.outputHeight);
   const fullFrame: RenderFrame = viewport;
-  if (options.checkerboard ?? true) drawDocumentCheckerboard(out, doc, fullFrame);
 
   const tilePixels = DEFAULT_TILE_SIZE;
   const overscan = renderOverscanPixels(doc, viewport.zoom);
   const scaleX = viewport.outputWidth / viewport.width;
   const scaleY = viewport.outputHeight / viewport.height;
+  const totalTiles = Math.ceil(viewport.outputWidth / tilePixels) * Math.ceil(viewport.outputHeight / tilePixels);
+  const dirtyTileKeys = options.dirtyRegions?.length
+    ? viewportTileKeysForDirtyRegions(viewport, options.dirtyRegions, overscan, tilePixels)
+    : null;
+  // Selection ants animate independently of document pixels, so selection
+  // frames currently use a full redraw. Dirty rendering is safe only when the
+  // target still contains the exact same viewport from the preceding frame.
+  const partial = !resized && sameViewport && !doc.selection && !!dirtyTileKeys;
 
-  for (let top = 0; top < viewport.outputHeight; top += tilePixels) {
+  if (!partial) {
+    clearContext(out, viewport.outputWidth, viewport.outputHeight);
+    if (options.checkerboard ?? true) drawDocumentCheckerboard(out, doc, fullFrame);
+  }
+
+  let renderedTiles = 0;
+
+  for (let top = 0, row = 0; top < viewport.outputHeight; top += tilePixels, row += 1) {
     const height = Math.min(tilePixels, viewport.outputHeight - top);
-    for (let left = 0; left < viewport.outputWidth; left += tilePixels) {
+    for (let left = 0, column = 0; left < viewport.outputWidth; left += tilePixels, column += 1) {
+      if (partial && !dirtyTileKeys!.has(`${column}:${row}`)) continue;
       const width = Math.min(tilePixels, viewport.outputWidth - left);
+      if (partial) {
+        out.save();
+        out.beginPath();
+        out.rect(left, top, width, height);
+        out.clip();
+        clearContext(out, viewport.outputWidth, viewport.outputHeight);
+        if (options.checkerboard ?? true) drawDocumentCheckerboard(out, doc, fullFrame);
+      }
       const expandedLeft = Math.max(0, left - overscan);
       const expandedTop = Math.max(0, top - overscan);
       const expandedRight = Math.min(viewport.outputWidth, left + width + overscan);
@@ -358,10 +494,20 @@ export function renderViewport(
         width,
         height,
       );
+      if (partial) out.restore();
+      renderedTiles += 1;
     }
   }
 
   if ((options.selectionOverlay ?? true) && doc.selection) drawProjectedSelection(out, doc, fullFrame);
+  viewportTargetState.set(target, signature);
+  const finishedAt = typeof performance === "undefined" ? Date.now() : performance.now();
+  recordViewportRender({
+    durationMs: Math.max(0, finishedAt - startedAt),
+    renderedTiles,
+    totalTiles,
+    partial,
+  });
 }
 
 /** Render only document pixels. UI chrome must never leak into files or batch output. */

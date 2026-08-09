@@ -11,10 +11,13 @@ import {
 } from "./color-math";
 import {
   IDENTITY_TONE_CURVE,
+  ICC_XYZ_LUT_SCALE,
   createMatrixTrcProfile,
+  evaluateIccLut,
   evaluateToneCurve,
   invertToneCurve,
   type ColorProfile,
+  type IccLut3D,
   type RenderingIntent,
   type ToneCurve,
 } from "./icc-profile";
@@ -29,10 +32,10 @@ export type ColorTransformMetadata = {
   readonly sourceProfileId: string;
   readonly destinationProfileId: string;
   readonly requestedIntent: RenderingIntent;
-  readonly effectiveIntent: "relative-colorimetric" | "absolute-colorimetric";
+  readonly effectiveIntent: RenderingIntent;
   readonly intentFallback: null | string;
   readonly blackPointCompensation: "disabled" | "heuristic";
-  readonly extendedRange: "linear-extrapolated";
+  readonly extendedRange: "linear-extrapolated" | "clamped";
   readonly alpha: "preserved-straight";
 };
 
@@ -79,33 +82,55 @@ export function createColorTransform(
   destination: ColorProfile,
   options: ColorTransformOptions = {},
 ): ColorTransform {
-  assertTransformable(source);
-  assertTransformable(destination);
-  const sourceMatrix = source.matrixToPcs!;
-  const destinationMatrix = destination.matrixFromPcs!;
-  const sourceTrc = source.trc!;
-  const destinationTrc = destination.trc!;
+  assertSourceTransformable(source);
+  assertDestinationTransformable(destination);
   const requestedIntent = options.renderingIntent ?? source.defaultRenderingIntent;
   const absolute = requestedIntent === "absolute-colorimetric";
-  const effectiveIntent = absolute ? "absolute-colorimetric" : "relative-colorimetric";
-  const intentFallback = requestedIntent === "perceptual" || requestedIntent === "saturation"
-    ? `Matrix/TRC profiles do not contain ${requestedIntent} gamut mapping; media-relative colorimetric was used.`
-    : absolute
-      ? "Matrix/TRC absolute colorimetry uses media-white scaling; profile LUT appearance tables are unavailable."
-      : null;
+  const sourceLut = selectIntentLut(source.lutToPcs, requestedIntent, Boolean(source.matrixToPcs && source.trc));
+  const destinationLut = selectIntentLut(destination.lutFromPcs, requestedIntent, Boolean(destination.matrixFromPcs && destination.trc));
+  const nativeRequestedIntent = sourceLut.intent === requestedIntent || destinationLut.intent === requestedIntent;
+  const effectiveIntent: RenderingIntent = absolute
+    ? "absolute-colorimetric"
+    : nativeRequestedIntent
+      ? requestedIntent
+      : "relative-colorimetric";
+  const fallbackReasons: string[] = [];
+  if ((requestedIntent === "perceptual" || requestedIntent === "saturation") && !nativeRequestedIntent) {
+    fallbackReasons.push(`Matrix/TRC profiles do not contain ${requestedIntent} gamut mapping and no native LUT was available; media-relative colorimetric processing was used.`);
+  }
+  if (sourceLut.lut && sourceLut.intent !== (absolute ? "relative-colorimetric" : requestedIntent)) {
+    fallbackReasons.push(`The source profile used its ${sourceLut.intent} table.`);
+  }
+  if (destinationLut.lut && destinationLut.intent !== (absolute ? "relative-colorimetric" : requestedIntent)) {
+    fallbackReasons.push(`The destination profile used its ${destinationLut.intent} table.`);
+  }
+  if (absolute) fallbackReasons.push("Absolute colorimetry is derived from media-relative data using profile white points.");
+  const intentFallback = fallbackReasons.length ? fallbackReasons.join(" ") : null;
   const useBpc = Boolean(options.blackPointCompensation && !absolute);
 
-  const toPcs = (rgb: ColorVector3) => multiplyMatrixVector(sourceMatrix, [
-    evaluateToneCurve(sourceTrc[0], rgb[0]),
-    evaluateToneCurve(sourceTrc[1], rgb[1]),
-    evaluateToneCurve(sourceTrc[2], rgb[2]),
-  ]);
+  const toPcs = (rgb: ColorVector3) => {
+    if (sourceLut.lut) {
+      const encoded = evaluateIccLut(sourceLut.lut, rgb);
+      return encoded.map((value) => value * ICC_XYZ_LUT_SCALE) as [number, number, number];
+    }
+    return multiplyMatrixVector(source.matrixToPcs!, [
+      evaluateToneCurve(source.trc![0], rgb[0]),
+      evaluateToneCurve(source.trc![1], rgb[1]),
+      evaluateToneCurve(source.trc![2], rgb[2]),
+    ]);
+  };
   const fromPcs = (xyz: ColorVector3) => {
-    const linear = multiplyMatrixVector(destinationMatrix, xyz);
+    if (destinationLut.lut) {
+      return evaluateIccLut(
+        destinationLut.lut,
+        xyz.map((value) => value / ICC_XYZ_LUT_SCALE) as [number, number, number],
+      );
+    }
+    const linear = multiplyMatrixVector(destination.matrixFromPcs!, xyz);
     return [
-      invertToneCurve(destinationTrc[0], linear[0]),
-      invertToneCurve(destinationTrc[1], linear[1]),
-      invertToneCurve(destinationTrc[2], linear[2]),
+      invertToneCurve(destination.trc![0], linear[0]),
+      invertToneCurve(destination.trc![1], linear[1]),
+      invertToneCurve(destination.trc![2], linear[2]),
     ] as [number, number, number];
   };
   const applyRgb = (rgb: ColorVector3) => {
@@ -123,7 +148,7 @@ export function createColorTransform(
       effectiveIntent,
       intentFallback,
       blackPointCompensation: useBpc ? "heuristic" : "disabled",
-      extendedRange: "linear-extrapolated",
+      extendedRange: sourceLut.lut || destinationLut.lut ? "clamped" : "linear-extrapolated",
       alpha: "preserved-straight",
     },
     applyRgb,
@@ -155,8 +180,12 @@ export function compileGpuColorTransform(
   options: ColorTransformOptions = {},
   lutSize = 4096,
 ): GpuColorTransformCompilation {
-  assertTransformable(source);
-  assertTransformable(destination);
+  if (!source.matrixToPcs || !source.trc || !destination.matrixFromPcs || !destination.trc) {
+    return {
+      supported: false,
+      reason: "Classic ICC 3D LUT profiles require a 3D texture pipeline; this GPU descriptor supports matrix/TRC transforms only.",
+    };
+  }
   if (!Number.isInteger(lutSize) || lutSize < 2 || lutSize > 65536) {
     throw new Error("GPU color transform LUT size must be an integer from 2 through 65536.");
   }
@@ -212,10 +241,30 @@ export function compileGpuColorTransform(
   };
 }
 
-function assertTransformable(profile: ColorProfile) {
-  if (!profile.capabilities.canTransform || !profile.matrixToPcs || !profile.matrixFromPcs || !profile.trc) {
+function assertSourceTransformable(profile: ColorProfile) {
+  if (!profile.capabilities.canUseAsSource || (!profile.matrixToPcs || !profile.trc) && Object.keys(profile.lutToPcs).length === 0) {
     throw new UnsupportedColorProfileError(profile);
   }
+}
+
+function assertDestinationTransformable(profile: ColorProfile) {
+  if (!profile.capabilities.canUseAsDestination || (!profile.matrixFromPcs || !profile.trc) && Object.keys(profile.lutFromPcs).length === 0) {
+    throw new UnsupportedColorProfileError(profile);
+  }
+}
+
+function selectIntentLut(
+  tables: Readonly<Partial<Record<RenderingIntent, IccLut3D>>>,
+  requested: RenderingIntent,
+  hasMatrixFallback: boolean,
+): { lut: IccLut3D | null; intent: RenderingIntent | null } {
+  const desired = requested === "absolute-colorimetric" ? "relative-colorimetric" : requested;
+  if (tables[desired]) return { lut: tables[desired]!, intent: desired };
+  if (hasMatrixFallback) return { lut: null, intent: null };
+  for (const fallback of ["relative-colorimetric", "perceptual", "saturation"] as const) {
+    if (tables[fallback]) return { lut: tables[fallback]!, intent: fallback };
+  }
+  return { lut: null, intent: null };
 }
 
 function applyAbsoluteWhiteScaling(

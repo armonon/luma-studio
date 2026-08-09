@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  LINEAR_SRGB_PROFILE,
   SRGB_PROFILE,
   createColorTransform,
 } from "../app/engine/color-management.ts";
@@ -12,7 +13,7 @@ import {
   parseIccProfile,
 } from "../app/engine/icc-profile.ts";
 import { D65_WHITE } from "../app/engine/color-math.ts";
-import { buildIcc, matrixTrcIcc, setSignature, setU32 } from "./icc-fixture.ts";
+import { buildIcc, linearSrgbA2B1LutTag, matrixTrcIcc, setSignature, setU32 } from "./icc-fixture.ts";
 
 test("parses ICC v4 RGB matrix/TRC tags and capability metadata", () => {
   const parsed = parseIccProfile(matrixTrcIcc());
@@ -50,6 +51,27 @@ test("recognizes LUT profiles but exposes an honest external-CMM fallback", () =
   assert.equal(profile.capabilities.fallback?.suggestedEngine, "LittleCMS/WASM");
   assert.match(profile.capabilities.fallback!.reason, /LUT or multi-process/);
   assert.throws(() => createColorTransform(profile, SRGB_PROFILE), /requires ICC LUT/);
+});
+
+test("decodes classic mft2 LUT profiles and uses their native intent table", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: linearSrgbA2B1LutTag() },
+  ]));
+  assert.equal(profile.capabilities.model, "lut");
+  assert.equal(profile.capabilities.canUseAsSource, true);
+  assert.equal(profile.capabilities.canUseAsDestination, false);
+  assert.equal(profile.capabilities.renderingIntents["relative-colorimetric"], "native");
+  assert.equal(profile.lutToPcs["relative-colorimetric"]?.gridPoints, 2);
+
+  const transform = createColorTransform(profile, LINEAR_SRGB_PROFILE, {
+    renderingIntent: "relative-colorimetric",
+  });
+  const actual = transform.applyRgb([0.18, 0.52, 0.91]);
+  [0.18, 0.52, 0.91].forEach((expected, index) => {
+    assert.ok(Math.abs(actual[index] - expected) < 8e-5, `${index}: ${actual[index]} != ${expected}`);
+  });
+  assert.equal(transform.metadata.effectiveIntent, "relative-colorimetric");
+  assert.equal(transform.metadata.extendedRange, "clamped");
 });
 
 test("rejects truncated profiles and contains malformed tag offsets", () => {

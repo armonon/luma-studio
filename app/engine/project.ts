@@ -347,6 +347,11 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     guides: doc.guides.map((guide) => ({ ...guide })),
     proofing: { ...doc.proofing },
     capturedBrushes,
+    layerComps: (doc.layerComps ?? []).map((comp) => ({
+      ...comp,
+      layers: comp.layers.map((layer) => ({ ...layer, transform: { ...layer.transform } })),
+    })),
+    artboards: (doc.artboards ?? []).map((artboard) => ({ ...artboard })),
     layers,
     selection,
     photoshopSourceAsset: photoshopSource ? await addPhotoshopAsset(context, photoshopSource) : undefined,
@@ -414,6 +419,30 @@ async function deserializeDocument(
       gamutWarning: false,
     },
     capturedBrushes,
+    layerComps: (Array.isArray(source.layerComps) ? source.layerComps : []).slice(-64).flatMap((comp) => {
+      if (!comp || typeof comp.id !== "string" || typeof comp.name !== "string" ||
+          typeof comp.createdAt !== "string" || !Array.isArray(comp.layers)) return [];
+      const states = comp.layers.flatMap((state) => {
+        const transform = state?.transform;
+        const layerId = idMap?.get(state?.layerId) ?? state?.layerId;
+        if (typeof layerId !== "string" || !layers.some((layer) => layer.id === layerId) ||
+            typeof state.visible !== "boolean" || !Number.isFinite(state.opacity) ||
+            !transform || ![transform.tx, transform.ty, transform.sx, transform.sy, transform.rotation].every(Number.isFinite)) return [];
+        return [{
+          layerId,
+          visible: state.visible,
+          opacity: Math.max(0, Math.min(1, state.opacity)),
+          transform: { ...transform },
+        }];
+      });
+      return [{ ...comp, layers: states }];
+    }),
+    artboards: (Array.isArray(source.artboards) ? source.artboards : []).slice(-128).flatMap((artboard) => {
+      if (!artboard || typeof artboard.id !== "string" || typeof artboard.name !== "string" ||
+          ![artboard.x, artboard.y, artboard.width, artboard.height].every(Number.isFinite) ||
+          artboard.width <= 0 || artboard.height <= 0) return [];
+      return [{ ...artboard }];
+    }),
     layers,
     selection,
   };

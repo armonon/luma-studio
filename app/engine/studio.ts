@@ -11,6 +11,8 @@ import {
   Layer,
   MAX_CAPTURED_BRUSHES,
   MAX_CAPTURED_BRUSH_EDGE,
+  MAX_ARTBOARDS,
+  MAX_LAYER_COMPS,
   LayerKind,
   LayerEffect,
   MAX_LAYER_BLEND_PASSES,
@@ -29,6 +31,7 @@ import {
   TextStyle,
   ToneParams,
   Transform,
+  affineForLayerTransform,
   documentPointToLayer,
   inverseAffineForLayerTransform,
   rotateLayerTransformAround,
@@ -49,6 +52,7 @@ import {
   resolvedBlendPasses,
   resolvedBlendIf,
   resolvedFillOpacity,
+  transformPoint,
 } from "./document";
 import { isNeutralBlendIf } from "./blend";
 import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
@@ -64,8 +68,13 @@ import {
   planStroke,
   replayStrokeFloat,
 } from "./brush";
-import { renderClean, renderViewport, viewportRenderCacheStats } from "./renderer";
-import { bumpBitmapVersion, isGLSupported, renderGL } from "./gl-renderer";
+import {
+  renderClean,
+  renderViewport,
+  viewportRenderCacheStats,
+  viewportRenderPerformanceStats,
+} from "./renderer";
+import { bumpBitmapVersion, gpuTextureCacheStats, isGLSupported, renderGL } from "./gl-renderer";
 import {
   SelectionMode,
   RefineSelectionParams,
@@ -280,6 +289,8 @@ export class Studio {
   private history = newHistory();
   private renderScheduled = false;
   private renderRevision = 0;
+  private fullRenderPending = true;
+  private pendingDirtyRegions: PixelRect[] = [];
   private disposed = false;
   private antsTimer: number | null = null;
   private strokeTiles: Map<string, StrokeTile> | null = null;
@@ -312,6 +323,7 @@ export class Studio {
   private virtualDirty: PyramidDirtyTracker;
   private virtualPlan: ViewportPlan | null = null;
   private displayViewport: DisplayViewport | null = null;
+  private channelView: "rgb" | "red" | "green" | "blue" | "alpha" = "rgb";
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
     this.doc = createDocument(width, height);
@@ -416,8 +428,15 @@ export class Studio {
     );
   }
 
-  requestRender() {
+  requestRender(dirtyRegion?: PixelRect) {
     this.renderRevision += 1;
+    if (dirtyRegion && !this.fullRenderPending) {
+      this.pendingDirtyRegions.push(dirtyRegion);
+      this.virtualDirty.invalidate(dirtyRegion);
+    } else if (!dirtyRegion) {
+      this.fullRenderPending = true;
+      this.pendingDirtyRegions = [];
+    }
     // Headless: there is nothing to paint into and no frame clock. Bumping the
     // revision is still correct so cache invalidation stays consistent.
     if (!Studio.hasDom()) return;
@@ -425,6 +444,9 @@ export class Studio {
     this.renderScheduled = true;
     requestAnimationFrame(() => {
       this.renderScheduled = false;
+      const dirtyRegions = this.fullRenderPending ? undefined : this.pendingDirtyRegions;
+      this.fullRenderPending = false;
+      this.pendingDirtyRegions = [];
       // GPU preview when the user has asked for it AND the platform actually
       // supports RGBA16F FBOs. Any failure falls straight back to the CPU path
       // so the toggle can't visually break the app.
@@ -436,6 +458,8 @@ export class Studio {
       // is used only for export/flatten (see exportImage/flatten).
       renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
         cacheRevision: this.renderRevision,
+        dirtyRegions,
+        channelView: this.channelView,
       });
     });
   }
@@ -526,6 +550,9 @@ export class Studio {
       proofing: { ...this.doc.proofing },
       previewCache: precisionPreviewCacheStats(),
       viewportCache: viewportRenderCacheStats(),
+      viewportPerformance: viewportRenderPerformanceStats(),
+      gpuTextureCache: gpuTextureCacheStats(),
+      channelView: this.channelView,
       tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
       history: this.history.summary(),
     };
@@ -1093,6 +1120,26 @@ export class Studio {
       this.doc.selection = { mask, bounds: { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy } };
     }
     this.doc.guides = this.doc.guides.map((guide) => ({ ...guide, position: guide.position * (guide.orientation === "vertical" ? sx : sy) }));
+    this.doc.artboards = this.doc.artboards?.map((artboard) => ({
+      ...artboard,
+      x: artboard.x * sx,
+      y: artboard.y * sy,
+      width: artboard.width * sx,
+      height: artboard.height * sy,
+    }));
+    this.doc.layerComps = this.doc.layerComps?.map((comp) => ({
+      ...comp,
+      layers: comp.layers.map((state) => ({
+        ...state,
+        transform: {
+          ...state.transform,
+          tx: state.transform.tx * sx,
+          ty: state.transform.ty * sy,
+          sx: state.transform.sx * sx,
+          sy: state.transform.sy * sy,
+        },
+      })),
+    }));
     this.doc.width = width;
     this.doc.height = height;
     this.resetVirtualGeometry(width, height);
@@ -1171,6 +1218,137 @@ export class Studio {
     });
     this.requestRender();
     return true;
+  }
+
+  setChannelView(channel: "rgb" | "red" | "green" | "blue" | "alpha") {
+    if (!["rgb", "red", "green", "blue", "alpha"].includes(channel) || channel === this.channelView) return false;
+    this.channelView = channel;
+    this.requestRender();
+    this.emit();
+    return true;
+  }
+
+  captureLayerComp(name = "Layer Comp") {
+    const before = cloneDocument(this.doc);
+    const comp = {
+      id: nextId("layer-comp"),
+      name: name.trim().slice(0, 80) || `Layer Comp ${(this.doc.layerComps?.length ?? 0) + 1}`,
+      createdAt: new Date().toISOString(),
+      layers: this.doc.layers.map((layer) => ({
+        layerId: layer.id,
+        visible: layer.visible,
+        opacity: layer.opacity,
+        transform: { ...layer.transform },
+      })),
+    };
+    this.doc.layerComps = [...(this.doc.layerComps ?? []), comp].slice(-MAX_LAYER_COMPS);
+    const after = cloneDocument(this.doc);
+    this.commit({ label: `Capture comp: ${comp.name}`, before: [], after: [], documentBefore: before, documentAfter: after });
+    return comp;
+  }
+
+  recaptureLayerComp(id: string) {
+    const index = this.doc.layerComps?.findIndex((comp) => comp.id === id) ?? -1;
+    if (index < 0) return false;
+    const before = cloneDocument(this.doc);
+    const current = this.doc.layerComps![index];
+    this.doc.layerComps![index] = {
+      ...current,
+      layers: this.doc.layers.map((layer) => ({
+        layerId: layer.id,
+        visible: layer.visible,
+        opacity: layer.opacity,
+        transform: { ...layer.transform },
+      })),
+    };
+    const after = cloneDocument(this.doc);
+    this.commit({ label: `Update comp: ${current.name}`, before: [], after: [], documentBefore: before, documentAfter: after });
+    return true;
+  }
+
+  applyLayerComp(id: string) {
+    const comp = this.doc.layerComps?.find((candidate) => candidate.id === id);
+    if (!comp) return false;
+    const states = new Map(comp.layers.map((state) => [state.layerId, state]));
+    const affected = this.doc.layers.filter((layer) => states.has(layer.id));
+    if (!affected.length) return false;
+    const before = affected.map(snapshotLayer);
+    for (const layer of affected) {
+      const state = states.get(layer.id)!;
+      layer.visible = state.visible;
+      layer.opacity = Math.max(0, Math.min(1, state.opacity));
+      layer.transform = { ...state.transform };
+    }
+    const after = affected.map(snapshotLayer);
+    this.commit({ label: `Apply comp: ${comp.name}`, before, after });
+    this.requestRender();
+    return true;
+  }
+
+  removeLayerComp(id: string) {
+    const comps = this.doc.layerComps ?? [];
+    const next = comps.filter((comp) => comp.id !== id);
+    if (next.length === comps.length) return false;
+    const before = cloneDocument(this.doc);
+    this.doc.layerComps = next;
+    const after = cloneDocument(this.doc);
+    this.commit({ label: "Remove layer comp", before: [], after: [], documentBefore: before, documentAfter: after });
+    return true;
+  }
+
+  createArtboard(name = "Artboard", bounds?: PixelRect) {
+    const source = bounds ?? { x: 0, y: 0, width: this.doc.width, height: this.doc.height };
+    const left = Math.max(0, Math.min(this.doc.width - 1, Math.floor(source.x)));
+    const top = Math.max(0, Math.min(this.doc.height - 1, Math.floor(source.y)));
+    const right = Math.max(left + 1, Math.min(this.doc.width, Math.ceil(source.x + source.width)));
+    const bottom = Math.max(top + 1, Math.min(this.doc.height, Math.ceil(source.y + source.height)));
+    const before = cloneDocument(this.doc);
+    const artboard = {
+      id: nextId("artboard"),
+      name: name.trim().slice(0, 80) || `Artboard ${(this.doc.artboards?.length ?? 0) + 1}`,
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top,
+    };
+    this.doc.artboards = [...(this.doc.artboards ?? []), artboard].slice(-MAX_ARTBOARDS);
+    const after = cloneDocument(this.doc);
+    this.commit({ label: `Create artboard: ${artboard.name}`, before: [], after: [], documentBefore: before, documentAfter: after });
+    return artboard;
+  }
+
+  removeArtboard(id: string) {
+    const artboards = this.doc.artboards ?? [];
+    const next = artboards.filter((artboard) => artboard.id !== id);
+    if (next.length === artboards.length) return false;
+    const before = cloneDocument(this.doc);
+    this.doc.artboards = next;
+    const after = cloneDocument(this.doc);
+    this.commit({ label: "Remove artboard", before: [], after: [], documentBefore: before, documentAfter: after });
+    return true;
+  }
+
+  async exportArtboard(id: string, type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92) {
+    const artboard = this.doc.artboards?.find((candidate) => candidate.id === id);
+    if (!artboard) throw new Error("Artboard not found.");
+    if (artboard.width > 16_384 || artboard.height > 16_384 || artboard.width * artboard.height > 64_000_000) {
+      throw new Error("This artboard exceeds the browser export surface limit.");
+    }
+    const output = newCanvas(artboard.width, artboard.height);
+    renderViewport(this.doc, output, {
+      x: artboard.x,
+      y: artboard.y,
+      width: artboard.width,
+      height: artboard.height,
+      zoom: 1,
+      outputWidth: artboard.width,
+      outputHeight: artboard.height,
+      cssScale: 1,
+      devicePixelRatio: 1,
+    }, { checkerboard: false, selectionOverlay: false, proofing: false });
+    return new Promise<Blob>((resolve, reject) => {
+      output.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Artboard encoding failed.")), type, quality);
+    });
   }
 
   private surfaceFromCanvas(
@@ -2000,10 +2178,11 @@ export class Studio {
       tiltY: (prev.tiltY ?? 0) + ((point.tiltY ?? 0) - (prev.tiltY ?? 0)) * response,
       azimuth: point.azimuth,
     } : point;
+    const dirtyRegion = this.strokeDirtyRegion(layer, params, prev, next);
     if (precisionPaint) {
       this.paintPrecisionStroke(layer, params, next);
       this.lastPoint = next;
-      this.requestRender();
+      this.requestRender(dirtyRegion);
       return;
     }
     const ctx = target!.getContext("2d")!;
@@ -2055,7 +2234,30 @@ export class Studio {
       bumpBitmapVersion(layer.bitmap);
     }
     this.lastPoint = next;
-    this.requestRender();
+    this.requestRender(dirtyRegion);
+  }
+
+  private strokeDirtyRegion(layer: Layer, params: BrushParams, from: BrushPoint, to: BrushPoint): PixelRect {
+    const radius = params.size * (0.6 + Math.max(0, params.scatter ?? 0)) + 3;
+    const local: PixelRect = {
+      x: Math.min(from.x, to.x) - radius,
+      y: Math.min(from.y, to.y) - radius,
+      width: Math.abs(to.x - from.x) + radius * 2,
+      height: Math.abs(to.y - from.y) + radius * 2,
+    };
+    if (params.mode === "mask-add" || params.mode === "mask-remove") return local;
+    const transform = affineForLayerTransform(layer.transform);
+    const corners = [
+      transformPoint(transform, local.x, local.y),
+      transformPoint(transform, local.x + local.width, local.y),
+      transformPoint(transform, local.x + local.width, local.y + local.height),
+      transformPoint(transform, local.x, local.y + local.height),
+    ];
+    const left = Math.min(...corners.map((corner) => corner.x));
+    const top = Math.min(...corners.map((corner) => corner.y));
+    const right = Math.max(...corners.map((corner) => corner.x));
+    const bottom = Math.max(...corners.map((corner) => corner.y));
+    return { x: left, y: top, width: right - left, height: bottom - top };
   }
 
   endStroke(layerId: string, params: BrushParams) {

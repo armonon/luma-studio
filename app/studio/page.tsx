@@ -68,6 +68,14 @@ import {
   openNativeFile,
   saveNativeFile,
 } from "@/app/engine/native-files";
+import {
+  defaultWorkflowPreferences,
+  normalizeShortcut,
+  normalizeWorkflowPreferences,
+  resolveShortcut,
+  shortcutConflict,
+  type WorkflowPreferences,
+} from "@/app/engine/workflow-preferences";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -214,6 +222,11 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["ruler", "╱", "Ruler", "R"],
   ],
 };
+
+const workspaceIds = workspaces.map(([id]) => id);
+const allToolIds = [...new Set(Object.values(modeTools).flat().map(([tool]) => tool))];
+const WORKFLOW_PREFERENCES_KEY = "luma.workflow-preferences.v1";
+const initialWorkflowPreferences = defaultWorkflowPreferences<WorkspaceMode, Tool>(workspaceIds);
 
 const toneRows: Array<[ToneKey, string, number, number, number]> = [
   ["exposure", "Exposure", -2, 2, 0.01],
@@ -777,6 +790,9 @@ export default function SpatialStudio() {
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>("edit");
   const [activeTool, setActiveTool] = useState<Tool>("brush");
+  const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
+  const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
+  const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const activeLayerIdRef = useRef<string | null>(null);
   const setActiveLayerId = useCallback((id: string | null) => {
@@ -837,6 +853,8 @@ export default function SpatialStudio() {
   const [toast, setToast] = useState("");
   const [activePreset, setActivePreset] = useState(0);
   const [customName, setCustomName] = useState<string | null>(null);
+  const [layerCompName, setLayerCompName] = useState("Layer Comp");
+  const [artboardName, setArtboardName] = useState("Artboard");
   const [textDraft, setTextDraft] = useState("WANDER FARTHER");
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -905,6 +923,32 @@ export default function SpatialStudio() {
     setToast(msg);
     window.setTimeout(() => setToast(""), 1900);
   }, []);
+
+  useEffect(() => {
+    const hydration = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem(WORKFLOW_PREFERENCES_KEY);
+        setWorkflowPreferences(normalizeWorkflowPreferences(
+          stored ? JSON.parse(stored) : null,
+          workspaceIds,
+          allToolIds,
+        ));
+      } catch {
+        setWorkflowPreferences(initialWorkflowPreferences);
+      }
+      setWorkflowPreferencesLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(hydration);
+  }, []);
+
+  useEffect(() => {
+    if (!workflowPreferencesLoaded) return;
+    try {
+      window.localStorage.setItem(WORKFLOW_PREFERENCES_KEY, JSON.stringify(workflowPreferences));
+    } catch {
+      // The editor remains fully usable when storage is blocked.
+    }
+  }, [workflowPreferences, workflowPreferencesLoaded]);
 
   useEffect(() => {
     if (!canvasRef.current) return;
@@ -1562,7 +1606,8 @@ export default function SpatialStudio() {
     setPointDraft([]);
     directAnchorRef.current = null;
     setWorkspace(next);
-    setActiveTool(modeTools[next][0][0]);
+    const firstVisible = modeTools[next].find(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
+    setActiveTool(firstVisible?.[0] ?? modeTools[next][0][0]);
   };
 
   const openPreset = async (index: number) => {
@@ -1940,6 +1985,7 @@ export default function SpatialStudio() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); studio?.selectAll(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d") { e.preventDefault(); studio?.deselect(); return; }
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); studio?.invertSelectionArea(); return; }
+      if (e.key === "Escape" && showWorkspaceSettings) { setShowWorkspaceSettings(false); return; }
       if (e.key === "Escape" && showHistory) { setShowHistory(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
@@ -1969,7 +2015,10 @@ export default function SpatialStudio() {
       if (e.key === "Delete" || e.key === "Backspace") {
         if (activeLayerId && studio) { studio.clearPixels(activeLayerId); return; }
       }
-      const t = modeTools[workspace].find(([, , , k]) => k.toLowerCase() === e.key.toLowerCase());
+      const t = modeTools[workspace].find(([tool, , , fallback]) => (
+        !workflowPreferences.hiddenTools.includes(tool)
+        && resolveShortcut(tool, fallback, workflowPreferences).toLowerCase() === e.key.toLowerCase()
+      ));
       if (t) {
         setPointDraft([]);
         directAnchorRef.current = null;
@@ -1986,9 +2035,12 @@ export default function SpatialStudio() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip]);
+  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences]);
 
-  const currentTools = modeTools[workspace];
+  const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
+  const orderedWorkspaces = workflowPreferences.workspaceOrder
+    .map((id) => workspaces.find(([workspaceId]) => workspaceId === id))
+    .filter((entry): entry is (typeof workspaces)[number] => Boolean(entry));
   const historyState = studio?.historyState();
   const engineState = studio?.engineState();
   const photoshopReport = studio?.photoshopCompatibility({ format: photoshopFormat });
@@ -2260,7 +2312,7 @@ export default function SpatialStudio() {
           </div>
 
           <nav className="workspace-switcher" aria-label="Studio workspace">
-            {workspaces.map(([id, label, description]) => (
+            {orderedWorkspaces.map(([id, label, description]) => (
               <button
                 key={id}
                 className={workspace === id ? "active" : ""}
@@ -2273,6 +2325,7 @@ export default function SpatialStudio() {
           </nav>
 
           <div className="spatial-share-actions">
+            <button className="spatial-search" onClick={() => setShowWorkspaceSettings(true)} title="Customize workspaces and shortcuts" aria-label="Customize workspaces and shortcuts">⚙</button>
             <button className="spatial-search" onClick={saveProject} title="Save Luma project" aria-label="Save Luma project">
               {saveState === "saving" ? "•••" : saveState === "error" ? "!" : "✓"}
             </button>
@@ -2315,7 +2368,9 @@ export default function SpatialStudio() {
         <div className="spatial-workspace">
           <aside className="spatial-toolbar" aria-label={`${workspace} tools`}>
             <div>
-              {currentTools.map(([id, icon, label, shortcut]) => (
+              {currentTools.map(([id, icon, label, shortcut]) => {
+                const resolvedShortcut = resolveShortcut(id, shortcut, workflowPreferences);
+                return (
                 <button
                   key={id}
                   className={activeTool === id ? "active" : ""}
@@ -2326,12 +2381,13 @@ export default function SpatialStudio() {
                     if (id === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
                   }}
                   aria-label={label}
-                  title={`${label} (${shortcut})`}
+                  title={`${label} (${resolvedShortcut})`}
                 >
                   <span>{icon}</span>
-                  <i>{label}<kbd>{shortcut}</kbd></i>
+                  <i>{label}<kbd>{resolvedShortcut}</kbd></i>
                 </button>
-              ))}
+                );
+              })}
             </div>
             <button className="layers-orb" onClick={runSubject} aria-label="Auto subject">✦</button>
           </aside>
@@ -2418,6 +2474,24 @@ export default function SpatialStudio() {
                     }}
                   >
                     {dragOverlay}
+                    {doc.artboards?.map((artboard) => (
+                      <div
+                        key={artboard.id}
+                        aria-label={`Artboard ${artboard.name}`}
+                        style={{
+                          position: "absolute",
+                          left: `${(artboard.x / doc.width) * 100}%`,
+                          top: `${(artboard.y / doc.height) * 100}%`,
+                          width: `${(artboard.width / doc.width) * 100}%`,
+                          height: `${(artboard.height / doc.height) * 100}%`,
+                          border: "1px solid rgba(126,231,255,.82)",
+                          boxShadow: "0 0 0 1px rgba(0,0,0,.35) inset",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <span style={{ position: "absolute", left: -1, top: -20, padding: "2px 5px", background: "rgba(12,16,24,.82)", color: "#9cecff", fontSize: 9, whiteSpace: "nowrap" }}>{artboard.name}</span>
+                      </div>
+                    ))}
                     {transformOverlay}
                     {penOverlay}
                     {pointOverlay}
@@ -2612,6 +2686,87 @@ export default function SpatialStudio() {
             </section>
 
             <section className="glass-card mask-card">
+              <header><strong>Channels</strong><small>View only · exports stay RGB</small></header>
+              <div className="mask-segmented" style={{ paddingBottom: 9 }}>
+                {(["rgb", "red", "green", "blue", "alpha"] as const).map((channel) => (
+                  <button
+                    key={channel}
+                    className={(engineState?.channelView ?? "rgb") === channel ? "active" : ""}
+                    onClick={() => studio?.setChannelView(channel)}
+                    aria-pressed={(engineState?.channelView ?? "rgb") === channel}
+                  >{channel === "rgb" ? "RGB" : channel === "alpha" ? "A" : channel[0].toUpperCase()}</button>
+                ))}
+              </div>
+            </section>
+
+            <section className="glass-card mask-card">
+              <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}/64</small></header>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 5, padding: "8px 10px" }}>
+                <input value={layerCompName} maxLength={80} onChange={(event) => setLayerCompName(event.target.value)} aria-label="New layer comp name" />
+                <button onClick={() => {
+                  const comp = studio?.captureLayerComp(layerCompName);
+                  if (comp) notify(`Captured ${comp.name}`);
+                }}>Capture</button>
+              </div>
+              {!!doc?.layerComps?.length && (
+                <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
+                  {doc.layerComps.map((comp) => (
+                    <div key={comp.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: 4, alignItems: "center" }}>
+                      <button onClick={() => studio?.applyLayerComp(comp.id)} style={{ textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`Apply ${comp.name}`}>{comp.name}</button>
+                      <button onClick={() => { studio?.recaptureLayerComp(comp.id); notify(`Updated ${comp.name}`); }} title="Recapture from current layers">↻</button>
+                      <button onClick={() => studio?.applyLayerComp(comp.id)} title="Apply layer comp">▶</button>
+                      <button onClick={() => studio?.removeLayerComp(comp.id)} title="Remove layer comp">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="glass-card mask-card">
+              <header><strong>Artboards</strong><small>{doc?.artboards?.length ?? 0}/128</small></header>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 5, padding: "8px 10px" }}>
+                <input value={artboardName} maxLength={80} onChange={(event) => setArtboardName(event.target.value)} aria-label="New artboard name" />
+                <button onClick={() => {
+                  const bounds = doc?.selection?.bounds;
+                  const artboard = studio?.createArtboard(artboardName, bounds ? { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } : undefined);
+                  if (artboard) notify(`Created ${artboard.name}${bounds ? " from selection" : ""}`);
+                }}>＋ {doc?.selection ? "Selection" : "Canvas"}</button>
+              </div>
+              {!!doc?.artboards?.length && (
+                <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
+                  {doc.artboards.map((artboard) => (
+                    <div key={artboard.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 4, alignItems: "center" }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }} title={artboard.name}>{artboard.name} · {artboard.width}×{artboard.height}</span>
+                      <button onClick={async () => {
+                        if (!studio) return;
+                        try {
+                          const blob = await studio.exportArtboard(artboard.id);
+                          await downloadOrSave(blob, `${artboard.name.replace(/[^a-z0-9_-]+/gi, "-") || "artboard"}.png`);
+                          notify(`${artboard.name} exported`);
+                        } catch (error) {
+                          notify(error instanceof Error ? error.message : "Artboard export failed");
+                        }
+                      }} title="Export artboard as PNG">↗</button>
+                      <button onClick={() => studio?.removeArtboard(artboard.id)} title="Remove artboard">×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="glass-card mask-card">
+              <header><strong>Plugins & assets</strong><small>{studio?.listPlugins().length ?? 0} active · {capturedBrushes.length} brushes</small></header>
+              <div style={{ display: "grid", gap: 4, padding: "8px 10px" }}>
+                {studio?.listPlugins().length ? studio.listPlugins().map((plugin) => (
+                  <div key={plugin.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 5 }}>
+                    <span style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>{plugin.name ?? plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</span>
+                    <button onClick={() => studio.unregisterPlugin(plugin.id)} title={`Unload ${plugin.name ?? plugin.id}`}>Unload</button>
+                  </div>
+                )) : <small style={{ opacity: 0.58 }}>No session plugins loaded. Captured brushes are saved with the document asset library.</small>}
+              </div>
+            </section>
+
+            <section className="glass-card mask-card">
               <header><strong>Document</strong><small>{doc?.resolution.x ?? 72} ppi · {doc?.bitDepth ?? 8}-bit · {doc?.colorSpace ?? "sRGB"}</small></header>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 5, padding: "8px 10px" }}>
                 <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
@@ -2681,11 +2836,14 @@ export default function SpatialStudio() {
                   Linear-light tiled master · {engineState?.precisionTiles ?? 0} resident tiles · {formatBytes(engineState?.precisionBytes ?? 0)}
                 </small>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  ICC matrix/TRC engine · {engineState?.colorManagement.profiles ?? 0} registered profiles · {engineState?.colorManagement.embeddedProfiles ?? 0} embedded
+                  ICC matrix/TRC + classic 3D LUT engine · {engineState?.colorManagement.profiles ?? 0} registered profiles · {engineState?.colorManagement.embeddedProfiles ?? 0} embedded
                 </small>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Sparse canvas · {engineState?.virtualCanvas.levels ?? 1} mip levels · {engineState?.virtualCanvas.plannedTiles ?? 0} prioritized viewport tiles
                   {engineState?.virtualCanvas.truncated ? " · bounded plan" : ""}
+                </small>
+                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
+                  Dirty renderer · {engineState?.viewportPerformance.latestRenderedTiles ?? 0}/{engineState?.viewportPerformance.latestTotalTiles ?? 0} screen tiles · p95 {Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms · GPU cache {formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}
                 </small>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Photoshop bridge · {engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.preserved ?? 0} preserved features · {engineState?.photoshop.warnings ?? 0} compatibility notes
@@ -3124,6 +3282,7 @@ export default function SpatialStudio() {
                     </div>
                   </div>
                 )}
+                {(!workflowPreferences.contextualInspector || paintingTool || retouchTool) && (<>
                 <div className="tone-controls">
                   <label><span>Size</span><input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
@@ -3144,6 +3303,7 @@ export default function SpatialStudio() {
                   <button className={pressureOpacity ? "active" : ""} onClick={() => setPressureOpacity((value) => !value)}>Pressure opacity</button>
                   <button className={brushBuildUp ? "active" : ""} onClick={() => setBrushBuildUp((value) => !value)}>Airbrush buildup</button>
                 </div>
+                </>)}
               </section>
             )}
 
@@ -3308,6 +3468,128 @@ export default function SpatialStudio() {
           </aside>
         </div>
       </section>
+
+      {showWorkspaceSettings && (
+        <div className="spatial-modal" onMouseDown={() => setShowWorkspaceSettings(false)}>
+          <section
+            className="spatial-command"
+            onMouseDown={(event) => event.stopPropagation()}
+            aria-label="Workspace and shortcut settings"
+            style={{ width: "min(680px, calc(100vw - 32px))", maxHeight: "min(760px, 82vh)", overflowY: "auto" }}
+          >
+            <div>
+              <span>⚙</span>
+              <strong style={{ padding: "0 8px", flex: 1 }}>Workspace & shortcuts</strong>
+              <button onClick={() => setShowWorkspaceSettings(false)} aria-label="Close workspace settings">×</button>
+            </div>
+            <p>Reorder workspace tabs, keep only the tools you use, and assign a conflict-free single-key shortcut.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", alignItems: "stretch", gap: 6, padding: "8px 12px", height: "auto" }}>
+              <strong style={{ fontSize: 11 }}>Workspace order</strong>
+              {orderedWorkspaces.map(([id, label], index) => (
+                <div key={id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto", alignItems: "center", gap: 5, height: "auto", padding: 0, border: 0 }}>
+                  <button onClick={() => switchWorkspace(id)} className={workspace === id ? "active" : ""} style={{ textAlign: "left" }}>{label}</button>
+                  <button
+                    disabled={index === 0}
+                    aria-label={`Move ${label} earlier`}
+                    onClick={() => setWorkflowPreferences((current) => {
+                      const order = [...current.workspaceOrder];
+                      [order[index - 1], order[index]] = [order[index], order[index - 1]];
+                      return { ...current, workspaceOrder: order };
+                    })}
+                  >↑</button>
+                  <button
+                    disabled={index === orderedWorkspaces.length - 1}
+                    aria-label={`Move ${label} later`}
+                    onClick={() => setWorkflowPreferences((current) => {
+                      const order = [...current.workspaceOrder];
+                      [order[index], order[index + 1]] = [order[index + 1], order[index]];
+                      return { ...current, workspaceOrder: order };
+                    })}
+                  >↓</button>
+                </div>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 6, fontSize: 11 }}>
+                <span><strong>Contextual properties</strong><br /><small style={{ opacity: 0.62 }}>Hide brush controls when the active tool does not use them.</small></span>
+                <input
+                  type="checkbox"
+                  checked={workflowPreferences.contextualInspector}
+                  onChange={(event) => setWorkflowPreferences((current) => ({ ...current, contextualInspector: event.target.checked }))}
+                />
+              </label>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", alignItems: "stretch", gap: 5, padding: "10px 12px", height: "auto", borderTop: "1px solid rgba(255,255,255,.1)" }}>
+              <strong style={{ fontSize: 11 }}>{workspaces.find(([id]) => id === workspace)?.[1]} tools</strong>
+              <small style={{ opacity: 0.62 }}>Visibility and shortcuts are saved on this device.</small>
+              {modeTools[workspace].map(([tool, icon, label, fallback]) => {
+                const hidden = workflowPreferences.hiddenTools.includes(tool);
+                const visibleCount = modeTools[workspace].filter(([candidate]) => !workflowPreferences.hiddenTools.includes(candidate)).length;
+                return (
+                  <label key={tool} style={{ display: "grid", gridTemplateColumns: "24px minmax(0,1fr) 58px 58px", alignItems: "center", gap: 8, fontSize: 11 }}>
+                    <span aria-hidden="true" style={{ textAlign: "center" }}>{icon}</span>
+                    <span>{label}</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={!hidden}
+                        disabled={!hidden && visibleCount <= 1}
+                        aria-label={`Show ${label}`}
+                        onChange={(event) => {
+                          const showing = event.target.checked;
+                          setWorkflowPreferences((current) => ({
+                            ...current,
+                            hiddenTools: showing
+                              ? current.hiddenTools.filter((candidate) => candidate !== tool)
+                              : [...current.hiddenTools, tool],
+                          }));
+                          if (!showing && activeTool === tool) {
+                            const replacement = modeTools[workspace].find(([candidate]) => candidate !== tool && !workflowPreferences.hiddenTools.includes(candidate));
+                            if (replacement) setActiveTool(replacement[0]);
+                          }
+                        }}
+                      />
+                      Show
+                    </span>
+                    <input
+                      value={resolveShortcut(tool, fallback, workflowPreferences)}
+                      maxLength={1}
+                      aria-label={`${label} shortcut`}
+                      style={{ width: 42, textAlign: "center", textTransform: "uppercase" }}
+                      onChange={(event) => {
+                        const shortcut = normalizeShortcut(event.target.value);
+                        if (!shortcut) return;
+                        const conflict = shortcutConflict(
+                          modeTools[workspace].map(([candidate, , , defaultShortcut]) => [candidate, defaultShortcut] as const),
+                          tool,
+                          shortcut,
+                          workflowPreferences,
+                        );
+                        if (conflict) {
+                          const conflictLabel = modeTools[workspace].find(([candidate]) => candidate === conflict)?.[2] ?? conflict;
+                          notify(`${shortcut} is already assigned to ${conflictLabel}`);
+                          return;
+                        }
+                        setWorkflowPreferences((current) => ({
+                          ...current,
+                          shortcutOverrides: { ...current.shortcutOverrides, [tool]: shortcut },
+                        }));
+                      }}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "10px 12px", height: "auto", borderTop: "1px solid rgba(255,255,255,.1)" }}>
+              <button onClick={() => {
+                setWorkflowPreferences(initialWorkflowPreferences);
+                setWorkspace("edit");
+                setActiveTool("brush");
+                notify("Workspace defaults restored");
+              }}>Restore defaults</button>
+              <button onClick={() => setShowWorkspaceSettings(false)}>Done</button>
+            </div>
+          </section>
+        </div>
+      )}
 
       {showHistory && (
         <div className="spatial-modal" onMouseDown={() => setShowHistory(false)}>

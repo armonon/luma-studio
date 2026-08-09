@@ -475,7 +475,7 @@ export type SourceProvenance = {
     name: string;
     version?: string;
     colorSpace: string;
-    model: "matrix-trc" | "unsupported-lut" | "metadata-only";
+    model: "matrix-trc" | "lut" | "unsupported-lut" | "metadata-only";
     canTransform: boolean;
     browserDecoded: true;
     warnings: string[];
@@ -631,6 +631,30 @@ export type ProofSettings = {
   gamutWarning: boolean;
 };
 
+export const MAX_LAYER_COMPS = 64;
+export const MAX_ARTBOARDS = 128;
+
+export type Artboard = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type LayerComp = {
+  id: string;
+  name: string;
+  createdAt: string;
+  layers: Array<{
+    layerId: string;
+    visible: boolean;
+    opacity: number;
+    transform: Transform;
+  }>;
+};
+
 export type Document = {
   width: number;
   height: number;
@@ -640,6 +664,8 @@ export type Document = {
   guides: Guide[];
   proofing: ProofSettings;
   capturedBrushes?: CapturedBrushAsset[];
+  layerComps?: LayerComp[];
+  artboards?: Artboard[];
   layers: Layer[]; // index 0 is topmost
   selection: Selection | null;
 };
@@ -686,6 +712,8 @@ export function createDocument(width: number, height: number): Document {
       gamutWarning: false,
     },
     capturedBrushes: [],
+    layerComps: [],
+    artboards: [],
     layers: [],
     selection: null,
   };

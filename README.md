@@ -16,7 +16,8 @@ until their full user-facing paths ship.
   per layer, fill opacity, Blend If, clipping masks, layer masks, and effects.
 - Nondestructive levels, curves, HSL, tone, editable smart filters, soft proof,
   gamut warnings, 8/16/32-bit precision masters, sRGB, Display P3, and linear
-  sRGB working spaces.
+  sRGB working spaces. ICC v2/v4 RGB matrix/TRC profiles and classic `mft1`/
+  `mft2` 3D-LUT intent tables run in the local color engine.
 - Pressure/tilt-aware brushes, full-color captured image tips with canvas and
   upload sampling, tint/stencil modes, symmetry, paint, erase, mixer, clone,
   healing, removal, dodge/burn, blur/sharpen, smudge, sponge, gradients, and
@@ -33,7 +34,9 @@ until their full user-facing paths ship.
   editable adjustment/text/vector metadata, smart-object payload preservation,
   resolution/guides/effects preservation, and explicit warnings for conversions.
 - Branching version history, bounded recovery, multi-document tabs, actions,
-  batch ZIP export, PNG/JPEG/WebP export, and `.luma` project round trips.
+  batch ZIP export, named layer comps, channel inspection, named artboard-region
+  export, customizable workspaces/shortcuts, contextual properties,
+  PNG/JPEG/WebP export, and `.luma` project round trips.
 - Local segmentation/matting models plus authenticated GPT Image 2 masked edits,
   bounded parallel variations, provenance metadata, cancellation, validation,
   per-user concurrency limits, and rate limits.
@@ -81,7 +84,8 @@ app/engine/               shared document, rendering, color, RAW, PSD, history
 
 The document remains editable in the shared engine. Raster masters can live in
 sparse half/float tiles while canvas bitmaps act as display and compatibility
-mirrors. Eligible desktop flattened exports send bounded raw binary tiles to
+mirrors. The interactive viewport recomposes only dirty screen tiles, records
+frame/tile telemetry, and uses bounded CPU and GPU caches. Eligible desktop flattened exports send bounded raw binary tiles to
 `luma-core`; unsupported document constructs safely fall back to the shared
 compositor.
 
@@ -126,9 +130,10 @@ contains a live Photoshop preflight for the selected PSD/PSB output mode.
   Photoshop smart-filter descriptors.
 - Multi-pass Luma blending expands to ordered Photoshop layers.
 
-Those last two items, full high-depth PSD writing, CMYK/Lab editing, a complete
-LUT-based ICC engine, artboards, and parity with Photoshop's entire plugin
-ecosystem remain real gaps. They are not advertised as complete.
+Those last two items, full high-depth PSD writing, CMYK/Lab editing, ICC
+device-link and v4 multi-process elements, Photoshop-native artboard/layer-comp
+interchange, and parity with Photoshop's entire plugin ecosystem remain real
+gaps. They are not advertised as complete.
 
 ## Desktop packaging
 
