@@ -3,11 +3,14 @@ import {
   BlendPass,
   BlendIf,
   AiProvenance,
+  CapturedBrushAsset,
   Document,
   HslParams,
   Guide,
   IDENTITY_TRANSFORM,
   Layer,
+  MAX_CAPTURED_BRUSHES,
+  MAX_CAPTURED_BRUSH_EDGE,
   LayerKind,
   LayerEffect,
   MAX_LAYER_BLEND_PASSES,
@@ -52,6 +55,8 @@ import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
 import {
   BrushParams,
   BrushPoint,
+  ImageBrushMode,
+  ImageBrushTip,
   PaintSegmentState,
   createPaintSegmentState,
   paintSegment,
@@ -1834,6 +1839,103 @@ export class Studio {
   }
 
   // --- painting ---
+  addCapturedBrush(
+    name: string,
+    source: HTMLCanvasElement,
+    centerX = source.width / 2,
+    centerY = source.height / 2,
+    radius = Math.min(source.width, source.height) / 2,
+  ): CapturedBrushAsset | null {
+    if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(radius) || radius < 1 ||
+        source.width < 1 || source.height < 1) return null;
+    const sourceDiameter = radius * 2;
+    const edge = Math.max(8, Math.min(MAX_CAPTURED_BRUSH_EDGE, Math.ceil(sourceDiameter)));
+    const bitmap = newCanvas(edge, edge);
+    const context = bitmap.getContext("2d")!;
+    context.save();
+    context.beginPath();
+    context.arc(edge / 2, edge / 2, edge / 2, 0, Math.PI * 2);
+    context.clip();
+    context.drawImage(
+      source,
+      centerX - radius,
+      centerY - radius,
+      sourceDiameter,
+      sourceDiameter,
+      0,
+      0,
+      edge,
+      edge,
+    );
+    context.restore();
+    const asset: CapturedBrushAsset = {
+      id: nextId("captured-brush"),
+      name: name.trim().slice(0, 80) || `Captured Brush ${(this.doc.capturedBrushes?.length ?? 0) + 1}`,
+      bitmap,
+      sourceDiameter,
+      createdAt: new Date().toISOString(),
+    };
+    const brushes = [...(this.doc.capturedBrushes ?? []), asset];
+    this.doc.capturedBrushes = brushes.slice(-MAX_CAPTURED_BRUSHES);
+    this.emit();
+    return asset;
+  }
+
+  captureBrushFromDocument(
+    x: number,
+    y: number,
+    radius: number,
+    options: { name?: string; sourceLayerId?: string } = {},
+  ) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius)) return null;
+    let source: HTMLCanvasElement;
+    if (options.sourceLayerId) {
+      const layer = this.findLayer(options.sourceLayerId);
+      if (!layer || layer.kind === "group") return null;
+      source = newCanvas(this.doc.width, this.doc.height);
+      drawLayerContentManaged(source.getContext("2d")!, layer);
+    } else {
+      source = this.flatten();
+    }
+    return this.addCapturedBrush(options.name ?? "Canvas capture", source, x, y, radius);
+  }
+
+  removeCapturedBrush(id: string) {
+    const brushes = this.doc.capturedBrushes ?? [];
+    const next = brushes.filter((brush) => brush.id !== id);
+    if (next.length === brushes.length) return false;
+    this.doc.capturedBrushes = next;
+    this.emit();
+    return true;
+  }
+
+  capturedBrushTip(id: string, mode: ImageBrushMode = "color"): ImageBrushTip | null {
+    const asset = this.doc.capturedBrushes?.find((brush) => brush.id === id);
+    if (!asset) return null;
+    const image = asset.bitmap.getContext("2d")!.getImageData(0, 0, asset.bitmap.width, asset.bitmap.height);
+    const workingData = new Float32Array(image.data.length);
+    for (let offset = 0; offset < image.data.length; offset += 4) {
+      const working = displaySrgbToWorking([
+        image.data[offset] / 255,
+        image.data[offset + 1] / 255,
+        image.data[offset + 2] / 255,
+      ], this.doc.colorSpace);
+      workingData[offset] = working[0];
+      workingData[offset + 1] = working[1];
+      workingData[offset + 2] = working[2];
+      workingData[offset + 3] = image.data[offset + 3] / 255;
+    }
+    return {
+      id: asset.id,
+      name: asset.name,
+      width: image.width,
+      height: image.height,
+      data: image.data,
+      workingData,
+      mode,
+    };
+  }
+
   private layerStrokePoint(layer: Layer, params: BrushParams, point: BrushPoint) {
     if (params.mode === "mask-add" || params.mode === "mask-remove") return { ...point };
     const local = documentPointToLayer(layer.transform, point.x, point.y);

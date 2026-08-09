@@ -163,6 +163,17 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   };
   doc.layers.push(layer);
   doc.guides.push({ id: "guide-z", orientation: "vertical", position: 2 });
+  const capturedBrushBitmap = newCanvas(2, 2);
+  const capturedBrushPixels = new TestImageData(2, 2);
+  capturedBrushPixels.data.set([230, 40, 90, 255], 0);
+  capturedBrushBitmap.getContext("2d")!.putImageData(capturedBrushPixels as unknown as ImageData, 0, 0);
+  doc.capturedBrushes = [{
+    id: "captured-brush-proof",
+    name: "Project brush",
+    bitmap: capturedBrushBitmap,
+    sourceDiameter: 96,
+    createdAt: "2026-08-09T00:00:00.000Z",
+  }];
   const selectionMask = newCanvas(4, 4);
 
   const graph = new OperationHistory<HistoryEntry>({ maxNodes: 80 });
@@ -221,6 +232,10 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.deepEqual(decoded.doc.layers[0].raw!.settings, layer.raw.settings);
   assert.equal(decoded.doc.layers[0].raw!.sensor.bitsPerSample, 14);
   assert.equal(decoded.doc.guides[0].id, "guide-z");
+  assert.equal(decoded.doc.capturedBrushes?.[0].id, "captured-brush-proof");
+  assert.equal(decoded.doc.capturedBrushes?.[0].name, "Project brush");
+  assert.equal(decoded.doc.capturedBrushes?.[0].sourceDiameter, 96);
+  assert.equal(decoded.doc.capturedBrushes?.[0].bitmap.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 230);
   assert.equal(decoded.doc.layers[0].bitmap!.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 18);
   const hdrPixel = decoded.doc.layers[0].surface!.readPixel(0, 0);
   assert.ok(Math.abs(hdrPixel[0] - 1.5) < 0.002);

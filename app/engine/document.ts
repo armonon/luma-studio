@@ -610,6 +610,18 @@ export type Guide = {
   position: number;
 };
 
+export type CapturedBrushAsset = {
+  id: string;
+  name: string;
+  bitmap: HTMLCanvasElement;
+  /** Diameter in document pixels when sampled, before storage downsampling. */
+  sourceDiameter: number;
+  createdAt: string;
+};
+
+export const MAX_CAPTURED_BRUSHES = 32;
+export const MAX_CAPTURED_BRUSH_EDGE = 512;
+
 export type ProofProfile = "none" | "srgb" | "display-p3" | "cmyk-generic";
 
 export type ProofSettings = {
@@ -627,6 +639,7 @@ export type Document = {
   resolution: { x: number; y: number; unit: "ppi" };
   guides: Guide[];
   proofing: ProofSettings;
+  capturedBrushes?: CapturedBrushAsset[];
   layers: Layer[]; // index 0 is topmost
   selection: Selection | null;
 };
@@ -672,6 +685,7 @@ export function createDocument(width: number, height: number): Document {
       blackPointCompensation: true,
       gamutWarning: false,
     },
+    capturedBrushes: [],
     layers: [],
     selection: null,
   };

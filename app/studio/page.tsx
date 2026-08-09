@@ -17,6 +17,7 @@ import {
   BlendIf,
   BlendIfRange,
   BlendMode,
+  CapturedBrushAsset,
   Curves,
   HslParams,
   Layer,
@@ -42,7 +43,7 @@ import {
   resolvedFillOpacity,
 } from "@/app/engine/document";
 import { isNeutralBlendIf } from "@/app/engine/blend";
-import { BrushParams } from "@/app/engine/brush";
+import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
 import { readRecovery, writeRecovery } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
 import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
@@ -73,6 +74,7 @@ type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vecto
 type Tool =
   | "move"
   | "brush"
+  | "capture-brush"
   | "pencil"
   | "mixer"
   | "erase"
@@ -142,6 +144,7 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
   edit: [
     ["move", "↖", "Move", "V"],
     ["brush", "╱", "Brush", "B"],
+    ["capture-brush", "◉", "Capture Brush", "C"],
     ["pencil", "⌁", "Pencil", "N"],
     ["mixer", "≈", "Mixer brush", "X"],
     ["erase", "⌫", "Erase", "E"],
@@ -730,6 +733,19 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+function CapturedBrushThumbnail({ asset }: { asset: CapturedBrushAsset }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(asset.bitmap, 0, 0, canvas.width, canvas.height);
+  }, [asset]);
+  return <canvas ref={ref} width={48} height={48} aria-hidden="true" />;
+}
+
 function mimeForFileName(fileName: string) {
   const extension = fileName.split(".").pop()?.toLowerCase();
   if (extension === "png") return "image/png";
@@ -754,6 +770,7 @@ export default function SpatialStudio() {
   const fileInput = useRef<HTMLInputElement>(null);
   const psdInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
+  const captureInput = useRef<HTMLInputElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
   const [, setVersion] = useState(0);
   const forceUpdate = useCallback(() => setVersion((n) => n + 1), []);
@@ -789,6 +806,20 @@ export default function SpatialStudio() {
   const [brushBlendMode, setBrushBlendMode] = useState<NonNullable<BrushParams["blendMode"]>>("normal");
   const [brushSymmetry, setBrushSymmetry] = useState<"none" | "horizontal" | "vertical" | "radial">("none");
   const [brushColor, setBrushColor] = useState("#ffffff");
+  const [activeCapturedBrushId, setActiveCapturedBrushId] = useState<string | null>(null);
+  const [capturedBrushMode, setCapturedBrushMode] = useState<ImageBrushMode>("color");
+  const [captureSampling, setCaptureSampling] = useState(false);
+  const [captureSampleMerged, setCaptureSampleMerged] = useState(true);
+  const [captureRadius, setCaptureRadius] = useState(64);
+  const [captureHover, setCaptureHover] = useState<Point | null>(null);
+  const [captureSource, setCaptureSource] = useState<{
+    name: string;
+    canvas: HTMLCanvasElement;
+    previewUrl: string;
+    centerX: number;
+    centerY: number;
+    radius: number;
+  } | null>(null);
   const [secondaryColor, setSecondaryColor] = useState("#10131d");
   const [gradientType, setGradientType] = useState<"linear" | "radial">("linear");
   const [patternKind, setPatternKind] = useState<PatternKind>("checker");
@@ -938,6 +969,15 @@ export default function SpatialStudio() {
   const layers: Layer[] = doc?.layers ?? [];
   const openDocuments = studio?.listDocuments() ?? [];
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const capturedBrushes = doc?.capturedBrushes ?? [];
+  const capturedBrushRevision = doc?.capturedBrushes;
+  const capturedBrushColorSpace = doc?.colorSpace;
+  const capturedBrushTip = useMemo(
+    () => studio && activeCapturedBrushId && capturedBrushRevision && capturedBrushColorSpace
+      ? studio.capturedBrushTip(activeCapturedBrushId, capturedBrushMode)
+      : null,
+    [studio, activeCapturedBrushId, capturedBrushMode, capturedBrushRevision, capturedBrushColorSpace],
+  );
   const rawDevelop = activeLayer?.raw
     ? rawDevelopDraft?.layerId === activeLayer.id
       ? rawDevelopDraft.settings
@@ -946,6 +986,10 @@ export default function SpatialStudio() {
   const setRawDevelop = (settings: RawDevelopSettings | null) => {
     setRawDevelopDraft(settings && activeLayer ? { layerId: activeLayer.id, settings } : null);
   };
+
+  useEffect(() => () => {
+    if (captureSource?.previewUrl) URL.revokeObjectURL(captureSource.previewUrl);
+  }, [captureSource?.previewUrl]);
 
   useEffect(() => {
     if (!studio || !doc || !canvasRef.current || !stageRef.current) return;
@@ -1041,9 +1085,10 @@ export default function SpatialStudio() {
     },
     color: brushColor,
     mode: currentBrushMode(),
+    imageTip: activeTool === "capture-brush" ? capturedBrushTip ?? undefined : undefined,
   });
 
-  const paintingTool = activeTool === "brush" || activeTool === "pencil" || activeTool === "erase" || activeTool === "mask-add" || activeTool === "mask-remove";
+  const paintingTool = activeTool === "brush" || activeTool === "capture-brush" || activeTool === "pencil" || activeTool === "erase" || activeTool === "mask-add" || activeTool === "mask-remove";
   const retouchMode: RetouchMode | null = ({
     mixer: "mixer", clone: "clone", heal: "heal", "spot-heal": "spot-heal", patch: "patch", remove: "remove",
     dodge: "dodge", burn: "burn", "blur-brush": "blur", "sharpen-brush": "sharpen", smudge: "smudge",
@@ -1085,6 +1130,59 @@ export default function SpatialStudio() {
     return { tx: tx + (bestX <= threshold ? dx : 0), ty: ty + (bestY <= threshold ? dy : 0) };
   };
 
+  const activateCapturedBrush = (asset: CapturedBrushAsset, mode: ImageBrushMode = capturedBrushMode) => {
+    if (!studio) return;
+    const tip = studio.capturedBrushTip(asset.id, mode);
+    if (!tip) return;
+    setActiveCapturedBrushId(asset.id);
+    setBrushSize(Math.min(1200, Math.max(1, Math.round(asset.sourceDiameter))));
+    setCaptureSampling(false);
+    setCaptureHover(null);
+  };
+
+  const onCaptureUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const previewUrl = URL.createObjectURL(file);
+    try {
+      const image = await loadImage(previewUrl);
+      const scale = Math.min(1, 4096 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const radius = Math.max(2, Math.min(128, Math.floor(Math.min(canvas.width, canvas.height) / 2)));
+      setCaptureSource({
+        name: file.name.replace(/\.[^.]+$/, "") || "Image capture",
+        canvas,
+        previewUrl,
+        centerX: canvas.width / 2,
+        centerY: canvas.height / 2,
+        radius,
+      });
+      setCaptureSampling(false);
+    } catch {
+      URL.revokeObjectURL(previewUrl);
+      notify("That image could not be opened");
+    }
+  };
+
+  const createUploadedCapture = () => {
+    if (!studio || !captureSource) return;
+    const asset = studio.addCapturedBrush(
+      captureSource.name,
+      captureSource.canvas,
+      captureSource.centerX,
+      captureSource.centerY,
+      captureSource.radius,
+    );
+    if (!asset) { notify("Choose a valid sample area"); return; }
+    activateCapturedBrush(asset);
+    setCaptureSource(null);
+    notify(`Created ${asset.name}`);
+  };
+
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
     // Middle mouse or space+left = pan.
@@ -1095,6 +1193,24 @@ export default function SpatialStudio() {
     }
     (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
     const p = eventToDoc(e);
+
+    if (activeTool === "capture-brush" && captureSampling) {
+      const asset = studio.captureBrushFromDocument(p.x, p.y, captureRadius, {
+        name: captureSampleMerged ? "Merged canvas capture" : `${activeLayer?.name ?? "Layer"} capture`,
+        sourceLayerId: captureSampleMerged ? undefined : activeLayer?.id,
+      });
+      if (!asset) { notify("Choose a paintable layer or sample the merged canvas"); return; }
+      activateCapturedBrush(asset);
+      notify(`Captured ${Math.round(asset.sourceDiameter)}px brush · paint to use it`);
+      return;
+    }
+
+    if (activeTool === "capture-brush" && !capturedBrushTip) {
+      setCaptureSampling(true);
+      setCaptureHover(p);
+      notify("Click the canvas again to capture a brush tip");
+      return;
+    }
 
     if (retouchTool) {
       if (!activeLayer || activeLayer.kind !== "raster" || !activeLayer.surface) {
@@ -1281,6 +1397,10 @@ export default function SpatialStudio() {
       const dx = e.clientX - panDragRef.current.startX;
       const dy = e.clientY - panDragRef.current.startY;
       setView((v) => ({ ...v, panX: panDragRef.current!.panX + dx, panY: panDragRef.current!.panY + dy }));
+      return;
+    }
+    if (activeTool === "capture-brush" && captureSampling) {
+      setCaptureHover(eventToDoc(e));
       return;
     }
     if (activeTool === "pen" && penDragging) {
@@ -1836,11 +1956,26 @@ export default function SpatialStudio() {
       if (e.key === "1" && !e.metaKey && !e.ctrlKey) { setView((v) => ({ ...v, zoom: 1 })); return; }
       if ((e.key === "+" || e.key === "=") && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return; }
       if (e.key === "-" && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return; }
+      if (e.key === "[" || e.key === "]") {
+        e.preventDefault();
+        const direction = e.key === "]" ? 1 : -1;
+        if (activeTool === "capture-brush" && captureSampling) {
+          setCaptureRadius((value) => Math.max(2, Math.min(512, Math.round(value * (direction > 0 ? 1.12 : 0.89)))));
+        } else {
+          setBrushSize((value) => Math.max(1, Math.min(activeTool === "capture-brush" ? 1200 : 400, Math.round(value * (direction > 0 ? 1.12 : 0.89)))));
+        }
+        return;
+      }
       if (e.key === "Delete" || e.key === "Backspace") {
         if (activeLayerId && studio) { studio.clearPixels(activeLayerId); return; }
       }
       const t = modeTools[workspace].find(([, , , k]) => k.toLowerCase() === e.key.toLowerCase());
-      if (t) { setPointDraft([]); directAnchorRef.current = null; setActiveTool(t[0]); }
+      if (t) {
+        setPointDraft([]);
+        directAnchorRef.current = null;
+        setActiveTool(t[0]);
+        if (t[0] === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
+      }
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") { spaceHeld.current = false; document.body.style.cursor = ""; }
@@ -1851,7 +1986,7 @@ export default function SpatialStudio() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, pointDraft, pointSelectionTool, feather, notify]);
+  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip]);
 
   const currentTools = modeTools[workspace];
   const historyState = studio?.historyState();
@@ -2188,6 +2323,7 @@ export default function SpatialStudio() {
                     setPointDraft([]);
                     directAnchorRef.current = null;
                     setActiveTool(id);
+                    if (id === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
                   }}
                   aria-label={label}
                   title={`${label} (${shortcut})`}
@@ -2285,6 +2421,23 @@ export default function SpatialStudio() {
                     {transformOverlay}
                     {penOverlay}
                     {pointOverlay}
+                    {activeTool === "capture-brush" && captureSampling && captureHover && (
+                      <i
+                        aria-hidden="true"
+                        style={{
+                          position: "absolute",
+                          left: `${((captureHover.x - captureRadius) / doc.width) * 100}%`,
+                          top: `${((captureHover.y - captureRadius) / doc.height) * 100}%`,
+                          width: `${(captureRadius * 2 / doc.width) * 100}%`,
+                          height: `${(captureRadius * 2 / doc.height) * 100}%`,
+                          border: "1.5px solid white",
+                          borderRadius: "50%",
+                          boxShadow: "0 0 0 1px rgba(0,0,0,.8), 0 0 22px rgba(54,215,255,.45)",
+                          pointerEvents: "none",
+                          zIndex: 12,
+                        }}
+                      />
+                    )}
                     {showGuides && doc.guides.map((guide) => (
                       <i
                         key={guide.id}
@@ -2852,8 +3005,127 @@ export default function SpatialStudio() {
                     {activeTool === "pattern" && <><select value={patternKind} onChange={(event) => setPatternKind(event.target.value as PatternKind)}><option value="checker">Checker</option><option value="stripes">Stripes</option><option value="dots">Dots</option></select><label style={{ display: "flex", gap: 8, fontSize: 11 }}><span>Scale</span><input type="range" min="2" max="160" value={patternScale} onChange={(event) => setPatternScale(Number(event.target.value))} /><output>{patternScale}px</output></label></>}
                   </div>
                 )}
+                {activeTool === "capture-brush" && (
+                  <div style={{ display: "grid", gap: 9, padding: "0 12px 10px" }}>
+                    <p style={{ margin: 0, fontSize: 10, lineHeight: 1.45, opacity: 0.72 }}>
+                      Turn any part of this document—or an uploaded image—into a full-color brush. Paint size uses [ and ].
+                    </p>
+                    <div className="mask-segmented" style={{ padding: 0 }}>
+                      <button
+                        className={captureSampling ? "active" : ""}
+                        onClick={() => { setCaptureSampling(true); setCaptureSource(null); }}
+                      >Sample canvas</button>
+                      <button onClick={() => captureInput.current?.click()}>Upload image</button>
+                    </div>
+                    <div className="mask-segmented" style={{ padding: 0 }}>
+                      <button className={captureSampleMerged ? "active" : ""} onClick={() => setCaptureSampleMerged(true)}>Merged</button>
+                      <button className={!captureSampleMerged ? "active" : ""} onClick={() => setCaptureSampleMerged(false)}>Active layer</button>
+                    </div>
+                    <label style={{ display: "grid", gridTemplateColumns: "72px 1fr", alignItems: "center", gap: 8, fontSize: 10 }}>
+                      <span>Color mode</span>
+                      <select value={capturedBrushMode} onChange={(event) => setCapturedBrushMode(event.target.value as ImageBrushMode)}>
+                        <option value="color">Full color</option>
+                        <option value="tint">Tint with paint color</option>
+                        <option value="stencil">Dark pixels as stencil</option>
+                      </select>
+                    </label>
+                    {captureSampling && (
+                      <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 44px", alignItems: "center", gap: 7, fontSize: 10 }}>
+                        <span>Sample radius</span>
+                        <input type="range" min="2" max="512" value={captureRadius} onChange={(event) => setCaptureRadius(Number(event.target.value))} />
+                        <output>{captureRadius}px</output>
+                      </label>
+                    )}
+                    {captureSampling && (
+                      <p style={{ margin: 0, fontSize: 10, color: "#7ee7ff" }}>
+                        Click the canvas to capture · [ ] changes the radius
+                      </p>
+                    )}
+                    {captureSource && (
+                      <div style={{ display: "grid", gap: 7, padding: 8, border: "1px solid rgba(255,255,255,.12)", borderRadius: 10, background: "rgba(255,255,255,.035)" }}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-label="Choose the center of the uploaded brush sample"
+                          onPointerDown={(event) => {
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            const centerX = Math.max(0, Math.min(captureSource.canvas.width, (event.clientX - rect.left) / rect.width * captureSource.canvas.width));
+                            const centerY = Math.max(0, Math.min(captureSource.canvas.height, (event.clientY - rect.top) / rect.height * captureSource.canvas.height));
+                            setCaptureSource({ ...captureSource, centerX, centerY });
+                          }}
+                          style={{ position: "relative", overflow: "hidden", borderRadius: 8, cursor: "crosshair", background: "#111" }}
+                        >
+                          {/* Blob URLs are local sampler inputs and cannot use the Next image optimizer. */}
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={captureSource.previewUrl} alt={`Sample source: ${captureSource.name}`} style={{ width: "100%", display: "block" }} />
+                          <i
+                            aria-hidden="true"
+                            style={{
+                              position: "absolute",
+                              left: `${((captureSource.centerX - captureSource.radius) / captureSource.canvas.width) * 100}%`,
+                              top: `${((captureSource.centerY - captureSource.radius) / captureSource.canvas.height) * 100}%`,
+                              width: `${(captureSource.radius * 2 / captureSource.canvas.width) * 100}%`,
+                              aspectRatio: "1",
+                              border: "1.5px solid white",
+                              borderRadius: "50%",
+                              boxShadow: "0 0 0 1px rgba(0,0,0,.75)",
+                            }}
+                          />
+                        </div>
+                        <label style={{ display: "grid", gridTemplateColumns: "54px 1fr 44px", alignItems: "center", gap: 7, fontSize: 10 }}>
+                          <span>Radius</span>
+                          <input
+                            type="range"
+                            min="2"
+                            max={Math.max(2, Math.floor(Math.min(captureSource.canvas.width, captureSource.canvas.height) / 2))}
+                            value={captureSource.radius}
+                            onChange={(event) => setCaptureSource({ ...captureSource, radius: Number(event.target.value) })}
+                          />
+                          <output>{captureSource.radius}px</output>
+                        </label>
+                        <button onClick={createUploadedCapture} style={{ padding: 7 }}>Create brush from selection</button>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, fontSize: 10, opacity: 0.7 }}>
+                        <span>Document brush library</span><span>{capturedBrushes.length}/32</span>
+                      </div>
+                      {capturedBrushes.length ? (
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 6 }}>
+                          {[...capturedBrushes].reverse().map((asset) => (
+                            <div key={asset.id} style={{ position: "relative", minWidth: 0 }}>
+                              <button
+                                className={activeCapturedBrushId === asset.id ? "active" : ""}
+                                onClick={() => activateCapturedBrush(asset)}
+                                title={`${asset.name} · ${Math.round(asset.sourceDiameter)}px source`}
+                                style={{ width: "100%", display: "grid", justifyItems: "center", gap: 3, padding: "5px 3px", overflow: "hidden" }}
+                              >
+                                <CapturedBrushThumbnail asset={asset} />
+                                <span style={{ width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 9 }}>{asset.name}</span>
+                              </button>
+                              <button
+                                aria-label={`Remove ${asset.name}`}
+                                title="Remove brush"
+                                onClick={() => {
+                                  studio?.removeCapturedBrush(asset.id);
+                                  if (activeCapturedBrushId === asset.id) {
+                                    setActiveCapturedBrushId(null);
+                                    setCaptureSampling(true);
+                                  }
+                                }}
+                                style={{ position: "absolute", top: 2, right: 2, width: 18, height: 18, padding: 0, borderRadius: 9, fontSize: 11 }}
+                              >×</button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p style={{ margin: 0, padding: "8px 0", fontSize: 10, opacity: 0.55 }}>No captured brushes yet.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div className="tone-controls">
-                  <label><span>Size</span><input type="range" min="1" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
+                  <label><span>Size</span><input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}px</output></label>
                   <label><span>Hardness</span><input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(e) => setHardness(Number(e.target.value) / 100)} /><output>{Math.round(hardness * 100)}%</output></label>
                   <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(e) => setBrushOpacity(Number(e.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
                   <label><span>Flow</span><input type="range" min="1" max="100" value={Math.round(brushFlow * 100)} onChange={(e) => setBrushFlow(Number(e.target.value) / 100)} /><output>{Math.round(brushFlow * 100)}%</output></label>
@@ -3235,6 +3507,7 @@ export default function SpatialStudio() {
       <input ref={fileInput} className="visually-hidden" type="file" accept={`.luma,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
       <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
+      <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
     </main>
   );

@@ -47,7 +47,7 @@ const bentoFeatures = [
     className: "bento-large bento-tools",
     kicker: "EVERY TOOL",
     title: "Power when you reach for it.",
-    copy: "Selection, masking, retouching, paint, vectors, typography, transforms and measurement—organized around how you think.",
+    copy: "Selection, masking, retouching, full-color image capture brushes, vectors, typography and transforms—organized around how you think.",
   },
   {
     className: "bento-command",
@@ -215,6 +215,7 @@ export default function MarketingHome() {
             "Live masks",
             "CMYK",
             "AI layers",
+            "Capture brushes",
             "RAW",
             "PSD",
             "Display P3",

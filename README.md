@@ -17,8 +17,10 @@ until their full user-facing paths ship.
 - Nondestructive levels, curves, HSL, tone, editable smart filters, soft proof,
   gamut warnings, 8/16/32-bit precision masters, sRGB, Display P3, and linear
   sRGB working spaces.
-- Pressure/tilt-aware brushes, symmetry, paint, erase, mixer, clone, healing,
-  removal, dodge/burn, blur/sharpen, smudge, sponge, gradients, and patterns.
+- Pressure/tilt-aware brushes, full-color captured image tips with canvas and
+  upload sampling, tint/stencil modes, symmetry, paint, erase, mixer, clone,
+  healing, removal, dodge/burn, blur/sharpen, smudge, sponge, gradients, and
+  patterns. Captured-brush libraries round-trip inside `.luma` projects.
 - Marquee, lasso, polygonal, magnetic, color, quick, text-mask, and local
   semantic selections with feather, smooth, contrast, and edge shifting.
 - Editable text, paragraph and vertical type, cubic-Bezier path type, pen/direct

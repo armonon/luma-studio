@@ -31,6 +31,9 @@ export {
 } from "./document";
 export type {
   BlendMode,
+  CapturedBrushAsset,
+  MAX_CAPTURED_BRUSHES,
+  MAX_CAPTURED_BRUSH_EDGE,
   Curves,
   Document,
   HslParams,
@@ -45,6 +48,8 @@ export type {
   ToneParams,
   Transform,
 } from "./document";
+
+export type { ImageBrushMode, ImageBrushTip } from "./brush";
 
 // ---------- controller ----------
 export { LUMA_API_VERSION, Studio, isCompatibleApiVersion } from "./studio";

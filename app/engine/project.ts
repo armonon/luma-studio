@@ -2,8 +2,10 @@ import JSZip from "jszip";
 import { Action } from "./actions";
 import {
   Document,
+  CapturedBrushAsset,
   Guide,
   Layer,
+  MAX_CAPTURED_BRUSHES,
   Selection,
   newCanvas,
   nextId,
@@ -53,8 +55,13 @@ type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "raw"> & {
   raw?: SerializedRawSource;
 };
 
-type SerializedDocument = Omit<Document, "layers" | "selection"> & {
+type SerializedCapturedBrush = Omit<CapturedBrushAsset, "bitmap"> & {
+  bitmapAsset: string;
+};
+
+type SerializedDocument = Omit<Document, "layers" | "selection" | "capturedBrushes"> & {
   layers: SerializedLayer[];
+  capturedBrushes?: SerializedCapturedBrush[];
   selection?: { asset: string; bounds: Selection["bounds"] };
   photoshopSourceAsset?: string;
 };
@@ -323,6 +330,10 @@ async function deserializeLayer(
 
 async function serializeDocument(doc: Document, context: EncodeContext): Promise<SerializedDocument> {
   const layers = await Promise.all(doc.layers.map((layer) => serializeLayer(layer, context)));
+  const capturedBrushes = await Promise.all((doc.capturedBrushes ?? []).map(async ({ bitmap, ...brush }) => ({
+    ...brush,
+    bitmapAsset: await addCanvasAsset(context, bitmap),
+  })));
   const photoshopSource = getPhotoshopDocumentMetadata(doc)?.originalSource;
   const selection = doc.selection
     ? { asset: await addCanvasAsset(context, doc.selection.mask), bounds: { ...doc.selection.bounds } }
@@ -335,6 +346,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     resolution: { ...doc.resolution },
     guides: doc.guides.map((guide) => ({ ...guide })),
     proofing: { ...doc.proofing },
+    capturedBrushes,
     layers,
     selection,
     photoshopSourceAsset: photoshopSource ? await addPhotoshopAsset(context, photoshopSource) : undefined,
@@ -369,6 +381,25 @@ async function deserializeDocument(
       bounds: { ...source.selection.bounds },
     };
   }
+  const capturedBrushSources = Array.isArray(source.capturedBrushes)
+    ? source.capturedBrushes.slice(-MAX_CAPTURED_BRUSHES)
+    : [];
+  const capturedBrushes = await Promise.all(capturedBrushSources.map(async (brush) => {
+    if (!brush || typeof brush.id !== "string" || !brush.id || typeof brush.name !== "string" ||
+        typeof brush.createdAt !== "string" || typeof brush.bitmapAsset !== "string" ||
+        !Number.isFinite(brush.sourceDiameter) || brush.sourceDiameter <= 0) {
+      throw new Error("Invalid captured brush asset");
+    }
+    const id = preserveIds ? brush.id : nextId("captured-brush");
+    if (preserveIds) reserveId(id);
+    return {
+      id,
+      name: brush.name.slice(0, 80),
+      sourceDiameter: brush.sourceDiameter,
+      createdAt: brush.createdAt,
+      bitmap: await readCanvasAsset(zip, brush.bitmapAsset),
+    };
+  }));
   const doc: Document = {
     width: source.width,
     height: source.height,
@@ -382,6 +413,7 @@ async function deserializeDocument(
       blackPointCompensation: true,
       gamutWarning: false,
     },
+    capturedBrushes,
     layers,
     selection,
   };
@@ -649,7 +681,8 @@ function assertManifest(value: unknown): asserts value is ProjectManifest {
   }
   const doc = manifest.document;
   if (!doc || !Number.isInteger(doc.width) || !Number.isInteger(doc.height) ||
-      doc.width < 1 || doc.height < 1 || !Array.isArray(doc.layers)) {
+      doc.width < 1 || doc.height < 1 || !Array.isArray(doc.layers) ||
+      (doc.capturedBrushes !== undefined && !Array.isArray(doc.capturedBrushes))) {
     throw new Error("Invalid Luma project manifest");
   }
 }

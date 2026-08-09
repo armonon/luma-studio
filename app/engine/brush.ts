@@ -26,6 +26,20 @@ export type BrushTexture = {
   seed?: number;
 };
 
+export type ImageBrushMode = "color" | "tint" | "stencil";
+
+/** Immutable sampled image used as a full-colour or colorized brush tip. */
+export type ImageBrushTip = {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  /** Optional copy converted into the current document's linear working space. */
+  workingData?: Float32Array;
+  mode: ImageBrushMode;
+};
+
 export type BrushBlendMode = "normal" | "multiply" | "screen" | "overlay";
 
 export type BrushParams = {
@@ -47,6 +61,7 @@ export type BrushParams = {
   tiltInfluence?: number;
   scatter?: number;
   texture?: BrushTexture;
+  imageTip?: ImageBrushTip;
   symmetry?: BrushSymmetry;
   blendMode?: BrushBlendMode;
   /** False makes overlapping dabs behave like an airbrush-disabled solid stroke. */
@@ -345,6 +360,114 @@ function textureAt(x: number, y: number, dab: BrushDab, texture?: BrushTexture) 
   return 1 - clamp(texture.strength) + noise * clamp(texture.strength);
 }
 
+function validImageTip(tip: ImageBrushTip | undefined): tip is ImageBrushTip {
+  return !!tip && Number.isInteger(tip.width) && Number.isInteger(tip.height) &&
+    tip.width > 0 && tip.height > 0 && tip.width <= 2048 && tip.height <= 2048 &&
+    tip.data.length === tip.width * tip.height * 4 &&
+    (!tip.workingData || tip.workingData.length === tip.data.length);
+}
+
+function bilinearTipSample(tip: ImageBrushTip, u: number, v: number, working: boolean) {
+  if (u < 0 || v < 0 || u > 1 || v > 1) return null;
+  const x = u * Math.max(0, tip.width - 1);
+  const y = v * Math.max(0, tip.height - 1);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const x1 = Math.min(tip.width - 1, x0 + 1);
+  const y1 = Math.min(tip.height - 1, y0 + 1);
+  const tx = x - x0;
+  const ty = y - y0;
+  const source = working && tip.workingData ? tip.workingData : tip.data;
+  const divisor = source === tip.data ? 255 : 1;
+  const channel = (index: number) => {
+    const a = source[(y0 * tip.width + x0) * 4 + index] / divisor;
+    const b = source[(y0 * tip.width + x1) * 4 + index] / divisor;
+    const c = source[(y1 * tip.width + x0) * 4 + index] / divisor;
+    const d = source[(y1 * tip.width + x1) * 4 + index] / divisor;
+    return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+  };
+  // Alpha always comes from the display payload, even when RGB has a working copy.
+  const alphaSource = tip.data;
+  const alphaAt = (px: number, py: number) => alphaSource[(py * tip.width + px) * 4 + 3] / 255;
+  const alpha = (alphaAt(x0, y0) + (alphaAt(x1, y0) - alphaAt(x0, y0)) * tx) * (1 - ty) +
+    (alphaAt(x0, y1) + (alphaAt(x1, y1) - alphaAt(x0, y1)) * tx) * ty;
+  const displayChannel = (index: number) => {
+    const a = tip.data[(y0 * tip.width + x0) * 4 + index] / 255;
+    const b = tip.data[(y0 * tip.width + x1) * 4 + index] / 255;
+    const c = tip.data[(y1 * tip.width + x0) * 4 + index] / 255;
+    const d = tip.data[(y1 * tip.width + x1) * 4 + index] / 255;
+    return (a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+  };
+  return {
+    color: [channel(0), channel(1), channel(2)] as [number, number, number],
+    displayLuminance: displayChannel(0) * 0.2126 + displayChannel(1) * 0.7152 + displayChannel(2) * 0.0722,
+    alpha,
+  };
+}
+
+function imageStrokeSource(
+  surface: Pick<RgbaSurface, "width" | "height" | "originX" | "originY">,
+  stroke: Stroke,
+  paintColor: readonly [number, number, number],
+  working: boolean,
+) {
+  const params = { ...stroke.params, seed: stroke.seed ?? stroke.params.seed ?? 0 };
+  const tip = params.imageTip;
+  if (!validImageTip(tip)) return null;
+  const dabs = planStroke(stroke.points, params);
+  const alpha = new Float32Array(surface.width * surface.height);
+  const premultiplied = new Float32Array(surface.width * surface.height * 3);
+  const buildUp = params.buildUp !== false;
+  const originX = finite(surface.originX ?? 0, 0);
+  const originY = finite(surface.originY ?? 0, 0);
+  for (const dab of dabs) {
+    const radius = dab.size / 2;
+    if (radius <= 0) continue;
+    const localCenterX = dab.x - originX;
+    const localCenterY = dab.y - originY;
+    const left = Math.max(0, Math.floor(localCenterX - radius - 1));
+    const top = Math.max(0, Math.floor(localCenterY - radius - 1));
+    const right = Math.min(surface.width, Math.ceil(localCenterX + radius + 1));
+    const bottom = Math.min(surface.height, Math.ceil(localCenterY + radius + 1));
+    const cosine = Math.cos(-dab.rotation);
+    const sine = Math.sin(-dab.rotation);
+    for (let y = top; y < bottom; y += 1) {
+      for (let x = left; x < right; x += 1) {
+        const dx = x + 0.5 - localCenterX;
+        const dy = y + 0.5 - localCenterY;
+        const localX = (dx * cosine - dy * sine) / Math.max(radius, 1e-9);
+        const localY = (dx * sine + dy * cosine) / Math.max(radius * dab.roundness, 1e-9);
+        const radial = Math.hypot(localX, localY);
+        if (radial >= 1) continue;
+        const sampled = bilinearTipSample(tip, localX * 0.5 + 0.5, localY * 0.5 + 0.5, working);
+        if (!sampled) continue;
+        const edge = 1 - smoothstep(dab.hardness, 1, radial);
+        const stencil = tip.mode === "stencil" ? 1 - sampled.displayLuminance : 1;
+        const deposit = clamp(dab.opacity * sampled.alpha * stencil * edge *
+          textureAt(x + originX, y + originY, dab, params.texture));
+        if (deposit <= 0) continue;
+        const source = tip.mode === "color" ? sampled.color : paintColor;
+        const pixel = y * surface.width + x;
+        const colorOffset = pixel * 3;
+        if (!buildUp && deposit <= alpha[pixel]) continue;
+        if (buildUp) {
+          const remaining = 1 - deposit;
+          premultiplied[colorOffset] = source[0] * deposit + premultiplied[colorOffset] * remaining;
+          premultiplied[colorOffset + 1] = source[1] * deposit + premultiplied[colorOffset + 1] * remaining;
+          premultiplied[colorOffset + 2] = source[2] * deposit + premultiplied[colorOffset + 2] * remaining;
+          alpha[pixel] = deposit + alpha[pixel] * remaining;
+        } else {
+          premultiplied[colorOffset] = source[0] * deposit;
+          premultiplied[colorOffset + 1] = source[1] * deposit;
+          premultiplied[colorOffset + 2] = source[2] * deposit;
+          alpha[pixel] = deposit;
+        }
+      }
+    }
+  }
+  return { params, dabs, alpha, premultiplied };
+}
+
 /** Analytic dab coverage shared by the paint and retouch engines. */
 export function brushDabOpacityAt(
   dab: BrushDab,
@@ -418,6 +541,38 @@ export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
   if (surface.data.length !== surface.width * surface.height * 4) {
     throw new Error("RGBA surface payload does not match its dimensions");
   }
+  const imageSource = validImageTip(stroke.params.imageTip)
+    ? imageStrokeSource(surface, stroke, parseBrushColor(stroke.params.color).map((value) => value / 255) as [number, number, number], false)
+    : null;
+  if (imageSource) {
+    const { params, dabs, alpha, premultiplied } = imageSource;
+    const strokeOpacity = params.flow === undefined ? 1 : clamp(params.opacity);
+    const blendMode = params.blendMode ?? "normal";
+    let affectedPixels = 0;
+    for (let pixel = 0; pixel < alpha.length; pixel += 1) {
+      const sourceAlpha = clamp(alpha[pixel] * strokeOpacity);
+      if (sourceAlpha <= 0) continue;
+      affectedPixels++;
+      const offset = pixel * 4;
+      const destinationAlpha = surface.data[offset + 3] / 255;
+      if (params.mode === "erase" || params.mode === "mask-remove") {
+        surface.data[offset + 3] = Math.round(destinationAlpha * (1 - sourceAlpha) * 255);
+        continue;
+      }
+      const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+      const colorOffset = pixel * 3;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const destination = surface.data[offset + channel] / 255;
+        const source = premultiplied[colorOffset + channel] / Math.max(alpha[pixel], 1e-9);
+        const blended = blendChannel(blendMode, destination, source);
+        const output = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
+        surface.data[offset + channel] = Math.round(clamp(output / Math.max(outputAlpha, 1e-9)) * 255);
+      }
+      surface.data[offset + 3] = Math.round(outputAlpha * 255);
+    }
+    return { dabs, affectedPixels };
+  }
+
   const { params, dabs, coverage } = strokeCoverage(surface, stroke);
 
   const legacyFlow = params.flow === undefined;
@@ -460,6 +615,38 @@ export function replayStrokeFloat(
   if (surface.data.length !== surface.width * surface.height * 4) {
     throw new Error("Float RGBA surface payload does not match its dimensions");
   }
+  const imageSource = validImageTip(stroke.params.imageTip)
+    ? imageStrokeSource(surface, stroke, workingColor, true)
+    : null;
+  if (imageSource) {
+    const { params, dabs, alpha, premultiplied } = imageSource;
+    const strokeOpacity = params.flow === undefined ? 1 : clamp(params.opacity);
+    const blendMode = params.blendMode ?? "normal";
+    let affectedPixels = 0;
+    for (let pixel = 0; pixel < alpha.length; pixel += 1) {
+      const sourceAlpha = clamp(alpha[pixel] * strokeOpacity);
+      if (sourceAlpha <= 0) continue;
+      affectedPixels++;
+      const offset = pixel * 4;
+      const destinationAlpha = clamp(surface.data[offset + 3]);
+      if (params.mode === "erase" || params.mode === "mask-remove") {
+        surface.data[offset + 3] = destinationAlpha * (1 - sourceAlpha);
+        continue;
+      }
+      const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+      const colorOffset = pixel * 3;
+      for (let channel = 0; channel < 3; channel += 1) {
+        const destination = surface.data[offset + channel];
+        const source = premultiplied[colorOffset + channel] / Math.max(alpha[pixel], 1e-9);
+        const blended = blendChannel(blendMode, destination, source);
+        const output = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
+        surface.data[offset + channel] = output / Math.max(outputAlpha, 1e-9);
+      }
+      surface.data[offset + 3] = outputAlpha;
+    }
+    return { dabs, affectedPixels };
+  }
+
   const { params, dabs, coverage } = strokeCoverage(surface, stroke);
   const strokeOpacity = params.flow === undefined ? 1 : clamp(params.opacity);
   const color = params.mode === "mask-add" ? [1, 1, 1] as const : workingColor;
@@ -517,6 +704,56 @@ function stampCanvas(ctx: CanvasRenderingContext2D, dab: BrushDab, params: Brush
   ctx.restore();
 }
 
+const imageTipCanvasCache = new WeakMap<ImageBrushTip, Map<string, HTMLCanvasElement>>();
+
+function canvasForImageTip(tip: ImageBrushTip, color: string) {
+  const colorKey = tip.mode === "color" ? "color" : color.toLowerCase();
+  const cached = imageTipCanvasCache.get(tip);
+  const existing = cached?.get(colorKey);
+  if (existing) return existing;
+  const canvas = document.createElement("canvas");
+  canvas.width = tip.width;
+  canvas.height = tip.height;
+  const context = canvas.getContext("2d")!;
+  const image = context.createImageData(tip.width, tip.height);
+  const tint = parseBrushColor(color);
+  for (let offset = 0; offset < tip.data.length; offset += 4) {
+    const red = tip.data[offset];
+    const green = tip.data[offset + 1];
+    const blue = tip.data[offset + 2];
+    const alpha = tip.data[offset + 3];
+    if (tip.mode === "color") {
+      image.data.set([red, green, blue, alpha], offset);
+    } else {
+      const luminance = (red * 0.2126 + green * 0.7152 + blue * 0.0722) / 255;
+      image.data.set([
+        tint[0],
+        tint[1],
+        tint[2],
+        Math.round(alpha * (tip.mode === "stencil" ? 1 - luminance : 1)),
+      ], offset);
+    }
+  }
+  context.putImageData(image, 0, 0);
+  const variants = cached ?? new Map<string, HTMLCanvasElement>();
+  variants.set(colorKey, canvas);
+  imageTipCanvasCache.set(tip, variants);
+  return canvas;
+}
+
+function stampImageTipCanvas(ctx: CanvasRenderingContext2D, dab: BrushDab, params: BrushParams) {
+  const tip = params.imageTip;
+  if (!validImageTip(tip) || dab.size <= 0) return;
+  const canvas = canvasForImageTip(tip, params.color);
+  ctx.save();
+  ctx.translate(dab.x, dab.y);
+  ctx.rotate(dab.rotation);
+  ctx.scale(dab.size / tip.width, dab.size * dab.roundness / tip.height);
+  ctx.globalAlpha = dab.opacity;
+  ctx.drawImage(canvas, -tip.width / 2, -tip.height / 2);
+  ctx.restore();
+}
+
 export type PaintSegmentState = { planner: BrushStrokePlanner; started: boolean };
 
 export function createPaintSegmentState(params: BrushParams): PaintSegmentState {
@@ -547,7 +784,10 @@ export function paintSegment(
     params.blendMode === "overlay" ? "overlay" : "source-over";
   ctx.save();
   ctx.globalCompositeOperation = composite;
-  for (const dab of dabs) stampCanvas(ctx, dab, params);
+  for (const dab of dabs) {
+    if (validImageTip(params.imageTip)) stampImageTipCanvas(ctx, dab, params);
+    else stampCanvas(ctx, dab, params);
+  }
   ctx.restore();
   return dabs.length;
 }
