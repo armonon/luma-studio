@@ -12,7 +12,6 @@ import {
   AiProvenance,
   BlendIf,
   BlendPass,
-  Curves,
   Document,
   Layer,
   LayerEffect,

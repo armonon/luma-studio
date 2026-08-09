@@ -1987,8 +1987,8 @@ export default function SpatialStudio() {
             <span className="dot-green" />
             <button onClick={() => history.back()} aria-label="Back">‹</button>
             <button onClick={() => fileInput.current?.click()} aria-label="Import image">↗</button>
-            <button onClick={() => psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB">PSD/B</button>
-            <button onClick={() => projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project">LUMA</button>
+            <button onClick={() => psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB" className="control-label">PSD/B</button>
+            <button onClick={() => projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project" className="control-label">LUMA</button>
           </div>
 
           <nav className="workspace-switcher" aria-label="Studio workspace">

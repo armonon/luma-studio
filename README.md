@@ -150,3 +150,50 @@ skipped, and cannot abort Studio teardown or strand other plugins.
   be re-registered after reload.
 - There is no lifecycle hook for document switching. `switchDocument` swaps the
   active document underneath a plugin; hold ids, not layer references.
+
+## Editions
+
+One engine, two products. Everything ships from `app/engine`, which is
+DOM-optional — document, history, selection, blend and plugin work run
+headlessly, and only rendering/export need a canvas.
+
+| | **web** | **pro** |
+|---|---|---|
+| Runs | Browser tab | Packaged desktop build |
+| Files | Picker only | Native filesystem *(planned)* |
+| Document size | Browser canvas ceiling (~64MP) | Larger *(planned)* |
+| RAW | DNG sensor decode; other RAW → embedded JPEG | Native RAW library *(planned)* |
+| GPU export | RGBA16F | RGBA16F |
+| On-device models | Yes | Yes |
+| Plugins | Scripting console | Install from disk *(planned)* |
+
+Select the edition at build time:
+
+```bash
+NEXT_PUBLIC_LUMA_EDITION=pro npm run build
+```
+
+### Gating features honestly
+
+`app/engine/edition.ts` separates two different questions, because conflating
+them is how products end up advertising things they cannot do:
+
+- `hasCapability(edition, cap)` — is this edition *permitted* to do it?
+- `isAvailable(edition, cap)` — is it permitted **and actually built**?
+
+UI must gate on `isAvailable`. Capabilities marked `planned` in
+`CAPABILITY_STATUS` return `false` from `isAvailable` in every edition, and a
+test enforces it. Promote a capability to `shipped` only when a user can
+really use it.
+
+### Public API
+
+Import from `@/app/engine`, never from individual modules — internals are free
+to move, the entry point is the contract:
+
+```ts
+import { Studio, currentEdition, isAvailable } from "@/app/engine";
+```
+
+`tests/engine-api.test.ts` pins that surface, including a headless undo/redo
+round-trip, so breaking the desktop edition fails CI.

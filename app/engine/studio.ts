@@ -3,7 +3,6 @@ import {
   BlendPass,
   BlendIf,
   AiProvenance,
-  Curves,
   Document,
   HslParams,
   Guide,
@@ -79,6 +78,7 @@ import {
   invertColors,
   unsharpMask,
 } from "./filters";
+import type { Curves } from "./document";
 import { Action, ActionRecorder, ActionStep } from "./actions";
 import {
   cloneBlendIf,
