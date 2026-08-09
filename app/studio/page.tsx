@@ -3,6 +3,8 @@
 import {
   ChangeEvent,
   PointerEvent as ReactPointerEvent,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useMemo,
@@ -76,6 +78,8 @@ import {
   shortcutConflict,
   type WorkflowPreferences,
 } from "@/app/engine/workflow-preferences";
+
+const ExportPopover = lazy(() => import("./export-popover"));
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -790,6 +794,9 @@ export default function SpatialStudio() {
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>("edit");
   const [activeTool, setActiveTool] = useState<Tool>("brush");
+  const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
+  const [assetsOpen, setAssetsOpen] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
   const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
@@ -1606,6 +1613,7 @@ export default function SpatialStudio() {
     setPointDraft([]);
     directAnchorRef.current = null;
     setWorkspace(next);
+    setInspectorTab("properties");
     const firstVisible = modeTools[next].find(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
     setActiveTool(firstVisible?.[0] ?? modeTools[next][0][0]);
   };
@@ -1987,6 +1995,7 @@ export default function SpatialStudio() {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); studio?.invertSelectionArea(); return; }
       if (e.key === "Escape" && showWorkspaceSettings) { setShowWorkspaceSettings(false); return; }
       if (e.key === "Escape" && showHistory) { setShowHistory(false); return; }
+      if (e.key === "Escape" && showExportMenu) { setShowExportMenu(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
       if (e.key === "Enter" && pointSelectionTool && pointDraft.length >= 3) {
@@ -2035,9 +2044,11 @@ export default function SpatialStudio() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences]);
+  }, [workspace, studio, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
+  const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
+  const activeWorkspaceMeta = workspaces.find(([id]) => id === workspace) ?? workspaces[0];
   const orderedWorkspaces = workflowPreferences.workspaceOrder
     .map((id) => workspaces.find(([workspaceId]) => workspaceId === id))
     .filter((entry): entry is (typeof workspaces)[number] => Boolean(entry));
@@ -2301,14 +2312,15 @@ export default function SpatialStudio() {
 
       <section className="spatial-window">
         <header className="spatial-topbar">
-          <div className="spatial-window-controls">
-            <span className="dot-red" />
-            <span className="dot-yellow" />
-            <span className="dot-green" />
-            <button onClick={() => history.back()} aria-label="Back">‹</button>
-            <button onClick={requestDocumentOpen} aria-label="Open document">↗</button>
-            <button onClick={() => isNativeFilesystemAvailable() ? void openNativeDocument() : psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB" className="control-label">PSD/B</button>
-            <button onClick={() => isNativeFilesystemAvailable() ? void openNativeDocument() : projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project" className="control-label">LUMA</button>
+          <div className="studio-brand-area">
+            <button className="studio-app-mark" onClick={() => history.back()} aria-label="Back to Luma home">L</button>
+            <div className="studio-project-title">
+              <strong>{projectName}</strong>
+              <span aria-live="polite">{saveState === "saving" ? "Saving changes…" : saveState === "error" ? "Save needs attention" : "All changes saved locally"}</span>
+            </div>
+            <button className="studio-header-button" onClick={requestDocumentOpen} aria-label="Open image, PSD, RAW, or Luma project">
+              <span>＋</span> Open
+            </button>
           </div>
 
           <nav className="workspace-switcher" aria-label="Studio workspace">
@@ -2318,6 +2330,7 @@ export default function SpatialStudio() {
                 className={workspace === id ? "active" : ""}
                 onClick={() => switchWorkspace(id)}
                 title={description}
+                aria-current={workspace === id ? "page" : undefined}
               >
                 {label}
               </button>
@@ -2325,49 +2338,29 @@ export default function SpatialStudio() {
           </nav>
 
           <div className="spatial-share-actions">
-            <button className="spatial-search" onClick={() => setShowWorkspaceSettings(true)} title="Customize workspaces and shortcuts" aria-label="Customize workspaces and shortcuts">⚙</button>
-            <button className="spatial-search" onClick={saveProject} title="Save Luma project" aria-label="Save Luma project">
-              {saveState === "saving" ? "•••" : saveState === "error" ? "!" : "✓"}
-            </button>
-            <button className="spatial-search" onClick={() => studio?.undo()} title="Undo (⌘Z)" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
-            <button className="spatial-search" onClick={() => studio?.redo()} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
-            <button className="batch-top-button" onClick={() => setShowFilters((v) => !v)}>
+            <button className="studio-icon-button" onClick={() => studio?.undo()} title="Undo (⌘Z)" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
+            <button className="studio-icon-button" onClick={() => studio?.redo()} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
+            <span className="studio-action-divider" />
+            <button className={`studio-header-button ${showFilters ? "active" : ""}`} onClick={() => setShowFilters((value) => !value)} aria-pressed={showFilters}>
               <span>◐</span> Filters
             </button>
-            <button className="batch-top-button" onClick={() => setShowBatch(true)}>
+            <button className="studio-header-button" onClick={() => setShowBatch(true)}>
               <span>▦</span> Batch
             </button>
-            <button
-              className="batch-top-button"
-              onClick={() => {
-                if (!glSupported) return;
-                const next = !useGL;
-                setUseGL(next);
-                studio?.setUseGL(next);
-                notify(next ? "RGBA16F GPU export enabled" : "CPU export enabled");
-              }}
-              title={glSupported ? "Toggle RGBA16F GPU compositing for flattened exports" : "WebGL2 float not supported"}
-              disabled={!glSupported}
-              style={{ opacity: glSupported ? 1 : 0.4, background: useGL ? "linear-gradient(135deg,#2385f4,#7c5ce7)" : undefined, color: useGL ? "#fff" : undefined }}
-            >
-              <span>◈</span> {useGL ? "Export · 16F" : "Export · CPU"}
+            <button className="studio-icon-button" onClick={saveProject} title="Save Luma project" aria-label="Save Luma project">
+              {saveState === "saving" ? "•••" : saveState === "error" ? "!" : "⌘"}
             </button>
-            <select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as "png" | "jpeg" | "webp")} aria-label="Raster export format" style={{ width: 72 }}>
-              <option value="png">PNG</option>
-              <option value="jpeg">JPEG</option>
-              <option value="webp">WebP</option>
-            </select>
-            <button className="spatial-export" onClick={exportPNG}>Export {exportFormat.toUpperCase()} ↗</button>
-            <select value={photoshopFormat} onChange={(event) => setPhotoshopFormat(event.target.value as typeof photoshopFormat)} aria-label="Photoshop export container" style={{ width: 76 }}>
-              <option value="auto">PS auto</option><option value="source">PS source</option><option value="psd">PSD</option><option value="psb">PSB</option>
-            </select>
-            <button className="spatial-export" onClick={exportPsd}>Export {photoshopFormat === "psb" ? "PSB" : "PSD"} ↗</button>
+            <button className="studio-icon-button" onClick={() => setShowWorkspaceSettings(true)} title="Customize workspaces and shortcuts" aria-label="Customize workspaces and shortcuts">⚙</button>
+            <button className="spatial-export" onClick={() => setShowExportMenu((value) => !value)} aria-haspopup="dialog" aria-expanded={showExportMenu}>
+              Export <span>⌄</span>
+            </button>
           </div>
         </header>
 
         <div className="spatial-workspace">
           <aside className="spatial-toolbar" aria-label={`${workspace} tools`}>
             <div>
+              <span className="tool-rail-heading">{activeWorkspaceMeta[1]}</span>
               {currentTools.map(([id, icon, label, shortcut]) => {
                 const resolvedShortcut = resolveShortcut(id, shortcut, workflowPreferences);
                 return (
@@ -2378,9 +2371,11 @@ export default function SpatialStudio() {
                     setPointDraft([]);
                     directAnchorRef.current = null;
                     setActiveTool(id);
+                    setInspectorTab("properties");
                     if (id === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
                   }}
                   aria-label={label}
+                  aria-pressed={activeTool === id}
                   title={`${label} (${resolvedShortcut})`}
                 >
                   <span>{icon}</span>
@@ -2389,15 +2384,55 @@ export default function SpatialStudio() {
                 );
               })}
             </div>
-            <button className="layers-orb" onClick={runSubject} aria-label="Auto subject">✦</button>
+            <button className="layers-orb" onClick={() => { setInspectorTab("ai"); void runSubject(); }} aria-label="AI subject selection" title="AI subject selection">✦</button>
           </aside>
 
-          <section className="spatial-canvas-column">
-            <div className="spatial-document-tabs" style={{ display: "flex", gap: 4, padding: "5px 8px", overflowX: "auto", background: "rgba(12,12,16,.76)", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
+          <section className="spatial-canvas-column" data-assets-open={assetsOpen}>
+            <div className="studio-contextbar" aria-label={`${activeToolMeta?.[2] ?? "Tool"} options`}>
+              <div className="studio-context-identity">
+                <span>{activeToolMeta?.[1] ?? "•"}</span>
+                <div>
+                  <strong>{activeToolMeta?.[2] ?? "Tool"}</strong>
+                  <small>{activeWorkspaceMeta[2]}</small>
+                </div>
+              </div>
+
+              {(paintingTool || retouchTool) && (
+                <div className="studio-context-controls">
+                  <label className="context-color" title="Brush color">
+                    <input type="color" value={brushColor} onChange={(event) => setBrushColor(event.target.value)} aria-label="Brush color" />
+                  </label>
+                  <label><span>Size</span><input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} /><output>{brushSize}px</output></label>
+                  <label><span>Opacity</span><input type="range" min="0" max="100" value={Math.round(brushOpacity * 100)} onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)} /><output>{Math.round(brushOpacity * 100)}%</output></label>
+                </div>
+              )}
+
+              {(marqueeTool || lassoTool || wandTool || pointSelectionTool) && (
+                <div className="studio-context-controls">
+                  <label><span>Feather</span><input type="range" min="0" max="128" value={feather} onChange={(event) => setFeather(Number(event.target.value))} /><output>{feather}px</output></label>
+                  {wandTool && <label><span>Tolerance</span><input type="range" min="0" max="255" value={wandTolerance} onChange={(event) => setWandTolerance(Number(event.target.value))} /><output>{wandTolerance}</output></label>}
+                </div>
+              )}
+
+              {!paintingTool && !retouchTool && !marqueeTool && !lassoTool && !wandTool && !pointSelectionTool && (
+                <div className="studio-context-summary">
+                  <span>{activeLayer?.name ?? "No active layer"}</span>
+                  <small>{activeLayer?.kind.replaceAll("-", " ") ?? "Open an image to begin"}</small>
+                </div>
+              )}
+
+              <div className="studio-context-actions">
+                <button onClick={() => setView({ zoom: 1, panX: 0, panY: 0 })} title="Fit document to view">Fit</button>
+                <button className={showGuides ? "active" : ""} onClick={() => setShowGuides((value) => !value)} aria-pressed={showGuides}>Guides</button>
+                <button className={assetsOpen ? "active" : ""} onClick={() => setAssetsOpen((value) => !value)} aria-pressed={assetsOpen}>Assets</button>
+              </div>
+            </div>
+
+            <div className="spatial-document-tabs">
               {openDocuments.map((documentTab) => (
                 <div
                   key={documentTab.id}
-                  style={{ display: "flex", alignItems: "center", minWidth: 112, borderRadius: 7, border: "1px solid rgba(255,255,255,.1)", background: documentTab.active ? "rgba(124,92,231,.24)" : "rgba(255,255,255,.04)" }}
+                  className={documentTab.active ? "active" : ""}
                 >
                   <button
                     onClick={() => {
@@ -2406,15 +2441,13 @@ export default function SpatialStudio() {
                       setCustomName(documentTab.name);
                     }}
                     aria-current={documentTab.active ? "page" : undefined}
-                    style={{ flex: 1, minWidth: 0, padding: "5px 8px", border: 0, background: "transparent", color: "inherit", textAlign: "left" }}
                   >
-                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{documentTab.name}</span>
+                    <span>{documentTab.name}</span>
                   </button>
                   {openDocuments.length > 1 && (
                     <button
                       onClick={() => { studio?.closeDocument(documentTab.id); setActiveLayerId(studio?.doc.layers[0]?.id ?? null); }}
                       aria-label={`Close ${documentTab.name}`}
-                      style={{ padding: "5px 8px", border: 0, background: "transparent", color: "inherit" }}
                     >×</button>
                   )}
                 </div>
@@ -2565,7 +2598,12 @@ export default function SpatialStudio() {
             </div>
           </section>
 
-          <aside className="spatial-inspector">
+          <aside className="spatial-inspector" data-tab={inspectorTab}>
+            <nav className="inspector-tabs" aria-label="Inspector panels">
+              <button className={inspectorTab === "layers" ? "active" : ""} onClick={() => setInspectorTab("layers")} aria-pressed={inspectorTab === "layers"}>Layers</button>
+              <button className={inspectorTab === "properties" ? "active" : ""} onClick={() => setInspectorTab("properties")} aria-pressed={inspectorTab === "properties"}>Properties</button>
+              <button className={inspectorTab === "ai" ? "active" : ""} onClick={() => setInspectorTab("ai")} aria-pressed={inspectorTab === "ai"}><span>✦</span> AI</button>
+            </nav>
             <section className="glass-card layers-card">
               <header>
                 <strong>Layers</strong>
@@ -2599,6 +2637,7 @@ export default function SpatialStudio() {
                       : undefined}
                     onClick={() => {
                       setActiveLayerId(layer.id);
+                      setInspectorTab("layers");
                       if (layer.kind === "adjustment-tone") {
                         setActiveAdjustmentId(layer.id);
                         if (layer.tone) setTone({ ...layer.tone });
@@ -3468,6 +3507,29 @@ export default function SpatialStudio() {
           </aside>
         </div>
       </section>
+
+      {showExportMenu && (
+        <Suspense fallback={null}>
+          <ExportPopover
+            rasterFormat={exportFormat}
+            photoshopFormat={photoshopFormat}
+            compatibilityWarnings={photoshopReport?.issues.filter((issue) => issue.severity === "warning").length ?? 0}
+            glSupported={glSupported}
+            useGL={useGL}
+            onRasterFormatChange={setExportFormat}
+            onPhotoshopFormatChange={setPhotoshopFormat}
+            onClose={() => setShowExportMenu(false)}
+            onExportRaster={() => { setShowExportMenu(false); void exportPNG(); }}
+            onExportPhotoshop={() => { setShowExportMenu(false); void exportPsd(); }}
+            onToggleGL={() => {
+              if (!glSupported) return;
+              const next = !useGL;
+              setUseGL(next);
+              studio?.setUseGL(next);
+            }}
+          />
+        </Suspense>
+      )}
 
       {showWorkspaceSettings && (
         <div className="spatial-modal" onMouseDown={() => setShowWorkspaceSettings(false)}>

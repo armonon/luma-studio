@@ -49,6 +49,10 @@ test("renders the unified interactive studio route", async () => {
   assert.match(html, /Batch/);
   assert.match(html, /Neural Lab/);
   assert.match(html, /Layers/);
+  assert.match(html, /All changes saved locally/);
+  assert.match(html, /Inspector panels/);
+  assert.match(html, />Properties</);
+  assert.match(html, />Assets</);
 });
 
 test("protects the generative image endpoint", async () => {
