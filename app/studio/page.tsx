@@ -80,6 +80,8 @@ import {
 } from "@/app/engine/workflow-preferences";
 
 const ExportPopover = lazy(() => import("./export-popover"));
+const ToolDock = lazy(() => import("./tool-dock"));
+const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -157,7 +159,7 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["move", "↖", "Move", "V"],
     ["brush", "╱", "Brush", "B"],
     ["capture-brush", "◉", "Capture Brush", "C"],
-    ["pencil", "⌁", "Pencil", "N"],
+    ["pencil", "✎", "Pencil", "N"],
     ["mixer", "≈", "Mixer brush", "X"],
     ["erase", "⌫", "Erase", "E"],
     ["gradient", "◩", "Gradient", "G"],
@@ -165,7 +167,7 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["fill", "▣", "Fill", "F"],
   ],
   retouch: [
-    ["clone", "⌘", "Clone stamp", "S"],
+    ["clone", "◎", "Clone stamp", "S"],
     ["heal", "✚", "Healing brush", "J"],
     ["spot-heal", "✣", "Spot healing", "Q"],
     ["patch", "⬡", "Patch", "A"],
@@ -181,9 +183,9 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
   select: [
     ["sel-rect", "▭", "Rect marquee", "M"],
     ["sel-ellipse", "◯", "Ellipse marquee", "N"],
-    ["sel-lasso", "⌁", "Lasso", "L"],
+    ["sel-lasso", "◜", "Lasso", "L"],
     ["sel-polygon", "⬠", "Polygonal lasso", "P"],
-    ["sel-magnetic", "⌁", "Magnetic lasso", "G"],
+    ["sel-magnetic", "↯", "Magnetic lasso", "G"],
     ["sel-quick", "◒", "Quick selection", "Q"],
     ["sel-wand", "✣", "Magic wand", "W"],
     ["sel-sam", "✦", "SAM click-select", "K"],
@@ -781,7 +783,7 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-export default function SpatialStudio() {
+export default function SpatialStudio({ desktop = false }: { desktop?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -1618,6 +1620,15 @@ export default function SpatialStudio() {
     setActiveTool(firstVisible?.[0] ?? modeTools[next][0][0]);
   };
 
+  const activateTool = (tool: Tool, nextWorkspace: WorkspaceMode = workspace) => {
+    setPointDraft([]);
+    directAnchorRef.current = null;
+    if (nextWorkspace !== workspace) setWorkspace(nextWorkspace);
+    setActiveTool(tool);
+    setInspectorTab("properties");
+    if (tool === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
+  };
+
   const openPreset = async (index: number) => {
     if (!studio) return;
     setActivePreset(index);
@@ -2052,6 +2063,19 @@ export default function SpatialStudio() {
   const orderedWorkspaces = workflowPreferences.workspaceOrder
     .map((id) => workspaces.find(([workspaceId]) => workspaceId === id))
     .filter((entry): entry is (typeof workspaces)[number] => Boolean(entry));
+  const toolPaletteGroups = orderedWorkspaces.map(([id, label, description]) => ({
+    id,
+    label,
+    description,
+    tools: modeTools[id]
+      .filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool))
+      .map(([tool, icon, toolLabel, shortcut]) => ({
+        id: tool,
+        icon,
+        label: toolLabel,
+        shortcut: resolveShortcut(tool, shortcut, workflowPreferences),
+      })),
+  }));
   const historyState = studio?.historyState();
   const engineState = studio?.engineState();
   const photoshopReport = studio?.photoshopCompatibility({ format: photoshopFormat });
@@ -2312,6 +2336,7 @@ export default function SpatialStudio() {
 
       <section className="spatial-window">
         <header className="spatial-topbar">
+          {desktop && <div className="desktop-titlebar-drag" data-tauri-drag-region="true" aria-hidden="true" />}
           <div className="studio-brand-area">
             <button className="studio-app-mark" onClick={() => history.back()} aria-label="Back to Luma home">L</button>
             <div className="studio-project-title">
@@ -2358,34 +2383,15 @@ export default function SpatialStudio() {
         </header>
 
         <div className="spatial-workspace">
-          <aside className="spatial-toolbar" aria-label={`${workspace} tools`}>
-            <div>
-              <span className="tool-rail-heading">{activeWorkspaceMeta[1]}</span>
-              {currentTools.map(([id, icon, label, shortcut]) => {
-                const resolvedShortcut = resolveShortcut(id, shortcut, workflowPreferences);
-                return (
-                <button
-                  key={id}
-                  className={activeTool === id ? "active" : ""}
-                  onClick={() => {
-                    setPointDraft([]);
-                    directAnchorRef.current = null;
-                    setActiveTool(id);
-                    setInspectorTab("properties");
-                    if (id === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
-                  }}
-                  aria-label={label}
-                  aria-pressed={activeTool === id}
-                  title={`${label} (${resolvedShortcut})`}
-                >
-                  <span>{icon}</span>
-                  <i>{label}<kbd>{resolvedShortcut}</kbd></i>
-                </button>
-                );
-              })}
-            </div>
-            <button className="layers-orb" onClick={() => { setInspectorTab("ai"); void runSubject(); }} aria-label="AI subject selection" title="AI subject selection">✦</button>
-          </aside>
+          <Suspense fallback={<aside className="spatial-toolbar" aria-label="Loading tools" />}>
+            <ToolDock
+              groups={toolPaletteGroups}
+              activeWorkspace={workspace}
+              activeTool={activeTool}
+              onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
+              onAiSelect={() => { setInspectorTab("ai"); void runSubject(); }}
+            />
+          </Suspense>
 
           <section className="spatial-canvas-column" data-assets-open={assetsOpen}>
             <div className="studio-contextbar" aria-label={`${activeToolMeta?.[2] ?? "Tool"} options`}>
@@ -3506,6 +3512,19 @@ export default function SpatialStudio() {
             </div>
           </aside>
         </div>
+        {desktop && (
+          <Suspense fallback={null}>
+            <DesktopStatusbar
+              dimensions={doc ? `${doc.width.toLocaleString()} × ${doc.height.toLocaleString()} px` : "No document open"}
+              bitDepth={engineState?.bitDepth ?? 8}
+              colorSpace={engineState?.colorSpace ?? "sRGB"}
+              accelerated={useGL}
+              tool={activeToolMeta?.[2] ?? "Tool"}
+              shortcut={activeToolMeta ? resolveShortcut(activeToolMeta[0], activeToolMeta[3], workflowPreferences) : ""}
+              zoom={Math.round(view.zoom * 100)}
+            />
+          </Suspense>
+        )}
       </section>
 
       {showExportMenu && (
@@ -3530,7 +3549,6 @@ export default function SpatialStudio() {
           />
         </Suspense>
       )}
-
       {showWorkspaceSettings && (
         <div className="spatial-modal" onMouseDown={() => setShowWorkspaceSettings(false)}>
           <section

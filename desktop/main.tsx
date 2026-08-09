@@ -6,8 +6,10 @@ import "../app/globals.css";
 const root = document.getElementById("root");
 if (!root) throw new Error("Luma Studio desktop root is missing");
 
+document.documentElement.dataset.lumaPlatform = "desktop";
+
 createRoot(root).render(
   <React.StrictMode>
-    <StudioPage />
+    <StudioPage desktop />
   </React.StrictMode>,
 );
