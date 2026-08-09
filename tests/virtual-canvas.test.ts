@@ -24,6 +24,8 @@ test("virtual pyramid describes terapixel canvases without allocating tile state
   const edge = pyramid.address(0, pyramid.level(0).columns - 1, pyramid.level(0).rows - 1);
   assert.equal(edge.documentRect.x + edge.documentRect.width, 1_000_000);
   assert.equal(edge.documentRect.y + edge.documentRect.height, 750_000);
+  assert.equal(pyramid.level(0), pyramid.level(0), "immutable level geometry is cached");
+  assert.equal(Object.isFrozen(pyramid.level(0)), true);
 });
 
 test("viewport planner selects mip levels and creates deterministic bounded priorities", () => {
@@ -145,6 +147,16 @@ test("residency budgets reserve headroom and obey configured bounds", () => {
     fraction: 0.25,
   }), 64 * 1024 ** 2);
   assert.throws(() => computeResidencyBudget({ availableMemoryBytes: gib, fraction: 2 }), /fraction/);
+});
+
+test("residency admissions that fit do not evict the working set", () => {
+  const cache = new TileResidencyCache<number>(10_000);
+  for (let index = 0; index < 100; index += 1) {
+    assert.equal(cache.admit(`tile-${index}`, index, 100).accepted, true);
+  }
+  assert.equal(cache.stats().residentTiles, 100);
+  assert.equal(cache.stats().residentBytes, 10_000);
+  assert.equal(cache.stats().evictions, 0);
 });
 
 test("scheduler enforces concurrency, priority order, and request deduplication", async () => {

@@ -7,13 +7,24 @@ import {
 } from "../app/engine/color-management.ts";
 import {
   IccProfileParseError,
+  evaluateIccLut,
   evaluateToneCurve,
   inferNativeWhitePoint,
   invertToneCurve,
   parseIccProfile,
 } from "../app/engine/icc-profile.ts";
 import { D65_WHITE } from "../app/engine/color-math.ts";
-import { buildIcc, linearSrgbA2B1LutTag, matrixTrcIcc, setSignature, setU32 } from "./icc-fixture.ts";
+import {
+  buildIcc,
+  identityClutMabTag,
+  linearSrgbA2B1LutTag,
+  linearSrgbMultiFunctionTag,
+  matrixTrcIcc,
+  orderedClassicB2ALutTag,
+  setS15Fixed16,
+  setSignature,
+  setU32,
+} from "./icc-fixture.ts";
 
 test("parses ICC v4 RGB matrix/TRC tags and capability metadata", () => {
   const parsed = parseIccProfile(matrixTrcIcc());
@@ -50,7 +61,7 @@ test("recognizes LUT profiles but exposes an honest external-CMM fallback", () =
   assert.equal(profile.capabilities.canTransform, false);
   assert.equal(profile.capabilities.fallback?.suggestedEngine, "LittleCMS/WASM");
   assert.match(profile.capabilities.fallback!.reason, /LUT or multi-process/);
-  assert.throws(() => createColorTransform(profile, SRGB_PROFILE), /requires ICC LUT/);
+  assert.throws(() => createColorTransform(profile, SRGB_PROFILE), /requires an ICC LUT/);
 });
 
 test("decodes classic mft2 LUT profiles and uses their native intent table", () => {
@@ -72,6 +83,118 @@ test("decodes classic mft2 LUT profiles and uses their native intent table", () 
   });
   assert.equal(transform.metadata.effectiveIntent, "relative-colorimetric");
   assert.equal(transform.metadata.extendedRange, "clamped");
+});
+
+test("decodes ICC v4 mAB and mBA matrix-equivalent transforms", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: linearSrgbMultiFunctionTag("mAB") },
+    { signature: "B2A1", bytes: linearSrgbMultiFunctionTag("mBA") },
+  ]));
+  assert.equal(profile.capabilities.model, "lut");
+  assert.equal(profile.capabilities.canUseAsSource, true);
+  assert.equal(profile.capabilities.canUseAsDestination, true);
+  assert.equal(profile.lutToPcs["relative-colorimetric"]?.type, "mAB");
+  assert.equal(profile.lutFromPcs["relative-colorimetric"]?.type, "mBA");
+
+  const sample = [0.18, 0.52, 0.91] as const;
+  const toWorking = createColorTransform(profile, LINEAR_SRGB_PROFILE, {
+    renderingIntent: "relative-colorimetric",
+  });
+  const fromWorking = createColorTransform(LINEAR_SRGB_PROFILE, profile, {
+    renderingIntent: "relative-colorimetric",
+  });
+  sample.forEach((expected, index) => {
+    assert.ok(Math.abs(toWorking.applyRgb(sample)[index] - expected) < 1.2e-4);
+    assert.ok(Math.abs(fromWorking.applyRgb(sample)[index] - expected) < 1.2e-4);
+  });
+});
+
+test("evaluates the permitted A-CLUT-B mAB processing model", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: identityClutMabTag() },
+  ]));
+  const lut = profile.lutToPcs["relative-colorimetric"]!;
+  assert.equal(lut.type, "mAB");
+  const actual = evaluateIccLut(lut, [0.19, 0.53, 0.87]);
+  [0.19, 0.53, 0.87].forEach((expected, index) => {
+    assert.ok(Math.abs(actual[index] - expected) < 1e-12);
+  });
+});
+
+test("mAB 3×4 matrix applies its three offset terms", () => {
+  const tag = linearSrgbMultiFunctionTag("mAB");
+  const matrixOffset = 32 + 3 * 12;
+  [0.1, 0.2, 0.3].forEach((value, index) => {
+    setS15Fixed16(tag, matrixOffset + (9 + index) * 4, value);
+  });
+  const profile = parseIccProfile(buildIcc([{ signature: "A2B1", bytes: tag }]));
+  const result = evaluateIccLut(profile.lutToPcs["relative-colorimetric"]!, [0, 0, 0]);
+  [0.1, 0.2, 0.3].forEach((expected, index) => {
+    assert.ok(Math.abs(result[index] - expected) < 8e-6);
+  });
+});
+
+test("classic LUT applies its matrix before nonlinear input tables", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "B2A1", bytes: orderedClassicB2ALutTag() },
+  ]));
+  const lut = profile.lutFromPcs["relative-colorimetric"]!;
+  const result = evaluateIccLut(lut, [1, 0.4, 0.6]);
+  assert.ok(Math.abs(result[0] - 0.25) < 2e-5);
+  assert.ok(Math.abs(result[1] - 0.4) < 2e-5);
+  assert.ok(Math.abs(result[2] - 0.6) < 2e-5);
+});
+
+test("device-link profiles are never misclassified as PCS profiles", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: linearSrgbMultiFunctionTag("mAB") },
+  ], { deviceClass: "link" }));
+  assert.equal(profile.deviceClass, "link");
+  assert.equal(profile.capabilities.canTransform, false);
+  assert.equal(profile.capabilities.fallback?.suggestedEngine, "LittleCMS/WASM");
+  assert.match(profile.capabilities.fallback!.reason, /Device-link profiles transform directly/);
+  assert.ok(profile.warnings.some((warning) => /cannot be treated as PCS/.test(warning)));
+});
+
+test("float DToB multi-process tags remain explicit external-engine fallbacks", () => {
+  const mpet = new Uint8Array(16);
+  setSignature(mpet, 0, "mpet");
+  const profile = parseIccProfile(buildIcc([
+    { signature: "D2B3", bytes: mpet },
+  ]));
+  assert.equal(profile.capabilities.model, "unsupported-lut");
+  assert.equal(profile.capabilities.canTransform, false);
+  assert.equal(profile.capabilities.fallback?.suggestedEngine, "LittleCMS/WASM");
+  assert.ok(profile.warnings.some((warning) => /Float DToB\/BToD/.test(warning)));
+});
+
+test("malformed mAB element combinations never become executable", () => {
+  const missingB = identityClutMabTag();
+  setU32(missingB, 12, 0);
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: missingB },
+  ]));
+  assert.equal(profile.capabilities.canTransform, false);
+  assert.ok(profile.warnings.some((warning) => /required B curve set/.test(warning)));
+});
+
+test("rejects multi-function LUT types assigned to the wrong transform direction", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: linearSrgbMultiFunctionTag("mBA") },
+  ]));
+  assert.equal(profile.capabilities.canTransform, false);
+  assert.ok(profile.warnings.some((warning) => /A2B requires mAB/.test(warning)));
+});
+
+test("intent metadata reports a mixed transform when only one profile has a native table", () => {
+  const source = parseIccProfile(buildIcc([
+    { signature: "A2B0", bytes: linearSrgbMultiFunctionTag("mAB") },
+  ]));
+  const transform = createColorTransform(source, LINEAR_SRGB_PROFILE, {
+    renderingIntent: "perceptual",
+  });
+  assert.equal(transform.metadata.effectiveIntent, "mixed");
+  assert.match(transform.metadata.intentFallback!, /destination profile lacked native perceptual tables/);
 });
 
 test("rejects truncated profiles and contains malformed tag offsets", () => {

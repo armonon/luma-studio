@@ -78,7 +78,7 @@ test("intent support is explicit rather than silently claiming ICC LUT behavior"
   });
   assert.equal(perceptual.metadata.requestedIntent, "perceptual");
   assert.equal(perceptual.metadata.effectiveIntent, "relative-colorimetric");
-  assert.match(perceptual.metadata.intentFallback!, /do not contain perceptual gamut mapping/);
+  assert.match(perceptual.metadata.intentFallback!, /lacked native perceptual tables/);
   assert.equal(SRGB_PROFILE.capabilities.renderingIntents.perceptual, "fallback-relative");
 
   const absolute = createColorTransform(SRGB_PROFILE, DISPLAY_P3_PROFILE, {

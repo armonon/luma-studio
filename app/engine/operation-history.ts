@@ -271,6 +271,9 @@ export class OperationHistory<T> {
       operations: this.size,
       branchPoints,
       currentDepth: this.lineageIds(this.currentId).length - 1,
+      bytes: this.totalBytes,
+      byteBudget: this.maxBytes,
+      overBudget: this.overBudget(),
     };
   }
 

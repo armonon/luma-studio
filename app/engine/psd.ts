@@ -2,9 +2,7 @@
 // remain editable; descriptors that Luma cannot edit are retained for round-trip
 // and surfaced through an explicit compatibility report.
 
-import {
-  readPsd,
-  writePsd,
+import type {
   Psd,
   Layer as PsdLayer,
   BlendMode as PsdBlend,
@@ -13,7 +11,9 @@ import {
   LayerVectorMask,
   VectorContent,
   PixelData,
+  LayerRawData,
 } from "ag-psd";
+import { readPsd, writeNative16BitRgbPsd, writePsd } from "./ag-psd-io";
 import {
   BlendMode,
   BLEND_LABELS,
@@ -52,7 +52,7 @@ import {
 } from "./psd-metadata";
 import { drawLayerContentManaged } from "./precision-renderer";
 import { PrecisionTileSurface } from "./tile-store";
-import { displaySrgbToWorking } from "./color";
+import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
 // "multiply". Map to our canvas GlobalCompositeOperation names.
@@ -176,7 +176,10 @@ function blendIfToPsd(layer: Layer): NonNullable<PsdLayer["blendingRanges"]> {
 
 function applyImportedLayerMetadata(target: Layer, source: PsdLayer, parentId?: string) {
   target.parentId = parentId;
-  target.opacity = (source.opacity ?? 255) / 255;
+  // ag-psd exposes layer opacity as a normalized 0..1 value on both read and
+  // write. Keeping it normalized avoids turning an opaque high-depth import
+  // into a 1/255-opacity layer on the next Luma export.
+  target.opacity = Math.max(0, Math.min(1, source.opacity ?? 1));
   if (source.fillOpacity !== undefined) target.fillOpacity = source.fillOpacity;
   target.blendIf = blendIfFromPsd(source);
   target.visible = !source.hidden;
@@ -620,9 +623,12 @@ function importedAdjustment(layer: PsdLayer) {
 
 export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   const header = inspectPhotoshopHeader(buffer);
+  // ag-psd endian-swaps 16/32-bit raw channels in place while decoding. Keep
+  // both the caller's bytes and our preservation source immutable.
+  const originalSource = new Uint8Array(buffer.slice(0));
   let psd: Psd;
   try {
-    psd = readPsd(buffer, {
+    psd = readPsd(buffer.slice(0), {
       skipCompositeImageData: true,
       // Preserve embedded smart-object bytes. This is intentionally false and
       // stated explicitly because ag-psd otherwise permits skipping them.
@@ -684,7 +690,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
 
   setPhotoshopDocumentMetadata(doc, {
     header,
-    originalSource: new Uint8Array(buffer.slice(0)),
+    originalSource,
     originalDocumentFingerprint: documentStateFingerprint(doc),
     imageResources: psd.imageResources,
     linkedFiles: psd.linkedFiles,
@@ -876,7 +882,7 @@ function psdLayerMetadata(doc: Document, layer: Layer, mode: BlendMode, opacity 
   return {
     ...preserved,
     name: layer.name,
-    opacity: Math.round(opacity * 255),
+    opacity: Math.max(0, Math.min(1, opacity)),
     fillOpacity: resolvedFillOpacity(layer),
     hidden: !layer.visible,
     blendMode: exportedBlendMode(layer, mode),
@@ -1068,6 +1074,92 @@ function resolvedContainer(doc: Document, format: PhotoshopExportOptions["format
   return doc.width > 30000 || doc.height > 30000 ? "psb" : "psd";
 }
 
+type Native16BitEligibility = { eligible: true } | { eligible: false; reason: string };
+
+const native16SurfaceChecks = new WeakMap<PrecisionTileSurface, {
+  revision: number;
+  result: Native16BitEligibility;
+}>();
+
+function native16SurfaceEligibility(surface: PrecisionTileSurface): Native16BitEligibility {
+  const revision = surface.store.stats().revision;
+  const cached = native16SurfaceChecks.get(surface);
+  if (cached?.revision === revision) return cached.result;
+  let result: Native16BitEligibility = { eligible: true };
+  for (let y = 0; y < surface.grid.height && result.eligible; y += 1) {
+    for (let x = 0; x < surface.grid.width; x += 1) {
+      const pixel = surface.readPixel(x, y);
+      if (Math.abs(pixel[3] - 1) > 1 / 65535) {
+        result = { eligible: false, reason: "the precision surface contains transparency" };
+        break;
+      }
+      const encoded = workingToDisplaySrgb([pixel[0], pixel[1], pixel[2]], surface.colorSpace);
+      if (encoded.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+        result = { eligible: false, reason: "the precision surface contains HDR or out-of-gamut samples" };
+        break;
+      }
+    }
+  }
+  native16SurfaceChecks.set(surface, { revision, result });
+  return result;
+}
+
+/**
+ * This gate is intentionally conservative. The current native path has no
+ * high-depth compositor, so it may only write a document whose merged result
+ * is exactly its one precision raster layer. Everything else remains on the
+ * explicitly reported compatibility path instead of mislabeling 8-bit data.
+ */
+function native16BitEligibility(doc: Document): Native16BitEligibility {
+  if (doc.bitDepth !== 16) return { eligible: false, reason: "the document is not 16-bit" };
+  if (doc.colorSpace !== "srgb") return { eligible: false, reason: "native output currently supports sRGB only" };
+  if (doc.layers.length !== 1) return { eligible: false, reason: "native output currently requires exactly one layer" };
+  const layer = doc.layers[0];
+  if (layer.kind !== "raster" || !layer.surface || layer.surface.format === "rgba8") {
+    return { eligible: false, reason: "the raster layer does not have a high-depth precision master" };
+  }
+  if (layer.surface.grid.width !== doc.width || layer.surface.grid.height !== doc.height || layer.surface.colorSpace !== doc.colorSpace) {
+    return { eligible: false, reason: "the precision master does not match the document geometry or color space" };
+  }
+  const transform = layer.transform;
+  if (transform.tx !== 0 || transform.ty !== 0 || transform.sx !== 1 || transform.sy !== 1 || transform.rotation !== 0) {
+    return { eligible: false, reason: "the raster layer has a transform that requires high-depth resampling" };
+  }
+  const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
+  if (!layer.visible || layer.opacity !== 1 || resolvedFillOpacity(layer) !== 1 || passes.length !== 1 ||
+      passes[0].mode !== "source-over" || passes[0].opacity !== 1 || layer.clipping || layer.blendIf ||
+      layer.mask || layer.filters?.some((filter) => filter.enabled) || layer.effects?.some((effect) => effect.enabled)) {
+    return { eligible: false, reason: "the layer requires high-depth compositing, masking, or effects" };
+  }
+  const source = getPhotoshopLayerMetadata(layer)?.source;
+  if (source?.effects || source?.filterEffectsMasks || source?.filterMask || source?.adjustment ||
+      source?.placedLayer || source?.text || source?.vectorMask || source?.vectorFill || source?.vectorStroke) {
+    return { eligible: false, reason: "the preserved Photoshop layer has appearance descriptors that require high-depth compositing" };
+  }
+  return native16SurfaceEligibility(layer.surface);
+}
+
+function native16RgbChannels(surface: PrecisionTileSurface) {
+  const sampleBytes = surface.grid.width * surface.grid.height * 2;
+  const channels = [
+    new Uint8Array(sampleBytes),
+    new Uint8Array(sampleBytes),
+    new Uint8Array(sampleBytes),
+  ] as const;
+  const views = channels.map((channel) => new DataView(channel.buffer, channel.byteOffset, channel.byteLength));
+  for (let y = 0; y < surface.grid.height; y += 1) {
+    for (let x = 0; x < surface.grid.width; x += 1) {
+      const pixel = surface.readPixel(x, y);
+      const encoded = workingToDisplaySrgb([pixel[0], pixel[1], pixel[2]], surface.colorSpace);
+      const byteOffset = (y * surface.grid.width + x) * 2;
+      for (let channel = 0; channel < 3; channel += 1) {
+        views[channel].setUint16(byteOffset, Math.round(Math.max(0, Math.min(1, encoded[channel])) * 65535), false);
+      }
+    }
+  }
+  return channels;
+}
+
 /**
  * Source mode is deliberately strict: every editable property, hierarchy slot,
  * precision tile, bitmap, and layer mask must still match the import snapshot.
@@ -1144,11 +1236,20 @@ export function photoshopCompatibilityReport(
     });
     return { container, canExport: true, issues };
   }
-  if (doc.bitDepth !== 8) {
+  const native16 = native16BitEligibility(doc);
+  if (native16.eligible) {
+    issues.push({
+      code: "OUTPUT_16_BIT_NATIVE",
+      severity: "info",
+      message: "The sRGB precision master will be written as native planar 16-bit RGB layer and composite channels.",
+    });
+  } else if (doc.bitDepth !== 8) {
     issues.push({
       code: "OUTPUT_DEPTH_CONVERTED_TO_8_BIT",
       severity: "warning",
-      message: `The current PSD writer only supports 8-bit RGB output; this ${doc.bitDepth}-bit document will be compatibility-converted on export.`,
+      message: doc.bitDepth === 16
+        ? `Native 16-bit output is gated because ${native16.reason}; this document will be compatibility-converted to 8-bit RGB.`
+        : `Native 32-bit Photoshop writing is not supported; this ${doc.bitDepth}-bit document will be compatibility-converted to 8-bit RGB.`,
     });
   }
   if (doc.colorSpace !== "srgb") {
@@ -1233,6 +1334,7 @@ export function exportPhotoshopDocument(
       report,
     };
   }
+  const native16 = native16BitEligibility(doc);
   // One Luma blend stack exports as repeated PSD layers, preserving the same
   // bottom-to-top pass order and per-pass opacity in Photoshop.
   const serializeLayer = (layer: Layer): PsdLayer[] => {
@@ -1261,8 +1363,33 @@ export function exportPhotoshopDocument(
       top: 0,
     })).reverse();
   };
-  // ag-psd expects bottom-to-top; our stack is top-to-bottom.
-  const children = doc.layers
+  const native16Channels = native16.eligible ? native16RgbChannels(doc.layers[0].surface!) : undefined;
+  let native16RawData: LayerRawData | undefined;
+  if (native16Channels) {
+    native16RawData = {
+      colorMode: 3,
+      bitsPerChannel: 16,
+      large: report.container === "psb",
+      channels: [
+        { id: 0, compression: 0, data: native16Channels[0] },
+        { id: 1, compression: 0, data: native16Channels[1] },
+        { id: 2, compression: 0, data: native16Channels[2] },
+      ],
+    };
+  }
+  // ag-psd expects bottom-to-top; our stack is top-to-bottom. The native path
+  // is separately gated to exactly one document-sized precision raster layer.
+  const children: PsdLayer[] = native16RawData ? [{
+    ...psdLayerMetadata(doc, doc.layers[0], "source-over", 1),
+    mask: undefined,
+    canvas: undefined,
+    imageData: undefined,
+    top: 0,
+    left: 0,
+    right: doc.width,
+    bottom: doc.height,
+    rawData: native16RawData,
+  }] : doc.layers
     .filter((layer) => !layer.parentId)
     .flatMap(serializeLayer)
     .reverse();
@@ -1271,7 +1398,7 @@ export function exportPhotoshopDocument(
   const psd: Psd = {
     width: doc.width,
     height: doc.height,
-    bitsPerChannel: 8,
+    bitsPerChannel: native16RawData ? 16 : 8,
     colorMode: 3, // RGB
     children,
     linkedFiles: preserved?.linkedFiles,
@@ -1291,12 +1418,15 @@ export function exportPhotoshopDocument(
       },
     },
   };
-  const written = writePsd(psd, {
+  const writeOptions = {
     psb: report.container === "psb",
     compress: options.compress,
     invalidateTextLayers: true,
     noBackground: true,
-  });
+  };
+  const written = native16Channels
+    ? writeNative16BitRgbPsd(psd, native16Channels, writeOptions)
+    : writePsd(psd, writeOptions);
   const buffer = mergePhotoshopImageResources(written, preserved?.rawImageResources ?? [], {
     // An RGB source profile still describes the unconverted channel values.
     // Never attach a CMYK/Lab source profile to the RGB compatibility output.

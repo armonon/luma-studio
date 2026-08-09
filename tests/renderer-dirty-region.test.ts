@@ -4,6 +4,7 @@ import { pixelAt, solidCanvas, testCanvas } from "./canvas-harness.ts";
 import { createDocument, createRasterLayer } from "../app/engine/document.ts";
 import {
   renderViewport,
+  viewportRenderCacheStats,
   viewportRenderPerformanceStats,
   viewportTileKeysForDirtyRegions,
 } from "../app/engine/renderer.ts";
@@ -70,4 +71,27 @@ test("channel inspection renders grayscale channels without altering document pi
   assert.deepEqual([inspected.r, inspected.g, inspected.b], [128, 128, 128]);
   const source = pixelAt(doc.layers[0].bitmap!, 10, 10);
   assert.deepEqual([source.r, source.g, source.b], [128, 64, 32]);
+});
+
+test("selection-only repaints reuse composite tiles when the content revision is stable", () => {
+  const doc = createDocument(512, 512);
+  doc.layers = [createRasterLayer("Color", solidCanvas(512, 512, "#804020"))];
+  const selectionMask = solidCanvas(512, 512, "rgba(255, 255, 255, 1)");
+  doc.selection = { mask: selectionMask, bounds: { x: 10, y: 10, w: 40, h: 40 } };
+  const target = testCanvas(512, 512);
+
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 99 });
+  const before = viewportRenderCacheStats();
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 99 });
+  const after = viewportRenderCacheStats();
+
+  assert.equal(after.misses, before.misses);
+  assert.equal(after.hits - before.hits, 4);
+});
+
+test("renderer scratch and viewport caches expose strict memory ceilings", () => {
+  const stats = viewportRenderCacheStats();
+  assert.equal(stats.maxBytesPerDocument, 32 * 1024 * 1024);
+  assert.ok(stats.scratchCacheEntries <= 6);
+  assert.ok(stats.scratchCacheBytes <= stats.maxScratchCacheBytes);
 });

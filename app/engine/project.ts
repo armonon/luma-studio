@@ -20,6 +20,8 @@ import type {
   HistoryEntry,
   LayerSnapshot,
   PixelPatch,
+  SelectionTranslationPatch,
+  SurfaceTilePatch,
 } from "./studio";
 import { PixelFormat, PrecisionTileSurface } from "./tile-store";
 import type { WorkingColorSpace } from "./color";
@@ -78,6 +80,15 @@ type SerializedPixelPatch = Omit<PixelPatch, "before" | "after"> & {
   afterAsset: string;
 };
 
+type SerializedSelectionTranslationPatch = Omit<SelectionTranslationPatch, "source"> & {
+  sourceAsset?: string;
+};
+
+type SerializedSurfaceTilePatch = Omit<SurfaceTilePatch, "before" | "after"> & {
+  beforeAsset?: string;
+  afterAsset?: string;
+};
+
 type SerializedHistoryEntry = {
   label: string;
   before: SerializedLayerSnapshot[];
@@ -86,7 +97,9 @@ type SerializedHistoryEntry = {
   layersAfter?: SerializedLayer[];
   selectionBefore?: { asset: string; bounds: Selection["bounds"] } | null;
   selectionAfter?: { asset: string; bounds: Selection["bounds"] } | null;
+  selectionTranslation?: SerializedSelectionTranslationPatch;
   pixelPatches?: SerializedPixelPatch[];
+  surfacePatches?: SerializedSurfaceTilePatch[];
   guidesBefore?: Guide[];
   guidesAfter?: Guide[];
   documentBefore?: SerializedDocument;
@@ -186,15 +199,7 @@ async function serializePrecisionSurface(
 ): Promise<SerializedPrecisionSurface> {
   const tiles: SerializedPrecisionSurface["tiles"] = [];
   for (const { key, data } of surface.store.entries()) {
-    const digest = await digestBytes(data);
-    let asset = context.precisionAssets.get(digest);
-    if (!asset) {
-      context.nextPrecisionAsset += 1;
-      asset = `assets/precision/${context.nextPrecisionAsset.toString().padStart(6, "0")}-${digest.slice(0, 12)}.bin`;
-      context.zip.file(asset, data);
-      context.precisionAssets.set(digest, asset);
-    }
-    tiles.push({ key, asset });
+    tiles.push({ key, asset: await addPrecisionAsset(context, data) });
   }
   return {
     width: surface.grid.width,
@@ -204,6 +209,27 @@ async function serializePrecisionSurface(
     tileSize: surface.grid.tileSize,
     tiles,
   };
+}
+
+async function addPrecisionAsset(context: EncodeContext, data: Uint8Array) {
+  const digest = await digestBytes(data);
+  let asset = context.precisionAssets.get(digest);
+  if (!asset) {
+    context.nextPrecisionAsset += 1;
+    asset = `assets/precision/${context.nextPrecisionAsset.toString().padStart(6, "0")}-${digest.slice(0, 12)}.bin`;
+    context.zip.file(asset, data);
+    context.precisionAssets.set(digest, asset);
+  }
+  return asset;
+}
+
+async function readPrecisionAsset(zip: JSZip, asset: string) {
+  if (!asset.startsWith("assets/precision/") || !asset.endsWith(".bin")) {
+    throw new Error(`Invalid precision asset: ${asset}`);
+  }
+  const file = zip.file(asset);
+  if (!file) throw new Error(`Missing precision asset: ${asset}`);
+  return file.async("uint8array");
 }
 
 async function digestBytes(data: Uint8Array) {
@@ -267,10 +293,7 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
   }
   const tiles: Array<{ key: string; data: Uint8Array }> = [];
   for (const tile of source.tiles) {
-    if (!tile.asset.startsWith("assets/precision/")) throw new Error(`Invalid precision asset: ${tile.asset}`);
-    const file = zip.file(tile.asset);
-    if (!file) throw new Error(`Missing precision asset: ${tile.asset}`);
-    tiles.push({ key: tile.key, data: await file.async("uint8array") });
+    tiles.push({ key: tile.key, data: await readPrecisionAsset(zip, tile.asset) });
   }
   return PrecisionTileSurface.fromTiles(
     source.width,
@@ -561,6 +584,15 @@ async function serializeHistoryEntry(
         }
       : null;
   }
+  if (entry.selectionTranslation) {
+    const { source, beforeBounds, afterBounds, ...translation } = entry.selectionTranslation;
+    serialized.selectionTranslation = {
+      ...translation,
+      sourceAsset: source ? await addImageDataAsset(context, source) : undefined,
+      beforeBounds: { ...beforeBounds },
+      afterBounds: { ...afterBounds },
+    };
+  }
   if (entry.pixelPatches) {
     serialized.pixelPatches = await Promise.all(entry.pixelPatches.map(async (patch) => ({
       layerId: patch.layerId,
@@ -569,6 +601,15 @@ async function serializeHistoryEntry(
       y: patch.y,
       beforeAsset: await addImageDataAsset(context, patch.before),
       afterAsset: await addImageDataAsset(context, patch.after),
+    })));
+  }
+  if (entry.surfacePatches) {
+    serialized.surfacePatches = await Promise.all(entry.surfacePatches.map(async (patch) => ({
+      layerId: patch.layerId,
+      key: patch.key,
+      updateBitmap: patch.updateBitmap,
+      beforeAsset: patch.before ? await addPrecisionAsset(context, patch.before) : undefined,
+      afterAsset: patch.after ? await addPrecisionAsset(context, patch.after) : undefined,
     })));
   }
   if (entry.guidesBefore) serialized.guidesBefore = entry.guidesBefore.map((guide) => ({ ...guide }));
@@ -609,6 +650,15 @@ async function deserializeHistoryEntry(
         }
       : null;
   }
+  if (source.selectionTranslation) {
+    const { sourceAsset, beforeBounds, afterBounds, ...translation } = source.selectionTranslation;
+    entry.selectionTranslation = {
+      ...translation,
+      source: sourceAsset ? await readImageDataAsset(zip, sourceAsset) : null,
+      beforeBounds: { ...beforeBounds },
+      afterBounds: { ...afterBounds },
+    };
+  }
   if (source.pixelPatches) {
     entry.pixelPatches = await Promise.all(source.pixelPatches.map(async (patch) => ({
       layerId: patch.layerId,
@@ -617,6 +667,15 @@ async function deserializeHistoryEntry(
       y: patch.y,
       before: await readImageDataAsset(zip, patch.beforeAsset),
       after: await readImageDataAsset(zip, patch.afterAsset),
+    })));
+  }
+  if (source.surfacePatches) {
+    entry.surfacePatches = await Promise.all(source.surfacePatches.map(async (patch) => ({
+      layerId: patch.layerId,
+      key: patch.key,
+      updateBitmap: patch.updateBitmap,
+      before: patch.beforeAsset ? await readPrecisionAsset(zip, patch.beforeAsset) : null,
+      after: patch.afterAsset ? await readPrecisionAsset(zip, patch.afterAsset) : null,
     })));
   }
   if (source.guidesBefore) entry.guidesBefore = source.guidesBefore.map((guide) => ({ ...guide }));

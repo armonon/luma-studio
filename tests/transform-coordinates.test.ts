@@ -31,6 +31,14 @@ test("eyedropper samples transformed layer pixels and rejects points outside the
   studio.dispose();
 });
 
+test("merged eyedropper sampling uses the bounded viewport compositor", () => {
+  const studio = new Studio(32, 32, testCanvas(32, 32));
+  const layer = studio.addBlankRaster("merged sample");
+  studio.fillLayer(layer.id, "#39b86a");
+  assert.equal(studio.sampleLayerColor(layer.id, 7, 11, true), "#38b86a");
+  studio.dispose();
+});
+
 test("generated document-space fills are inverse-mapped into transformed layers", () => {
   const studio = new Studio(8, 8, testCanvas(8, 8));
   const layer = studio.addBlankRaster("fill");

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  HISTORY_MAX_BYTES,
+  HISTORY_MIN_BYTES,
+  historyBudgetForDeviceMemory,
+} from "../app/engine/studio.ts";
 import { OperationHistory } from "../app/engine/operation-history.ts";
 
 // Payloads carry their own declared size so these tests can exercise the byte
@@ -31,6 +36,15 @@ test("a single entry larger than maxBytes must not destroy the current node", ()
     () => h.commit("next", { bytes: 8, tag: "next" }),
     "commit must not throw after an over-budget entry",
   );
+});
+
+test("history memory budgets scale conservatively on lightweight devices", () => {
+  assert.equal(historyBudgetForDeviceMemory(), HISTORY_MAX_BYTES);
+  assert.equal(historyBudgetForDeviceMemory(0.5), HISTORY_MIN_BYTES);
+  assert.equal(historyBudgetForDeviceMemory(1), 128 * 1024 * 1024);
+  assert.equal(historyBudgetForDeviceMemory(2), 256 * 1024 * 1024);
+  assert.equal(historyBudgetForDeviceMemory(8), HISTORY_MAX_BYTES);
+  assert.equal(historyBudgetForDeviceMemory(Number.NaN), HISTORY_MIN_BYTES);
 });
 
 test("the current lineage survives byte pressure; older branches are evicted first", () => {

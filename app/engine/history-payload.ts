@@ -82,6 +82,9 @@ export function historyEntrySize(entry: HistoryEntry): number {
   }
 
   // Typed-array payloads are always exclusively owned by the entry.
+  if (entry.selectionTranslation?.source) {
+    total += entry.selectionTranslation.source.data.byteLength;
+  }
   if (entry.pixelPatches) for (const p of entry.pixelPatches) total += pixelPatchBytes(p);
   if (entry.surfacePatches) for (const p of entry.surfacePatches) total += surfaceTilePatchBytes(p);
   return total;

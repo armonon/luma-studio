@@ -238,7 +238,7 @@ test("Photoshop source mode is byte-for-byte for untouched files and disengages 
     height: 10,
     bitsPerChannel: 8,
     colorMode: 3,
-    children: [{ name: "Original pixels", canvas: preview, left: 0, top: 0, opacity: 211 }],
+    children: [{ name: "Original pixels", canvas: preview, left: 0, top: 0, opacity: 211 / 255 }],
   }, { noBackground: true });
   const imported = await importPsd(sourceBytes);
 
@@ -506,7 +506,7 @@ test("mask controls, non-Luma effects, group pass-through, guides, and resolutio
   assert.deepEqual(restored.imageResources?.gridAndGuidesInformation?.guides, [{ location: 9, direction: "vertical" }]);
 });
 
-test("PSB export is explicit and compatibility reports never claim high-depth fidelity", async () => {
+test("PSB export is explicit and 32-bit output remains an honest compatibility conversion", async () => {
   const doc = createDocument(16, 12);
   doc.bitDepth = 32;
   doc.colorSpace = "display-p3";
@@ -524,6 +524,82 @@ test("PSB export is explicit and compatibility reports never claim high-depth fi
   assert.equal(inspectPhotoshopHeader(exported.buffer).container, "psb");
   const imported = await importPsd(exported.buffer);
   assert.equal(getPhotoshopDocumentMetadata(imported)?.header.container, "psb");
+});
+
+test("native 16-bit PSD and PSB exports round-trip precision samples without an 8-bit mirror", async () => {
+  const sourceSamples = new Uint16Array([
+    1003, 2009, 3011, 65535,
+    32777, 45001, 61234, 65535,
+  ]);
+  const doc = createDocument(2, 1);
+  doc.bitDepth = 16;
+  doc.colorSpace = "srgb";
+  const layer = createRasterLayer("Native precision");
+  layer.surface = precisionSurfaceFromPsdPixels({ width: 2, height: 1, data: sourceSamples }, doc, 0, 0);
+  doc.layers = [layer];
+
+  for (const format of ["psd", "psb"] as const) {
+    const exported = exportPhotoshopDocument(doc, { format });
+    assert.ok(exported.report.issues.some((issue) => issue.code === "OUTPUT_16_BIT_NATIVE"));
+    assert.ok(!exported.report.issues.some((issue) => issue.code === "OUTPUT_DEPTH_CONVERTED_TO_8_BIT"));
+    assert.deepEqual(inspectPhotoshopHeader(exported.buffer), {
+      container: format,
+      version: format === "psb" ? 2 : 1,
+      channels: 3,
+      width: 2,
+      height: 1,
+      bitsPerChannel: 16,
+      colorMode: 3,
+    });
+
+    // ag-psd endian-swaps 16-bit raw payloads in place while decoding, so each
+    // independent consumer receives its own copy of the file bytes.
+    const decoded = readPsd(exported.buffer.slice(0), { useImageData: true });
+    const layerPixels = decoded.children?.[0].imageData?.data;
+    const compositePixels = decoded.imageData?.data;
+    assert.ok(layerPixels instanceof Uint16Array);
+    assert.ok(compositePixels instanceof Uint16Array);
+    for (const offset of [0, 1, 2, 4, 5, 6]) {
+      assert.ok(Math.abs(layerPixels[offset] - sourceSamples[offset]) <= 32);
+      assert.equal(compositePixels[offset], layerPixels[offset]);
+    }
+    // A promoted 8-bit channel can only land on multiples of 257. This sample
+    // proves the native layer retained meaningful precision between those steps.
+    assert.notEqual(layerPixels[0] % 257, 0);
+
+    const originalBytes = new Uint8Array(exported.buffer.slice(0));
+    const imported = await importPsd(exported.buffer);
+    assert.deepEqual(new Uint8Array(exported.buffer), originalBytes);
+    const sourcePassthrough = exportPhotoshopDocument(imported, { format: "source" });
+    assert.deepEqual(new Uint8Array(sourcePassthrough.buffer), originalBytes);
+    const secondGeneration = exportPhotoshopDocument(imported, { format });
+    assert.equal(inspectPhotoshopHeader(secondGeneration.buffer).bitsPerChannel, 16);
+    const restored = readPsd(secondGeneration.buffer.slice(0), { useImageData: true });
+    const restoredPixels = restored.children?.[0].imageData?.data;
+    assert.ok(restoredPixels instanceof Uint16Array);
+    assert.ok(
+      Math.abs(restoredPixels[0] - layerPixels[0]) <= 32,
+      `second-generation sample drifted from ${layerPixels[0]} to ${restoredPixels[0]}`,
+    );
+  }
+});
+
+test("16-bit native export gate falls back explicitly when compositing would be required", () => {
+  const doc = createDocument(1, 1);
+  doc.bitDepth = 16;
+  const layer = createRasterLayer("Translucent precision");
+  layer.surface = precisionSurfaceFromPsdPixels({
+    width: 1,
+    height: 1,
+    data: new Uint16Array([12345, 23456, 34567, 32768]),
+  }, doc, 0, 0);
+  doc.layers = [layer];
+
+  const exported = exportPhotoshopDocument(doc);
+  const converted = exported.report.issues.find((issue) => issue.code === "OUTPUT_DEPTH_CONVERTED_TO_8_BIT");
+  assert.match(converted?.message ?? "", /contains transparency/);
+  assert.ok(!exported.report.issues.some((issue) => issue.code === "OUTPUT_16_BIT_NATIVE"));
+  assert.equal(inspectPhotoshopHeader(exported.buffer).bitsPerChannel, 8);
 });
 
 test("16-bit PSD channel values enter the precision master without an 8-bit preview round trip", () => {

@@ -50,6 +50,7 @@ test("sparse store copies writes, tracks revisions, and emits tombstones", () =>
   const source = new Uint8Array(grid.byteLength(grid.address(0, 0), "rgba8")).fill(7);
   store.write("0:0", source);
   source.fill(9);
+  assert.equal(store.stats().residentBytes, source.byteLength);
 
   const saved = store.read("0:0")!;
   assert.equal(saved[0], 7);
@@ -65,6 +66,7 @@ test("sparse store copies writes, tracks revisions, and emits tombstones", () =>
   assert.equal(deletion.key, "0:0");
   assert.equal(deletion.deleted, true);
   assert.equal(deletion.data, undefined);
+  assert.equal(store.stats().residentBytes, 0);
 });
 
 test("sparse store rejects malformed keys and incorrect payload sizes", () => {
@@ -126,4 +128,15 @@ test("native float tile editing round-trips extended working values", () => {
   values.fill(0);
   surface.writeWorkingFloat32Tile("0:0", values);
   assert.equal(surface.stats().residentTiles, 0);
+});
+
+test("precision surface clones do not alias source tile memory", () => {
+  const source = new PrecisionTileSurface(16, 16, "rgba32f", "linear-srgb", 16);
+  source.writePixel(2, 3, [2.5, -0.25, 0.5, 1]);
+  const clone = source.clone();
+  clone.writePixel(2, 3, [0.1, 0.2, 0.3, 0.4]);
+
+  assert.deepEqual(source.readPixel(2, 3), [2.5, -0.25, 0.5, 1]);
+  assert.notDeepEqual(clone.readPixel(2, 3), source.readPixel(2, 3));
+  assert.equal(clone.stats().residentBytes, source.stats().residentBytes);
 });

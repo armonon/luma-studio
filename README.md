@@ -16,8 +16,9 @@ until their full user-facing paths ship.
   per layer, fill opacity, Blend If, clipping masks, layer masks, and effects.
 - Nondestructive levels, curves, HSL, tone, editable smart filters, soft proof,
   gamut warnings, 8/16/32-bit precision masters, sRGB, Display P3, and linear
-  sRGB working spaces. ICC v2/v4 RGB matrix/TRC profiles and classic `mft1`/
-  `mft2` 3D-LUT intent tables run in the local color engine.
+  sRGB working spaces. ICC v2/v4 RGB matrix/TRC profiles, classic `mft1`/
+  `mft2` tables, and strict 3-channel XYZ-PCS `mAB`/`mBA` curves, matrices,
+  offsets, and 8/16-bit 3D LUTs run in the local color engine.
 - Pressure/tilt-aware brushes, full-color captured image tips with canvas and
   upload sampling, tint/stencil modes, symmetry, paint, erase, mixer, clone,
   healing, removal, dodge/burn, blur/sharpen, smudge, sponge, gradients, and
@@ -55,6 +56,8 @@ npx tsc --noEmit
 Useful commands:
 
 - `npm run build` builds the hosted web edition.
+- `npm run bundle:check` builds and enforces the initial-route size and request
+  budgets.
 - `npm run desktop:build` builds the static desktop frontend.
 - `npm run pro:dev` starts the Tauri desktop development build.
 - `npm run pro:build` produces signed-platform-ready desktop bundles.
@@ -85,9 +88,12 @@ app/engine/               shared document, rendering, color, RAW, PSD, history
 The document remains editable in the shared engine. Raster masters can live in
 sparse half/float tiles while canvas bitmaps act as display and compatibility
 mirrors. The interactive viewport recomposes only dirty screen tiles, records
-frame/tile telemetry, and uses bounded CPU and GPU caches. Eligible desktop flattened exports send bounded raw binary tiles to
-`luma-core`; unsupported document constructs safely fall back to the shared
-compositor.
+frame/tile telemetry, adapts preview resolution under load, and uses bounded
+CPU, GPU, viewport, and scratch caches. Selection-scoped filters, refinement,
+feathering, and content moves allocate work buffers and history around their
+affected regions rather than the entire document. Eligible desktop flattened
+exports send bounded raw binary tiles to `luma-core`; unsupported document
+constructs safely fall back to the shared compositor.
 
 The native bridge uses a validated binary protocol instead of serializing
 millions of floats through JSON. Native file commands cap file size, sanitize
@@ -124,16 +130,19 @@ contains a live Photoshop preflight for the selected PSD/PSB output mode.
 - An untouched imported PSD/PSB can be returned byte-for-byte.
 - Original Photoshop resources and unsupported descriptors are retained where
   possible for round trips.
-- Edited 16/32-bit or wide-gamut projects currently export through an 8-bit RGB
-  compatibility mirror and show a warning before export.
+- An edited 16-bit document can write native planar 16-bit PSD/PSB data when it
+  is exactly one opaque, untransformed sRGB precision raster with normal 100%
+  blending and no masks, filters, effects, or out-of-range samples.
+- Other 16-bit documents, 32-bit documents, and wide-gamut projects export
+  through an 8-bit RGB compatibility mirror and show a warning before export.
 - Luma smart-filter results remain visible, but are not translated to native
   Photoshop smart-filter descriptors.
 - Multi-pass Luma blending expands to ordered Photoshop layers.
 
-Those last two items, full high-depth PSD writing, CMYK/Lab editing, ICC
-device-link and v4 multi-process elements, Photoshop-native artboard/layer-comp
-interchange, and parity with Photoshop's entire plugin ecosystem remain real
-gaps. They are not advertised as complete.
+Those last two items, general multilayer high-depth PSD writing, CMYK/Lab
+editing, ICC device-link and arbitrary multi-process execution,
+Photoshop-native artboard/layer-comp interchange, and parity with Photoshop's
+entire plugin ecosystem remain real gaps. They are not advertised as complete.
 
 ## Desktop packaging
 

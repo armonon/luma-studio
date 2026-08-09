@@ -110,17 +110,21 @@ export class TileResidencyCache<T> {
     }
 
     const required = Math.max(0, this.residentBytes - (existing?.bytes ?? 0) + bytes - this.budgetBytes);
-    const candidates = [...this.records.values()]
-      .filter((record) => record.key !== key && !record.dirty && record.pinCount === 0 &&
-        record.priority <= incomingPriority)
-      .sort((a, b) => a.priority - b.priority || a.lastUsed - b.lastUsed ||
-        b.bytes - a.bytes || a.key.localeCompare(b.key));
     const selected: ResidencyRecord<T>[] = [];
     let reclaimable = 0;
-    for (const candidate of candidates) {
-      if (reclaimable >= required) break;
-      selected.push(candidate);
-      reclaimable += candidate.bytes;
+    // The hot path is an admission that already fits. Avoid materializing and
+    // sorting the entire resident set unless bytes genuinely need reclaiming.
+    if (required > 0) {
+      const candidates = [...this.records.values()]
+        .filter((record) => record.key !== key && !record.dirty && record.pinCount === 0 &&
+          record.priority <= incomingPriority)
+        .sort((a, b) => a.priority - b.priority || a.lastUsed - b.lastUsed ||
+          b.bytes - a.bytes || a.key.localeCompare(b.key));
+      for (const candidate of candidates) {
+        if (reclaimable >= required) break;
+        selected.push(candidate);
+        reclaimable += candidate.bytes;
+      }
     }
     if (reclaimable < required) {
       this.rejections += 1;

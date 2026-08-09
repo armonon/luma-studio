@@ -148,6 +148,8 @@ import {
   type ViewportPlan,
 } from "./virtual-canvas";
 import { calculateDisplayViewport, type DisplayViewport } from "./viewport";
+import { appendDirtyRegion } from "./dirty-regions";
+import { AdaptiveRenderGovernor } from "./performance-governor";
 import {
   normalizeAiEditConfig,
   runAiEditVariations,
@@ -208,6 +210,7 @@ export type HistoryEntry = {
   layersAfter?: Layer[];
   selectionBefore?: Selection | null;
   selectionAfter?: Selection | null;
+  selectionTranslation?: SelectionTranslationPatch;
   pixelPatches?: PixelPatch[];
   surfacePatches?: SurfaceTilePatch[];
   guidesBefore?: Guide[];
@@ -221,6 +224,18 @@ export type SurfaceTilePatch = {
   key: string;
   before: Uint8Array | null;
   after: Uint8Array | null;
+  /** Pixel patches already own the exact display mirror for this operation. */
+  updateBitmap?: boolean;
+};
+
+export type SelectionTranslationPatch = {
+  sourceX: number;
+  sourceY: number;
+  source: ImageData | null;
+  deltaX: number;
+  deltaY: number;
+  beforeBounds: Selection["bounds"];
+  afterBounds: Selection["bounds"];
 };
 
 export type PixelPatch = {
@@ -243,11 +258,134 @@ type DocumentSession = {
 
 export const HISTORY_LIMIT = 80;
 export const HISTORY_MAX_BYTES = 512 * 1024 * 1024; // 512 MB across all entries
+export const HISTORY_MIN_BYTES = 64 * 1024 * 1024;
 
-export function newHistory() {
+const CONTENT_MOVE_HEAL_BLUR = 14;
+const CONTENT_MOVE_HEAL_PADDING = Math.ceil(CONTENT_MOVE_HEAL_BLUR * 4) + 2;
+
+export type SelectionContentMovePlan = {
+  /** The exact non-zero selection support copied into the moving scratch. */
+  content: PixelRect;
+  /** Content support plus transparent resampling guard pixels. */
+  contentScratch: PixelRect;
+  /** Blur scratch in document coordinates; may extend outside the document. */
+  healWork: PixelRect | null;
+  /** Source and translated destination union used for tile/screen invalidation. */
+  affected: PixelRect;
+};
+
+/**
+ * Bounds temporary content-aware-move storage by selection size. Selection
+ * masks remain document-sized until the document model itself becomes tiled.
+ */
+export function planSelectionContentMove(
+  bounds: Selection["bounds"],
+  documentWidth: number,
+  documentHeight: number,
+  deltaX: number,
+  deltaY: number,
+  healSource = true,
+): SelectionContentMovePlan | null {
+  const left = Math.max(0, Math.floor(bounds.x));
+  const top = Math.max(0, Math.floor(bounds.y));
+  const right = Math.min(documentWidth, Math.ceil(bounds.x + Math.max(0, bounds.w)));
+  const bottom = Math.min(documentHeight, Math.ceil(bounds.y + Math.max(0, bounds.h)));
+  if (right <= left || bottom <= top) return null;
+  const content = { x: left, y: top, width: right - left, height: bottom - top };
+  const contentScratch = clipPixelRect({
+    x: content.x - 2,
+    y: content.y - 2,
+    width: content.width + 4,
+    height: content.height + 4,
+  }, documentWidth, documentHeight)!;
+  const destination = {
+    x: Math.floor(content.x + deltaX),
+    y: Math.floor(content.y + deltaY),
+    width: Math.ceil(content.x + content.width + deltaX) - Math.floor(content.x + deltaX),
+    height: Math.ceil(content.y + content.height + deltaY) - Math.floor(content.y + deltaY),
+  };
+  const affectedLeft = Math.min(content.x, destination.x);
+  const affectedTop = Math.min(content.y, destination.y);
+  const affectedRight = Math.max(content.x + content.width, destination.x + destination.width);
+  const affectedBottom = Math.max(content.y + content.height, destination.y + destination.height);
+  return {
+    content,
+    contentScratch,
+    healWork: healSource ? {
+      x: content.x - CONTENT_MOVE_HEAL_PADDING,
+      y: content.y - CONTENT_MOVE_HEAL_PADDING,
+      width: content.width + CONTENT_MOVE_HEAL_PADDING * 2,
+      height: content.height + CONTENT_MOVE_HEAL_PADDING * 2,
+    } : null,
+    affected: {
+      x: affectedLeft,
+      y: affectedTop,
+      width: affectedRight - affectedLeft,
+      height: affectedBottom - affectedTop,
+    },
+  };
+}
+
+function clipPixelRect(rect: PixelRect, width: number, height: number): PixelRect | null {
+  const left = Math.max(0, Math.floor(rect.x));
+  const top = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(width, Math.ceil(rect.x + Math.max(0, rect.width)));
+  const bottom = Math.min(height, Math.ceil(rect.y + Math.max(0, rect.height)));
+  return right <= left || bottom <= top
+    ? null
+    : { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function selectionMoveMutationRegions(
+  content: PixelRect,
+  deltaX: number,
+  deltaY: number,
+  width: number,
+  height: number,
+) {
+  const source = clipPixelRect(content, width, height);
+  const destination = clipPixelRect({
+    x: Math.floor(content.x + deltaX),
+    y: Math.floor(content.y + deltaY),
+    width: Math.ceil(content.x + content.width + deltaX) - Math.floor(content.x + deltaX),
+    height: Math.ceil(content.y + content.height + deltaY) - Math.floor(content.y + deltaY),
+  }, width, height);
+  if (!source) return destination ? [destination] : [];
+  if (!destination) return [source];
+  const overlaps = source.x < destination.x + destination.width && destination.x < source.x + source.width &&
+    source.y < destination.y + destination.height && destination.y < source.y + source.height;
+  if (!overlaps) return [source, destination];
+  const left = Math.min(source.x, destination.x);
+  const top = Math.min(source.y, destination.y);
+  const right = Math.max(source.x + source.width, destination.x + destination.width);
+  const bottom = Math.max(source.y + source.height, destination.y + destination.height);
+  return [{ x: left, y: top, width: right - left, height: bottom - top }];
+}
+
+/** Scale undo storage down on memory-constrained devices without reducing the node cap. */
+export function historyBudgetForDeviceMemory(deviceMemoryGiB?: number) {
+  if (deviceMemoryGiB === undefined) return HISTORY_MAX_BYTES;
+  if (!Number.isFinite(deviceMemoryGiB) || deviceMemoryGiB <= 0) return HISTORY_MIN_BYTES;
+  return Math.max(
+    HISTORY_MIN_BYTES,
+    Math.min(HISTORY_MAX_BYTES, Math.floor(deviceMemoryGiB * 128 * 1024 * 1024)),
+  );
+}
+
+function runtimeDeviceMemoryGiB() {
+  try {
+    return typeof navigator === "undefined"
+      ? undefined
+      : (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  } catch {
+    return undefined;
+  }
+}
+
+export function newHistory(maxBytes = HISTORY_MAX_BYTES) {
   return new OperationHistory<HistoryEntry>({
     maxNodes: HISTORY_LIMIT,
-    maxBytes: HISTORY_MAX_BYTES,
+    maxBytes,
     sizeOf: historyEntrySize,
   });
 }
@@ -286,7 +424,8 @@ export class Studio {
   actions = new ActionRecorder();
   useGL = false; // GPU compositing (RGBA16F) when true and supported
   private subscribers = new Set<SubscribeFn>();
-  private history = newHistory();
+  private history: OperationHistory<HistoryEntry>;
+  private readonly historyBudgetBytes: number;
   private renderScheduled = false;
   private renderRevision = 0;
   private fullRenderPending = true;
@@ -324,8 +463,12 @@ export class Studio {
   private virtualPlan: ViewportPlan | null = null;
   private displayViewport: DisplayViewport | null = null;
   private channelView: "rgb" | "red" | "green" | "blue" | "alpha" = "rgb";
+  private readonly renderGovernor = new AdaptiveRenderGovernor();
+  private renderQualityTimer: number | null = null;
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
+    this.historyBudgetBytes = historyBudgetForDeviceMemory(runtimeDeviceMemoryGiB());
+    this.history = newHistory(this.historyBudgetBytes);
     this.doc = createDocument(width, height);
     this.target = target;
     this.virtualPyramid = new VirtualCanvasPyramid(width, height, DEFAULT_TILE_SIZE);
@@ -351,7 +494,13 @@ export class Studio {
     if (Studio.hasDom()) {
       const ants = () => {
         if (this.disposed) return;
-        if (this.doc.selection && !this.renderScheduled) this.requestRender();
+        // Reuse the existing composite tiles: only the marching-ant phase has
+        // changed. Keeping the content revision stable turns this repaint into
+        // cached tile copies instead of recompositing every layer five times a
+        // second.
+        if (this.doc.selection && !this.renderScheduled) {
+          this.requestRender(undefined, { reuseComposite: true });
+        }
         this.antsTimer = window.setTimeout(ants, 200);
       };
       this.antsTimer = window.setTimeout(ants, 200);
@@ -386,6 +535,10 @@ export class Studio {
       window.clearTimeout(this.antsTimer);
       this.antsTimer = null;
     }
+    if (this.renderQualityTimer !== null) {
+      window.clearTimeout(this.renderQualityTimer);
+      this.renderQualityTimer = null;
+    }
     // Third-party dispose handlers must not be able to abort teardown — an
     // uncaught throw here previously skipped both clear() calls below, leaking
     // every React subscriber onto a disposed Studio.
@@ -414,7 +567,17 @@ export class Studio {
       maxRequests: 2048,
     });
     this.requestRender();
+    this.scheduleFullQualityPreview();
     return this.virtualPlan;
+  }
+
+  private scheduleFullQualityPreview() {
+    if (!Studio.hasDom()) return;
+    if (this.renderQualityTimer !== null) window.clearTimeout(this.renderQualityTimer);
+    this.renderQualityTimer = window.setTimeout(() => {
+      this.renderQualityTimer = null;
+      if (this.renderGovernor.restoreFullQuality()) this.requestRender();
+    }, 180);
   }
 
   private fallbackDisplayViewport() {
@@ -428,14 +591,17 @@ export class Studio {
     );
   }
 
-  requestRender(dirtyRegion?: PixelRect) {
-    this.renderRevision += 1;
-    if (dirtyRegion && !this.fullRenderPending) {
-      this.pendingDirtyRegions.push(dirtyRegion);
-      this.virtualDirty.invalidate(dirtyRegion);
-    } else if (!dirtyRegion) {
-      this.fullRenderPending = true;
-      this.pendingDirtyRegions = [];
+  requestRender(dirtyRegion?: PixelRect, options: { reuseComposite?: boolean } = {}) {
+    if (!options.reuseComposite) {
+      this.renderRevision += 1;
+      if (dirtyRegion && !this.fullRenderPending) {
+        this.pendingDirtyRegions = appendDirtyRegion(this.pendingDirtyRegions, dirtyRegion);
+        this.virtualDirty.invalidate(dirtyRegion);
+        this.scheduleFullQualityPreview();
+      } else if (!dirtyRegion) {
+        this.fullRenderPending = true;
+        this.pendingDirtyRegions = [];
+      }
     }
     // Headless: there is nothing to paint into and no frame clock. Bumping the
     // revision is still correct so cache invalidation stays consistent.
@@ -456,11 +622,18 @@ export class Studio {
       // desynchronises the overlay plane and pointer mapping, and drops the
       // selection outline. Until renderGL accepts a viewport, GPU compositing
       // is used only for export/flatten (see exportImage/flatten).
-      renderViewport(this.doc, this.target, this.displayViewport ?? this.fallbackDisplayViewport(), {
+      const workload = dirtyRegions?.length ? "interactive" as const : "navigation" as const;
+      const baseViewport = this.displayViewport ?? this.fallbackDisplayViewport();
+      const governedViewport = this.renderGovernor.apply(baseViewport);
+      const renderStartedAt = performance.now();
+      renderViewport(this.doc, this.target, governedViewport, {
         cacheRevision: this.renderRevision,
         dirtyRegions,
         channelView: this.channelView,
       });
+      if (this.renderGovernor.record(performance.now() - renderStartedAt, workload)) {
+        this.requestRender();
+      }
     });
   }
 
@@ -551,6 +724,7 @@ export class Studio {
       previewCache: precisionPreviewCacheStats(),
       viewportCache: viewportRenderCacheStats(),
       viewportPerformance: viewportRenderPerformanceStats(),
+      adaptivePreview: this.renderGovernor.stats(),
       gpuTextureCache: gpuTextureCacheStats(),
       channelView: this.channelView,
       tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
@@ -601,6 +775,7 @@ export class Studio {
       const selection = entry[selectionKey];
       this.doc.selection = cloneSelection(selection);
     }
+    if (entry.selectionTranslation) this.applySelectionTranslation(entry.selectionTranslation, side);
     if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
     if (entry.surfacePatches) this.applySurfacePatches(entry.surfacePatches, side);
     const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
@@ -641,9 +816,27 @@ export class Studio {
       const bytes = patch[side];
       if (bytes) layer.surface.store.write(patch.key, bytes);
       else layer.surface.store.delete(patch.key);
-      this.updateLayerBitmapTile(layer, patch.key);
+      if (patch.updateBitmap ?? true) this.updateLayerBitmapTile(layer, patch.key);
       this.checkpointLayerSurface(layer);
     }
+  }
+
+  private applySelectionTranslation(patch: SelectionTranslationPatch, side: "before" | "after") {
+    const mask = newCanvas(this.doc.width, this.doc.height);
+    const context = mask.getContext("2d")!;
+    if (patch.source) {
+      if (side === "before") {
+        context.putImageData(patch.source, patch.sourceX, patch.sourceY);
+      } else {
+        const source = newCanvas(patch.source.width, patch.source.height);
+        source.getContext("2d")!.putImageData(patch.source, 0, 0);
+        context.drawImage(source, patch.sourceX + patch.deltaX, patch.sourceY + patch.deltaY);
+      }
+    }
+    this.doc.selection = {
+      mask,
+      bounds: { ...(side === "before" ? patch.beforeBounds : patch.afterBounds) },
+    };
   }
 
   // --- doc lifecycle ---
@@ -693,6 +886,10 @@ export class Studio {
     session.history = this.history;
   }
 
+  private createSessionHistory() {
+    return newHistory(this.historyBudgetBytes);
+  }
+
   private installDocument(doc: Document, name: string) {
     this.rawSessions.clear();
     this.resetVirtualGeometry(doc.width, doc.height);
@@ -702,7 +899,7 @@ export class Studio {
     if (current && current.doc.layers.length === 0) {
       current.name = name;
       current.doc = doc;
-      current.history = newHistory();
+      current.history = this.createSessionHistory();
       this.doc = doc;
       this.history = current.history;
       this.checkpointDocumentSurfaces(true);
@@ -712,7 +909,7 @@ export class Studio {
       id: nextId("doc"),
       name,
       doc,
-      history: newHistory(),
+      history: this.createSessionHistory(),
     };
     this.sessions.push(session);
     this.activeSessionId = session.id;
@@ -724,7 +921,7 @@ export class Studio {
   resetDocument(width: number, height: number) {
     const next = createDocument(width, height);
     this.installDocument(next, "Untitled");
-    this.history = newHistory();
+    this.history = this.createSessionHistory();
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session) session.history = this.history;
     this.requestRender();
@@ -909,8 +1106,19 @@ export class Studio {
   sampleLayerColor(layerId: string, x: number, y: number, sampleMerged = false) {
     if (sampleMerged) {
       if (x < 0 || y < 0 || x >= this.doc.width || y >= this.doc.height) return null;
-      const composite = this.flatten();
-      return rgbaToHex(composite.getContext("2d")!.getImageData(Math.floor(x), Math.floor(y), 1, 1).data);
+      const sample = newCanvas(1, 1);
+      renderViewport(this.doc, sample, {
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: 1,
+        height: 1,
+        zoom: 1,
+        outputWidth: 1,
+        outputHeight: 1,
+        cssScale: 1,
+        devicePixelRatio: 1,
+      }, { checkerboard: false, selectionOverlay: false, proofing: false });
+      return rgbaToHex(sample.getContext("2d")!.getImageData(0, 0, 1, 1).data);
     }
     const layer = this.findLayer(layerId);
     if (!layer?.bitmap) return null;
@@ -1014,52 +1222,158 @@ export class Studio {
     const layer = this.findLayer(layerId);
     const selection = this.doc.selection;
     if (!layer?.bitmap || !selection || layer.locked) return false;
-    const before = [snapshotLayer(layer)];
-    const selectionBefore = cloneSelection(selection);
-    const content = newCanvas(this.doc.width, this.doc.height);
-    const contentContext = content.getContext("2d")!;
-    contentContext.drawImage(layer.bitmap, 0, 0);
-    contentContext.globalCompositeOperation = "destination-in";
-    contentContext.drawImage(selection.mask, 0, 0);
-
+    const plan = planSelectionContentMove(
+      selection.bounds,
+      this.doc.width,
+      this.doc.height,
+      deltaX,
+      deltaY,
+      healSource,
+    );
     const context = layer.bitmap.getContext("2d")!;
-    context.save();
-    context.globalCompositeOperation = "destination-out";
-    context.drawImage(selection.mask, 0, 0);
-    context.restore();
-    if (healSource) {
-      const fill = newCanvas(this.doc.width, this.doc.height);
-      const fillContext = fill.getContext("2d")!;
-      fillContext.filter = "blur(14px)";
-      fillContext.drawImage(layer.bitmap, 0, 0);
-      fillContext.filter = "none";
-      fillContext.globalCompositeOperation = "destination-in";
-      fillContext.drawImage(selection.mask, 0, 0);
-      context.drawImage(fill, 0, 0);
+    const mutationRegions = plan
+      ? selectionMoveMutationRegions(plan.content, deltaX, deltaY, layer.bitmap.width, layer.bitmap.height)
+      : [];
+    const pixelPatches: PixelPatch[] = mutationRegions.map((region) => {
+      const before = context.getImageData(region.x, region.y, region.width, region.height);
+      return {
+        layerId,
+        target: "bitmap",
+        x: region.x,
+        y: region.y,
+        before,
+        // Replaced after compositing below. Sharing the bounded before payload
+        // avoids a redundant transient allocation while the edit is running.
+        after: before,
+      };
+    });
+    const touchedSurfaceKeys = new Set<string>();
+    const surfaceBefore = new Map<string, Uint8Array | null>();
+    if (layer.surface) {
+      for (const region of mutationRegions) {
+        for (const tile of layer.surface.grid.tilesIntersecting(region)) touchedSurfaceKeys.add(tile.key);
+      }
+      for (const key of touchedSurfaceKeys) surfaceBefore.set(key, layer.surface.store.read(key));
     }
-    context.drawImage(content, deltaX, deltaY);
-    const movedMask = newCanvas(this.doc.width, this.doc.height);
-    movedMask.getContext("2d")!.drawImage(selection.mask, deltaX, deltaY);
-    this.doc.selection = {
-      mask: movedMask,
-      bounds: {
+    const selectionSourceRect = plan?.contentScratch ?? null;
+    const selectionTranslation: SelectionTranslationPatch = {
+      sourceX: selectionSourceRect?.x ?? 0,
+      sourceY: selectionSourceRect?.y ?? 0,
+      source: selectionSourceRect
+        ? selection.mask.getContext("2d")!.getImageData(
+          selectionSourceRect.x,
+          selectionSourceRect.y,
+          selectionSourceRect.width,
+          selectionSourceRect.height,
+        )
+        : null,
+      deltaX,
+      deltaY,
+      beforeBounds: { ...selection.bounds },
+      afterBounds: {
         x: selection.bounds.x + deltaX,
         y: selection.bounds.y + deltaY,
         w: selection.bounds.w,
         h: selection.bounds.h,
       },
     };
+    let content: HTMLCanvasElement | null = null;
+    if (plan) {
+      const scratch = plan.contentScratch;
+      content = newCanvas(scratch.width, scratch.height);
+      const contentContext = content.getContext("2d")!;
+      contentContext.drawImage(
+        layer.bitmap,
+        scratch.x,
+        scratch.y,
+        scratch.width,
+        scratch.height,
+        0,
+        0,
+        scratch.width,
+        scratch.height,
+      );
+      contentContext.globalCompositeOperation = "destination-in";
+      contentContext.drawImage(selection.mask, -scratch.x, -scratch.y);
+    }
+
+    context.save();
+    context.globalCompositeOperation = "destination-out";
+    context.drawImage(selection.mask, 0, 0);
+    context.restore();
+    if (plan?.healWork) {
+      const work = plan.healWork;
+      const fill = newCanvas(work.width, work.height);
+      const fillContext = fill.getContext("2d")!;
+      fillContext.filter = `blur(${CONTENT_MOVE_HEAL_BLUR}px)`;
+      const sourceWidth = Math.min(this.doc.width, layer.bitmap.width);
+      const sourceHeight = Math.min(this.doc.height, layer.bitmap.height);
+      if (sourceWidth > 0 && sourceHeight > 0) {
+        // Crop at document boundaries before filtering. Pixels outside the
+        // document are transparent in the former full-size scratch and must
+        // not contribute when an imported bitmap happens to be larger.
+        fillContext.drawImage(
+          layer.bitmap,
+          0,
+          0,
+          sourceWidth,
+          sourceHeight,
+          -work.x,
+          -work.y,
+          sourceWidth,
+          sourceHeight,
+        );
+      }
+      fillContext.filter = "none";
+      fillContext.globalCompositeOperation = "destination-in";
+      fillContext.drawImage(selection.mask, -work.x, -work.y);
+      context.drawImage(
+        fill,
+        plan.content.x - work.x,
+        plan.content.y - work.y,
+        plan.content.width,
+        plan.content.height,
+        plan.content.x,
+        plan.content.y,
+        plan.content.width,
+        plan.content.height,
+      );
+    }
+    if (content && plan) {
+      context.drawImage(content, plan.contentScratch.x + deltaX, plan.contentScratch.y + deltaY);
+    }
+    const movedMask = newCanvas(this.doc.width, this.doc.height);
+    movedMask.getContext("2d")!.drawImage(selection.mask, deltaX, deltaY);
+    this.doc.selection = {
+      mask: movedMask,
+      bounds: { ...selectionTranslation.afterBounds },
+    };
     bumpBitmapVersion(layer.bitmap);
-    this.syncLayerSurface(layer);
+    if (mutationRegions.length) {
+      for (const region of mutationRegions) this.syncLayerSurface(layer, region);
+    }
     this.checkpointLayerSurface(layer);
+    for (const patch of pixelPatches) {
+      patch.after = context.getImageData(patch.x, patch.y, patch.before.width, patch.before.height);
+    }
+    const surfacePatches = layer.surface && touchedSurfaceKeys.size
+      ? [...touchedSurfaceKeys].map((key): SurfaceTilePatch => ({
+        layerId,
+        key,
+        before: surfaceBefore.get(key) ?? null,
+        after: layer.surface!.store.read(key),
+        updateBitmap: false,
+      }))
+      : undefined;
     this.commit({
       label: "Content-aware move",
-      before,
-      after: [snapshotLayer(layer)],
-      selectionBefore,
-      selectionAfter: cloneSelection(this.doc.selection),
+      before: [],
+      after: [],
+      pixelPatches,
+      surfacePatches,
+      selectionTranslation,
     });
-    this.requestRender();
+    this.requestRender(plan?.affected);
     return true;
   }
 
@@ -2066,16 +2380,39 @@ export class Studio {
     options: { name?: string; sourceLayerId?: string } = {},
   ) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius)) return null;
-    let source: HTMLCanvasElement;
+    const diameter = radius * 2;
+    const edge = Math.max(8, Math.min(MAX_CAPTURED_BRUSH_EDGE, Math.ceil(diameter)));
+    const scale = edge / diameter;
+    const source = newCanvas(edge, edge);
     if (options.sourceLayerId) {
       const layer = this.findLayer(options.sourceLayerId);
       if (!layer || layer.kind === "group") return null;
-      source = newCanvas(this.doc.width, this.doc.height);
-      drawLayerContentManaged(source.getContext("2d")!, layer);
+      drawLayerContentManaged(source.getContext("2d")!, layer, {
+        a: scale,
+        b: 0,
+        c: 0,
+        d: scale,
+        e: -(x - radius) * scale,
+        f: -(y - radius) * scale,
+      });
     } else {
-      source = this.flatten();
+      renderViewport(this.doc, source, {
+        x: x - radius,
+        y: y - radius,
+        width: diameter,
+        height: diameter,
+        zoom: scale,
+        outputWidth: edge,
+        outputHeight: edge,
+        cssScale: scale,
+        devicePixelRatio: 1,
+      }, {
+        checkerboard: false,
+        selectionOverlay: false,
+        proofing: false,
+      });
     }
-    return this.addCapturedBrush(options.name ?? "Canvas capture", source, x, y, radius);
+    return this.addCapturedBrush(options.name ?? "Canvas capture", source, edge / 2, edge / 2, edge / 2);
   }
 
   removeCapturedBrush(id: string) {
@@ -2932,7 +3269,13 @@ export class Studio {
     const { decodeLumaProject } = await import("./project");
     const project = await decodeLumaProject(blob);
     this.installDocument(project.doc, project.name);
-    this.history = project.history ?? newHistory();
+    this.history = project.history
+      ? OperationHistory.fromSnapshot(project.history.snapshot(), {
+        maxNodes: HISTORY_LIMIT,
+        maxBytes: this.historyBudgetBytes,
+        sizeOf: historyEntrySize,
+      })
+      : this.createSessionHistory();
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session) session.history = this.history;
     this.actions.fromJSON(JSON.stringify(project.actions));

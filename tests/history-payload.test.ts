@@ -97,6 +97,30 @@ test("historyEntrySize counts pixelPatches and surfacePatches", () => {
   assert.equal(historyEntrySize(entry), 128 + pixelPatchBytes + surfacePatchBytes);
 });
 
+test("historyEntrySize counts only the cropped mask source for selection translations", () => {
+  const source = {
+    data: new Uint8ClampedArray(23 * 17 * 4),
+    width: 23,
+    height: 17,
+    colorSpace: "srgb" as const,
+  } as unknown as ImageData;
+  const entry: HistoryEntry = {
+    label: "selection translation",
+    before: [],
+    after: [],
+    selectionTranslation: {
+      sourceX: 1200,
+      sourceY: 800,
+      source,
+      deltaX: 4000,
+      deltaY: -300,
+      beforeBounds: { x: 1202, y: 802, w: 19, h: 13 },
+      afterBounds: { x: 5202, y: 502, w: 19, h: 13 },
+    },
+  };
+  assert.equal(historyEntrySize(entry), 128 + source.data.byteLength);
+});
+
 test("a canvas shared between layersBefore and layersAfter is billed once", () => {
   // `shallowCloneLayer` does NOT copy pixels — structural entries hold the same
   // canvas objects on both sides. Billing them twice massively over-states the

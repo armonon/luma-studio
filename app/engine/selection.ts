@@ -243,15 +243,114 @@ export function invertSelection(doc: Document) {
   doc.selection = { mask: inv, bounds: boundsOf(inv) };
 }
 
+type SelectionRegion = { x: number; y: number; w: number; h: number };
+
+function expandSelectionRegion(
+  region: SelectionRegion,
+  padding: number,
+  width: number,
+  height: number,
+): SelectionRegion {
+  const x = Math.max(0, Math.floor(region.x - padding));
+  const y = Math.max(0, Math.floor(region.y - padding));
+  const right = Math.min(width, Math.ceil(region.x + region.w + padding));
+  const bottom = Math.min(height, Math.ceil(region.y + region.h + padding));
+  return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
+}
+
+export type FeatherSelectionPlan = {
+  support: number;
+  care: SelectionRegion;
+  work: SelectionRegion;
+};
+
+/**
+ * Plan bounded scratch space for Canvas2D's Gaussian blur. Four standard
+ * deviations plus two rounding pixels cover every sample that can contribute
+ * a non-zero 8-bit alpha. A second support-width halo keeps the output area
+ * away from scratch-canvas clipping. `work` is intentionally allowed outside
+ * document coordinates: those pixels model the transparent image exterior.
+ */
+export function planFeatherSelection(
+  bounds: SelectionRegion,
+  width: number,
+  height: number,
+  radius: number,
+): FeatherSelectionPlan {
+  const support = Math.max(1, Math.ceil(radius * 4) + 2);
+  const care = expandSelectionRegion(bounds, support, width, height);
+  const workPadding = support * 2;
+  const work = {
+    x: Math.floor(bounds.x - workPadding),
+    y: Math.floor(bounds.y - workPadding),
+    w: Math.max(1, Math.ceil(bounds.w + workPadding * 2)),
+    h: Math.max(1, Math.ceil(bounds.h + workPadding * 2)),
+  };
+  return { support, care, work };
+}
+
 export function featherSelection(doc: Document, radius: number) {
-  if (!doc.selection || radius <= 0) return;
-  const src = doc.selection.mask;
-  const blurred = newCanvas(src.width, src.height);
-  const bctx = blurred.getContext("2d")!;
-  bctx.filter = `blur(${radius}px)`;
-  bctx.drawImage(src, 0, 0);
-  bctx.filter = "none";
-  doc.selection = { mask: blurred, bounds: boundsOf(blurred) };
+  if (!doc.selection || radius <= 0 || !Number.isFinite(radius)) return;
+  const mask = doc.selection.mask;
+  const currentBounds = doc.selection.bounds;
+  if (currentBounds.w <= 0 || currentBounds.h <= 0) return;
+  const { care, work } = planFeatherSelection(
+    currentBounds,
+    mask.width,
+    mask.height,
+    radius,
+  );
+  const source = newCanvas(work.w, work.h);
+  const sourceContext = source.getContext("2d")!;
+  const sourceX = Math.max(0, work.x);
+  const sourceY = Math.max(0, work.y);
+  const sourceRight = Math.min(mask.width, work.x + work.w);
+  const sourceBottom = Math.min(mask.height, work.y + work.h);
+  const sourceWidth = Math.max(0, sourceRight - sourceX);
+  const sourceHeight = Math.max(0, sourceBottom - sourceY);
+  if (sourceWidth > 0 && sourceHeight > 0) {
+    sourceContext.drawImage(
+      mask,
+      sourceX,
+      sourceY,
+      sourceWidth,
+      sourceHeight,
+      sourceX - work.x,
+      sourceY - work.y,
+      sourceWidth,
+      sourceHeight,
+    );
+  }
+
+  const blurred = newCanvas(work.w, work.h);
+  const blurredContext = blurred.getContext("2d")!;
+  blurredContext.filter = `blur(${radius}px)`;
+  blurredContext.drawImage(source, 0, 0);
+  blurredContext.filter = "none";
+  const localCareX = care.x - work.x;
+  const localCareY = care.y - work.y;
+  const image = blurredContext.getImageData(localCareX, localCareY, care.w, care.h);
+  mask.getContext("2d")!.putImageData(image, care.x, care.y);
+
+  let minX = care.x + care.w;
+  let minY = care.y + care.h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < care.h; y += 1) for (let x = 0; x < care.w; x += 1) {
+    if (image.data[(y * care.w + x) * 4 + 3] === 0) continue;
+    const documentX = care.x + x;
+    const documentY = care.y + y;
+    minX = Math.min(minX, documentX);
+    minY = Math.min(minY, documentY);
+    maxX = Math.max(maxX, documentX);
+    maxY = Math.max(maxY, documentY);
+  }
+  doc.selection = {
+    mask,
+    bounds: maxX < 0
+      ? { x: 0, y: 0, w: 0, h: 0 }
+      : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+  };
 }
 
 function boxPass(source: Uint8ClampedArray, width: number, height: number, radius: number, horizontal: boolean) {
@@ -330,20 +429,77 @@ export function refineSelectionAlpha(
 export function refineSelection(doc: Document, params: RefineSelectionParams) {
   if (!doc.selection) return false;
   const mask = doc.selection.mask;
+  const currentBounds = doc.selection.bounds;
+  if (currentBounds.w <= 0 || currentBounds.h <= 0) return true;
+
+  const requestedShiftRadius = Math.min(16, Math.round(Math.abs(params.shiftEdge) / 6.25));
+  const requestedSmoothRadius = Math.min(32, Math.round(params.smooth));
+  const shiftRadius = Number.isFinite(requestedShiftRadius) ? Math.max(0, requestedShiftRadius) : 0;
+  const smoothRadius = Number.isFinite(requestedSmoothRadius) ? Math.max(0, requestedSmoothRadius) : 0;
+  // Grow and smoothing can create non-zero alpha outside the current bounds.
+  // Contraction cannot, though a following smooth pass can spread its result.
+  const supportExpansion = (params.shiftEdge > 0 ? shiftRadius : 0) + smoothRadius;
+  const dependencyRadius = shiftRadius + smoothRadius;
+  const care = expandSelectionRegion(
+    currentBounds,
+    supportExpansion,
+    mask.width,
+    mask.height,
+  );
+  // The refinement kernels need source context outside the area that can
+  // become non-zero. Keeping a complete dependency halo makes this cropped
+  // run byte-identical to running the same passes over the whole mask.
+  const work = expandSelectionRegion(
+    care,
+    dependencyRadius,
+    mask.width,
+    mask.height,
+  );
   const context = mask.getContext("2d")!;
-  const image = context.getImageData(0, 0, mask.width, mask.height);
-  const alpha = new Uint8ClampedArray(mask.width * mask.height);
+  const image = context.getImageData(work.x, work.y, work.w, work.h);
+  const alpha = new Uint8ClampedArray(work.w * work.h);
   for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
-  const refined = refineSelectionAlpha(alpha, mask.width, mask.height, params);
-  for (let pixel = 0; pixel < refined.length; pixel += 1) {
-    const offset = pixel * 4;
-    image.data[offset] = 255;
-    image.data[offset + 1] = 255;
-    image.data[offset + 2] = 255;
-    image.data[offset + 3] = refined[pixel];
+  const refined = refineSelectionAlpha(alpha, work.w, work.h, params);
+  const localCareX = care.x - work.x;
+  const localCareY = care.y - work.y;
+  let minX = care.x + care.w;
+  let minY = care.y + care.h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < care.h; y += 1) {
+    for (let x = 0; x < care.w; x += 1) {
+      const pixel = (localCareY + y) * work.w + localCareX + x;
+      const offset = pixel * 4;
+      const value = refined[pixel];
+      image.data[offset] = 255;
+      image.data[offset + 1] = 255;
+      image.data[offset + 2] = 255;
+      image.data[offset + 3] = value;
+      if (value > 0) {
+        const documentX = care.x + x;
+        const documentY = care.y + y;
+        if (documentX < minX) minX = documentX;
+        if (documentY < minY) minY = documentY;
+        if (documentX > maxX) maxX = documentX;
+        if (documentY > maxY) maxY = documentY;
+      }
+    }
   }
-  context.putImageData(image, 0, 0);
-  doc.selection = { mask, bounds: boundsOf(mask) };
+  context.putImageData(
+    image,
+    work.x,
+    work.y,
+    localCareX,
+    localCareY,
+    care.w,
+    care.h,
+  );
+  doc.selection = {
+    mask,
+    bounds: maxX < 0
+      ? { x: 0, y: 0, w: 0, h: 0 }
+      : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
+  };
   return true;
 }
 

@@ -48,7 +48,7 @@ export type ColorProfileCapabilities = {
   };
 };
 
-export type IccLut3D = {
+export type IccClassicLut3D = {
   readonly type: "mft1" | "mft2";
   readonly inputChannels: 3;
   readonly outputChannels: 3;
@@ -58,6 +58,27 @@ export type IccLut3D = {
   readonly clut: Float32Array;
   readonly outputTables: readonly [Float32Array, Float32Array, Float32Array];
 };
+
+export type IccMultiFunctionLut3D = {
+  readonly type: "mAB" | "mBA";
+  readonly inputChannels: 3;
+  readonly outputChannels: 3;
+  readonly gridPoints: number | null;
+  readonly aCurves: readonly [ToneCurve, ToneCurve, ToneCurve] | null;
+  readonly bCurves: readonly [ToneCurve, ToneCurve, ToneCurve];
+  readonly mCurves: readonly [ToneCurve, ToneCurve, ToneCurve] | null;
+  readonly matrix: null | {
+    readonly coefficients: ColorMatrix3;
+    readonly offset: ColorVector3;
+  };
+  readonly clut: null | {
+    readonly gridPoints: readonly [number, number, number];
+    readonly precision: 1 | 2;
+    readonly values: Float32Array;
+  };
+};
+
+export type IccLut3D = IccClassicLut3D | IccMultiFunctionLut3D;
 
 export type ColorProfile = {
   readonly id: string;
@@ -280,6 +301,7 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
     tags[signature] ??= { signature, type, offset, size };
   }
 
+  const deviceClassSignature = readSignature(bytes, 12);
   const colorSpaceSignature = readSignature(bytes, 16);
   const pcsSignature = readSignature(bytes, 20);
   const matrix = colorSpaceSignature === "RGB " && pcsSignature === "XYZ "
@@ -297,19 +319,32 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
   const curvesInvertible = trc?.every(isToneCurveInvertible) ?? false;
   if (trc && !curvesInvertible) warnings.push("At least one TRC is not monotonically invertible.");
 
-  const hasLut = ["A2B0", "A2B1", "A2B2", "B2A0", "B2A1", "B2A2", "D2B0", "B2D0"]
+  const multiProcessSignatures = [
+    "D2B0", "D2B1", "D2B2", "D2B3", "B2D0", "B2D1", "B2D2", "B2D3",
+  ] as const;
+  const hasMultiProcess = multiProcessSignatures.some((signature) => tags[signature]);
+  const hasLut = [
+    "A2B0", "A2B1", "A2B2", "B2A0", "B2A1", "B2A2",
+    ...multiProcessSignatures,
+  ]
     .some((signature) => tags[signature]);
-  const lutToPcs = pcsSignature === "XYZ "
+  const isDeviceLink = deviceClassSignature === "link";
+  const lutToPcs = pcsSignature === "XYZ " && !isDeviceLink
     ? parseIntentLuts(view, tags, "A2B", warnings)
     : {};
-  const lutFromPcs = pcsSignature === "XYZ "
+  const lutFromPcs = pcsSignature === "XYZ " && !isDeviceLink
     ? parseIntentLuts(view, tags, "B2A", warnings)
     : {};
   const hasParsedLut = Object.keys(lutToPcs).length > 0 || Object.keys(lutFromPcs).length > 0;
-  const hasMatrixTransform = Boolean(matrix && matrixFromPcs && trc && curvesInvertible);
+  const hasMatrixTransform = !isDeviceLink && Boolean(matrix && matrixFromPcs && trc && curvesInvertible);
   const unsupportedModel: "unsupported-lut" | "metadata-only" = hasLut ? "unsupported-lut" : "metadata-only";
+  if (hasMultiProcess) {
+    warnings.push("Float DToB/BToD multi-process elements are not evaluated; ICC fallback precedence uses supported AToB/BToA or matrix/TRC data when present.");
+  }
   if (hasLut && !hasParsedLut && !hasMatrixTransform) {
-    warnings.push("No supported classic RGB-to-XYZ LUT transform could be decoded; multi-process profiles still require a full ICC CMM.");
+    warnings.push(isDeviceLink
+      ? "Device-link transforms connect two device encodings directly and cannot be treated as PCS transforms."
+      : "No supported three-channel RGB-to-XYZ LUT transform could be decoded; unsupported profiles still require a full ICC CMM.");
   }
 
   const headerProfileId = Array.from(bytes.subarray(84, 100), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -330,9 +365,9 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
     source: "icc",
     description,
     version: `${major}.${minor}.${bugfix}`,
-    deviceClass: signatureName(readSignature(bytes, 12)),
+    deviceClass: signatureName(deviceClassSignature),
     colorSpace: signatureName(colorSpaceSignature),
-    connectionSpace: connectionSpaceName(pcsSignature),
+    connectionSpace: isDeviceLink ? "unknown" : connectionSpaceName(pcsSignature),
     matrixToPcs: hasMatrixTransform ? matrix : null,
     matrixFromPcs: hasMatrixTransform ? matrixFromPcs : null,
     trc: hasMatrixTransform ? trc : null,
@@ -349,7 +384,7 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
       ? lutCapabilities(lutToPcs, lutFromPcs, hasMatrixTransform)
       : hasMatrixTransform
         ? matrixTrcCapabilities()
-      : unsupportedCapabilities(unsupportedModel, colorSpaceSignature, pcsSignature, hasLut),
+      : unsupportedCapabilities(unsupportedModel, deviceClassSignature, colorSpaceSignature, pcsSignature, hasLut),
   };
 }
 
@@ -376,13 +411,30 @@ function parseIntentLuts(
   for (const [intent, signature] of Object.entries(LUT_INTENT_TAGS[direction])) {
     const tag = tags[signature];
     if (!tag) continue;
-    const lut = parseClassicLut(view, tag, warnings);
+    const lut = parseLutTransform(view, tag, direction, warnings);
     if (lut) result[intent as RenderingIntent] = lut;
   }
   return result;
 }
 
-function parseClassicLut(view: DataView, tag: IccTagInfo, warnings: string[]): IccLut3D | null {
+function parseLutTransform(
+  view: DataView,
+  tag: IccTagInfo,
+  direction: keyof typeof LUT_INTENT_TAGS,
+  warnings: string[],
+): IccLut3D | null {
+  if (tag.type === "mAB " || tag.type === "mBA ") {
+    const expected = direction === "A2B" ? "mAB " : "mBA ";
+    if (tag.type !== expected) {
+      warnings.push(`LUT tag ${tag.signature} uses ${tag.type.trim()} but ${direction} requires ${expected.trim()}.`);
+      return null;
+    }
+    return parseMultiFunctionLut(view, tag, warnings);
+  }
+  return parseClassicLut(view, tag, warnings);
+}
+
+function parseClassicLut(view: DataView, tag: IccTagInfo, warnings: string[]): IccClassicLut3D | null {
   if (tag.type !== "mft1" && tag.type !== "mft2") {
     warnings.push(`LUT tag ${tag.signature} uses unsupported type ${tag.type}.`);
     return null;
@@ -440,6 +492,191 @@ function parseClassicLut(view: DataView, tag: IccTagInfo, warnings: string[]): I
     clut,
     outputTables,
   };
+}
+
+function parseMultiFunctionLut(
+  view: DataView,
+  tag: IccTagInfo,
+  warnings: string[],
+): IccMultiFunctionLut3D | null {
+  if (tag.size < 32) {
+    warnings.push(`LUT tag ${tag.signature} is shorter than its v4 multi-function header.`);
+    return null;
+  }
+  const inputChannels = view.getUint8(tag.offset + 8);
+  const outputChannels = view.getUint8(tag.offset + 9);
+  if (inputChannels !== 3 || outputChannels !== 3) {
+    warnings.push(`LUT tag ${tag.signature} uses ${inputChannels}→${outputChannels} channels; the lightweight evaluator supports only 3→3 pipelines.`);
+    return null;
+  }
+  const relativeOffsets = {
+    b: view.getUint32(tag.offset + 12, false),
+    matrix: view.getUint32(tag.offset + 16, false),
+    m: view.getUint32(tag.offset + 20, false),
+    clut: view.getUint32(tag.offset + 24, false),
+    a: view.getUint32(tag.offset + 28, false),
+  };
+  for (const [name, offset] of Object.entries(relativeOffsets)) {
+    if (offset !== 0 && (offset < 32 || offset % 4 !== 0 || offset >= tag.size)) {
+      warnings.push(`LUT tag ${tag.signature} has an invalid ${name} element offset.`);
+      return null;
+    }
+  }
+
+  const aCurves = relativeOffsets.a
+    ? parseEmbeddedCurveSet(view, tag, relativeOffsets.a, 3, "A", warnings)
+    : null;
+  const bCurves = relativeOffsets.b
+    ? parseEmbeddedCurveSet(view, tag, relativeOffsets.b, 3, "B", warnings)
+    : null;
+  const mCurves = relativeOffsets.m
+    ? parseEmbeddedCurveSet(view, tag, relativeOffsets.m, 3, "M", warnings)
+    : null;
+  const matrix = relativeOffsets.matrix
+    ? parseMultiFunctionMatrix(view, tag, relativeOffsets.matrix, warnings)
+    : null;
+  const clut = relativeOffsets.clut
+    ? parseMultiFunctionClut(view, tag, relativeOffsets.clut, warnings)
+    : null;
+  if (!relativeOffsets.b) {
+    warnings.push(`LUT tag ${tag.signature} omits the required B curve set.`);
+    return null;
+  }
+  if ((relativeOffsets.a && !aCurves) || !bCurves || (relativeOffsets.m && !mCurves)
+    || (relativeOffsets.matrix && !matrix) || (relativeOffsets.clut && !clut)) return null;
+
+  const hasA = Boolean(aCurves);
+  const hasM = Boolean(mCurves);
+  const hasMatrix = Boolean(matrix);
+  const hasClut = Boolean(clut);
+  const validCombination = (
+    (!hasA && !hasClut && !hasM && !hasMatrix)
+    || (!hasA && !hasClut && hasM && hasMatrix)
+    || (hasA && hasClut && !hasM && !hasMatrix)
+    || (hasA && hasClut && hasM && hasMatrix)
+  );
+  if (!validCombination) {
+    warnings.push(`LUT tag ${tag.signature} uses a processing-element combination forbidden by ICC.1.`);
+    return null;
+  }
+  return {
+    type: tag.type === "mAB " ? "mAB" : "mBA",
+    inputChannels: 3,
+    outputChannels: 3,
+    gridPoints: clut ? Math.max(...clut.gridPoints) : null,
+    aCurves,
+    bCurves,
+    mCurves,
+    matrix,
+    clut,
+  };
+}
+
+function parseEmbeddedCurveSet(
+  view: DataView,
+  tag: IccTagInfo,
+  relativeOffset: number,
+  count: number,
+  label: string,
+  warnings: string[],
+): readonly [ToneCurve, ToneCurve, ToneCurve] | null {
+  const curves: ToneCurve[] = [];
+  let offset = tag.offset + relativeOffset;
+  const end = tag.offset + tag.size;
+  for (let index = 0; index < count; index += 1) {
+    if (offset + 12 > end) {
+      warnings.push(`LUT tag ${tag.signature} has a truncated ${label} curve set.`);
+      return null;
+    }
+    const type = readViewSignature(view, offset);
+    let size: number;
+    if (type === "curv") {
+      const entries = view.getUint32(offset + 8, false);
+      if (entries > 1_048_576) {
+        warnings.push(`LUT tag ${tag.signature} has an oversized embedded curve.`);
+        return null;
+      }
+      size = 12 + entries * 2;
+    } else if (type === "para") {
+      const functionType = view.getUint16(offset + 8, false);
+      if (functionType > 4) {
+        warnings.push(`LUT tag ${tag.signature} has an unsupported embedded parametric curve.`);
+        return null;
+      }
+      size = 12 + CURVE_PARAMETER_COUNTS[functionType] * 4;
+    } else {
+      warnings.push(`LUT tag ${tag.signature} ${label} curve ${index + 1} uses unsupported type ${type}.`);
+      return null;
+    }
+    if (size > end - offset) {
+      warnings.push(`LUT tag ${tag.signature} has a truncated ${label} curve set.`);
+      return null;
+    }
+    const curve = parseToneCurveTag(view, {
+      signature: `${label}${index + 1}`,
+      type,
+      offset,
+      size,
+    }, warnings);
+    if (!curve) return null;
+    curves.push(curve);
+    offset = (offset + size + 3) & ~3;
+  }
+  return curves as [ToneCurve, ToneCurve, ToneCurve];
+}
+
+function parseMultiFunctionMatrix(
+  view: DataView,
+  tag: IccTagInfo,
+  relativeOffset: number,
+  warnings: string[],
+) {
+  const offset = tag.offset + relativeOffset;
+  if (offset + 48 > tag.offset + tag.size) {
+    warnings.push(`LUT tag ${tag.signature} has a truncated 3×4 matrix.`);
+    return null;
+  }
+  const values = Array.from({ length: 12 }, (_, index) => readS15Fixed16(view, offset + index * 4));
+  return {
+    coefficients: values.slice(0, 9) as unknown as ColorMatrix3,
+    offset: values.slice(9, 12) as [number, number, number],
+  };
+}
+
+function parseMultiFunctionClut(
+  view: DataView,
+  tag: IccTagInfo,
+  relativeOffset: number,
+  warnings: string[],
+) {
+  const offset = tag.offset + relativeOffset;
+  const end = tag.offset + tag.size;
+  if (offset + 20 > end) {
+    warnings.push(`LUT tag ${tag.signature} has a truncated CLUT header.`);
+    return null;
+  }
+  const gridPoints = [view.getUint8(offset), view.getUint8(offset + 1), view.getUint8(offset + 2)] as const;
+  if (gridPoints.some((points) => points < 2)) {
+    warnings.push(`LUT tag ${tag.signature} CLUT dimensions require at least two grid points.`);
+    return null;
+  }
+  const precision = view.getUint8(offset + 16);
+  if (precision !== 1 && precision !== 2) {
+    warnings.push(`LUT tag ${tag.signature} CLUT precision must be one or two bytes.`);
+    return null;
+  }
+  const entries = gridPoints[0] * gridPoints[1] * gridPoints[2] * 3;
+  if (entries > 20_000_000 || offset + 20 + entries * precision > end) {
+    warnings.push(`LUT tag ${tag.signature} CLUT is truncated or exceeds the safe table limit.`);
+    return null;
+  }
+  const values = new Float32Array(entries);
+  for (let index = 0; index < entries; index += 1) {
+    values[index] = precision === 1
+      ? view.getUint8(offset + 20 + index) / 255
+      : view.getUint16(offset + 20 + index * 2, false) / 65535;
+  }
+  return { gridPoints, precision: precision as 1 | 2, values };
 }
 
 function parseRgbMatrix(view: DataView, tags: Readonly<Record<string, IccTagInfo>>): ColorMatrix3 | null {
@@ -591,12 +828,15 @@ function lutCapabilities(
 
 function unsupportedCapabilities(
   model: "unsupported-lut" | "metadata-only",
+  deviceClass: string,
   colorSpace: string,
   pcs: string,
   hasLut: boolean,
 ): ColorProfileCapabilities {
-  const reason = hasLut
-    ? "This profile requires ICC LUT or multi-process element evaluation, which is not implemented by the native matrix/TRC engine."
+  const reason = deviceClass === "link"
+    ? "Device-link profiles transform directly between two device encodings and cannot be inserted as a PCS source or destination profile."
+    : hasLut
+    ? "This profile requires an ICC LUT or multi-process model outside the lightweight ICC evaluator's supported subset."
     : `Only invertible RGB-to-XYZ matrix/TRC profiles are transformable; profile uses ${signatureName(colorSpace)} to ${signatureName(pcs)}.`;
   return {
     model,
@@ -616,6 +856,15 @@ function intentFromNumber(value: number): RenderingIntent {
 
 function readSignature(bytes: Uint8Array, offset: number) {
   return ascii(bytes.subarray(offset, offset + 4));
+}
+
+function readViewSignature(view: DataView, offset: number) {
+  return String.fromCharCode(
+    view.getUint8(offset),
+    view.getUint8(offset + 1),
+    view.getUint8(offset + 2),
+    view.getUint8(offset + 3),
+  );
 }
 
 function signatureName(signature: string) {
@@ -638,14 +887,64 @@ function readS15Fixed16(view: DataView, offset: number) {
 
 export const ICC_XYZ_LUT_SCALE = 65535 / 32768;
 
-/** Evaluates a decoded classic ICC LUT in normalized table coordinates. */
+/** Evaluates a decoded ICC LUT in normalized table coordinates. */
 export function evaluateIccLut(lut: IccLut3D, input: ColorVector3): [number, number, number] {
-  const tabled = input.map((value, channel) => sampleTable(lut.inputTables[channel], value)) as [number, number, number];
-  const transformed = multiplyMatrixVector(lut.matrix, tabled).map(clampUnit) as [number, number, number];
-  const grid = lut.gridPoints;
-  const positions = transformed.map((value) => value * (grid - 1));
-  const lower = positions.map((value) => Math.min(grid - 1, Math.floor(value)));
-  const upper = lower.map((value) => Math.min(grid - 1, value + 1));
+  if (lut.type === "mAB" || lut.type === "mBA") return evaluateMultiFunctionLut(lut, input);
+  const classic = lut as IccClassicLut3D;
+  // ICC.1 lut8Type/lut16Type processing order is matrix, input tables, CLUT, output tables.
+  const transformed = multiplyMatrixVector(classic.matrix, input).map(clampUnit) as [number, number, number];
+  const tabled = transformed.map((value, channel) => sampleTable(classic.inputTables[channel], value)) as [number, number, number];
+  const clutValue = sampleClut3D(
+    classic.clut,
+    [classic.gridPoints, classic.gridPoints, classic.gridPoints],
+    tabled,
+  );
+  return clutValue.map((value, channel) => sampleTable(classic.outputTables[channel], value)) as [number, number, number];
+}
+
+function evaluateMultiFunctionLut(
+  lut: IccMultiFunctionLut3D,
+  input: ColorVector3,
+): [number, number, number] {
+  let value = input.map(clampUnit) as [number, number, number];
+  if (lut.type === "mAB") {
+    if (lut.aCurves) value = applyCurveSet(lut.aCurves, value);
+    if (lut.clut) value = sampleClut3D(lut.clut.values, lut.clut.gridPoints, value);
+    if (lut.mCurves) value = applyCurveSet(lut.mCurves, value);
+    if (lut.matrix) value = applyMultiFunctionMatrix(lut.matrix, value);
+    return applyCurveSet(lut.bCurves, value);
+  }
+  value = applyCurveSet(lut.bCurves, value);
+  if (lut.matrix) value = applyMultiFunctionMatrix(lut.matrix, value);
+  if (lut.mCurves) value = applyCurveSet(lut.mCurves, value);
+  if (lut.clut) value = sampleClut3D(lut.clut.values, lut.clut.gridPoints, value);
+  if (lut.aCurves) value = applyCurveSet(lut.aCurves, value);
+  return value;
+}
+
+function applyCurveSet(
+  curves: readonly [ToneCurve, ToneCurve, ToneCurve],
+  input: ColorVector3,
+): [number, number, number] {
+  return input.map((value, channel) => clampUnit(evaluateToneCurve(curves[channel], clampUnit(value)))) as [number, number, number];
+}
+
+function applyMultiFunctionMatrix(
+  matrix: NonNullable<IccMultiFunctionLut3D["matrix"]>,
+  input: ColorVector3,
+): [number, number, number] {
+  const transformed = multiplyMatrixVector(matrix.coefficients, input);
+  return transformed.map((value, channel) => clampUnit(value + matrix.offset[channel])) as [number, number, number];
+}
+
+function sampleClut3D(
+  clut: Float32Array,
+  gridPoints: readonly [number, number, number],
+  input: ColorVector3,
+): [number, number, number] {
+  const positions = input.map((value, channel) => clampUnit(value) * (gridPoints[channel] - 1));
+  const lower = positions.map((value, channel) => Math.min(gridPoints[channel] - 1, Math.floor(value)));
+  const upper = lower.map((value, channel) => Math.min(gridPoints[channel] - 1, value + 1));
   const fractions = positions.map((value, channel) => value - lower[channel]);
   const clutValue = [0, 0, 0];
   for (let redSide = 0; redSide <= 1; redSide += 1) {
@@ -657,12 +956,12 @@ export function evaluateIccLut(lut: IccLut3D, input: ColorVector3): [number, num
       for (let blueSide = 0; blueSide <= 1; blueSide += 1) {
         const blue = blueSide ? upper[2] : lower[2];
         const weight = redWeight * greenWeight * (blueSide ? fractions[2] : 1 - fractions[2]);
-        const offset = ((red * grid + green) * grid + blue) * 3;
-        for (let channel = 0; channel < 3; channel += 1) clutValue[channel] += lut.clut[offset + channel] * weight;
+        const offset = ((red * gridPoints[1] + green) * gridPoints[2] + blue) * 3;
+        for (let channel = 0; channel < 3; channel += 1) clutValue[channel] += clut[offset + channel] * weight;
       }
     }
   }
-  return clutValue.map((value, channel) => sampleTable(lut.outputTables[channel], value)) as [number, number, number];
+  return clutValue as [number, number, number];
 }
 
 function sampleTable(table: Float32Array, value: number) {

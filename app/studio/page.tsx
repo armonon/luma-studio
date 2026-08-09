@@ -2843,7 +2843,7 @@ export default function SpatialStudio() {
                   {engineState?.virtualCanvas.truncated ? " · bounded plan" : ""}
                 </small>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  Dirty renderer · {engineState?.viewportPerformance.latestRenderedTiles ?? 0}/{engineState?.viewportPerformance.latestTotalTiles ?? 0} screen tiles · p95 {Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms · GPU cache {formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}
+                  Dirty renderer · {engineState?.viewportPerformance.latestRenderedTiles ?? 0}/{engineState?.viewportPerformance.latestTotalTiles ?? 0} screen tiles · p95 {Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms · adaptive preview {Math.round((engineState?.adaptivePreview.scale ?? 1) * 100)}% · GPU cache {formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}
                 </small>
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Photoshop bridge · {engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.preserved ?? 0} preserved features · {engineState?.photoshop.warnings ?? 0} compatibility notes

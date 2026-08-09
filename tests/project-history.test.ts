@@ -215,12 +215,28 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
       before: beforePatch as unknown as ImageData,
       after: afterPatch as unknown as ImageData,
     }],
+    selectionTranslation: {
+      sourceX: 1,
+      sourceY: 1,
+      source: beforePatch as unknown as ImageData,
+      deltaX: 1,
+      deltaY: -1,
+      beforeBounds: { x: 1, y: 1, w: 2, h: 2 },
+      afterBounds: { x: 2, y: 0, w: 2, h: 2 },
+    },
+    surfacePatches: [{
+      layerId: layer.id,
+      key: "0:0",
+      before: Uint8Array.from([1, 2, 3]),
+      after: Uint8Array.from([4, 5, 6]),
+      updateBitmap: false,
+    }],
   });
   layer.opacity = 0.8;
 
   const blob = await encodeLumaProject(doc, [], "History fixture", graph.snapshot());
   const encodedZip = await JSZip.loadAsync(await blob.arrayBuffer());
-  assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/precision/") && !path.endsWith("/")).length, 1);
+  assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/precision/") && !path.endsWith("/")).length, 3);
   assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/raw/") && !path.endsWith("/")).length, 1);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
@@ -267,6 +283,12 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   const coolPayload = decoded.history!.lineage().at(-1)!.value!;
   assert.equal(coolPayload.pixelPatches?.[0].before.data[0], 3);
   assert.equal(coolPayload.pixelPatches?.[0].after.data[0], 211);
+  assert.equal(coolPayload.selectionTranslation?.source?.data[0], 3);
+  assert.deepEqual(coolPayload.selectionTranslation?.beforeBounds, { x: 1, y: 1, w: 2, h: 2 });
+  assert.deepEqual(coolPayload.selectionTranslation?.afterBounds, { x: 2, y: 0, w: 2, h: 2 });
+  assert.deepEqual(Array.from(coolPayload.surfacePatches?.[0].before ?? []), [1, 2, 3]);
+  assert.deepEqual(Array.from(coolPayload.surfacePatches?.[0].after ?? []), [4, 5, 6]);
+  assert.equal(coolPayload.surfacePatches?.[0].updateBitmap, false);
 });
 
 test("legacy v1 projects remain readable and receive safe generated ids", async () => {

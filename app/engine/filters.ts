@@ -4,7 +4,61 @@ import {
   SmartFilter,
   inverseAffineForLayerTransform,
   newCanvas,
+  transformPoint,
 } from "./document";
+
+export type FilterRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+function snapNearInteger(value: number) {
+  const integer = Math.round(value);
+  return Math.abs(value - integer) < 1e-9 ? integer : value;
+}
+
+/**
+ * Return the smallest layer-pixel rectangle needed to filter the current
+ * document selection. `padding` is the filter's influence radius (for
+ * example, the combined box radii used to approximate a Gaussian).
+ *
+ * Selection bounds live in document space, while bitmap pixels live in layer
+ * space. Mapping all four corners through the inverse affine transform keeps
+ * rotated, translated, and non-uniformly scaled layers correct. The result is
+ * clipped before any canvas or ImageData allocation is made.
+ */
+export function filterRegionForSelection(
+  doc: Document,
+  layer: Layer,
+  padding = 0,
+): FilterRegion | null {
+  if (!layer.bitmap) return null;
+  const width = layer.bitmap.width;
+  const height = layer.bitmap.height;
+  if (!doc.selection) return { x: 0, y: 0, width, height };
+  const bounds = doc.selection.bounds;
+  if (bounds.w <= 0 || bounds.h <= 0) return null;
+  const inverse = inverseAffineForLayerTransform(layer.transform);
+  if (!inverse) return null;
+  const corners = [
+    transformPoint(inverse, bounds.x, bounds.y),
+    transformPoint(inverse, bounds.x + bounds.w, bounds.y),
+    transformPoint(inverse, bounds.x, bounds.y + bounds.h),
+    transformPoint(inverse, bounds.x + bounds.w, bounds.y + bounds.h),
+  ];
+  const influence = Math.max(0, Math.ceil(padding));
+  // Trigonometric transforms such as an exact quarter-turn commonly land at
+  // 20.000000000000004. Snap only floating-point noise before rounding so it
+  // does not create an unnecessary extra row or column.
+  const minX = Math.max(0, Math.floor(snapNearInteger(Math.min(...corners.map((point) => point.x))) - influence));
+  const minY = Math.max(0, Math.floor(snapNearInteger(Math.min(...corners.map((point) => point.y))) - influence));
+  const maxX = Math.min(width, Math.ceil(snapNearInteger(Math.max(...corners.map((point) => point.x))) + influence));
+  const maxY = Math.min(height, Math.ceil(snapNearInteger(Math.max(...corners.map((point) => point.y))) + influence));
+  if (maxX <= minX || maxY <= minY) return null;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
 
 // Apply an ImageData transform to `layer.bitmap`, constrained to `doc.selection`
 // (if present). Returns nothing; mutates the layer's bitmap.
@@ -12,23 +66,33 @@ function applyPixelFilter(
   doc: Document,
   layer: Layer,
   transform: (src: ImageData) => ImageData,
+  influenceRadius = 0,
 ) {
   if (!layer.bitmap) return;
   const src = layer.bitmap.getContext("2d")!;
-  const w = layer.bitmap.width;
-  const h = layer.bitmap.height;
-  const input = src.getImageData(0, 0, w, h);
+  const region = filterRegionForSelection(doc, layer, influenceRadius);
+  if (!region) return;
+  const input = src.getImageData(region.x, region.y, region.width, region.height);
   const output = transform(input);
 
   if (doc.selection) {
-    // Blend the filtered pixels into the source by selection alpha.
-    const localSelection = newCanvas(w, h);
+    // Blend the filtered pixels into the source by selection alpha. This
+    // temporary canvas is selection-bounded rather than layer-sized: on a
+    // 50K document a 256px selection no longer creates another 10GB bitmap.
+    const localSelection = newCanvas(region.width, region.height);
     const localSelectionContext = localSelection.getContext("2d")!;
     const inverse = inverseAffineForLayerTransform(layer.transform);
     if (!inverse) return;
-    localSelectionContext.setTransform(inverse.a, inverse.b, inverse.c, inverse.d, inverse.e, inverse.f);
+    localSelectionContext.setTransform(
+      inverse.a,
+      inverse.b,
+      inverse.c,
+      inverse.d,
+      inverse.e - region.x,
+      inverse.f - region.y,
+    );
     localSelectionContext.drawImage(doc.selection.mask, 0, 0);
-    const selData = localSelectionContext.getImageData(0, 0, w, h).data;
+    const selData = localSelectionContext.getImageData(0, 0, region.width, region.height).data;
     const outData = output.data;
     const srcData = input.data;
     for (let i = 0; i < srcData.length; i += 4) {
@@ -39,9 +103,9 @@ function applyPixelFilter(
       srcData[i + 2] = srcData[i + 2] * inv + outData[i + 2] * a;
       srcData[i + 3] = Math.max(srcData[i + 3], outData[i + 3] * a);
     }
-    src.putImageData(input, 0, 0);
+    src.putImageData(input, region.x, region.y);
   } else {
-    src.putImageData(output, 0, 0);
+    src.putImageData(output, region.x, region.y);
   }
 }
 
@@ -49,7 +113,11 @@ function applyPixelFilter(
 // approximation) — cheap and visually indistinguishable at typical radii.
 export function gaussianBlur(doc: Document, layer: Layer, radius: number) {
   if (radius <= 0) return;
-  applyPixelFilter(doc, layer, (src) => boxBlur3(src, radius));
+  applyPixelFilter(doc, layer, (src) => boxBlur3(src, radius), gaussianInfluenceRadius(radius));
+}
+
+function gaussianInfluenceRadius(radius: number) {
+  return boxRadiiForGaussian(radius, 3).reduce((sum, value) => sum + value, 0);
 }
 
 function boxBlur3(src: ImageData, r: number): ImageData {
@@ -152,22 +220,20 @@ export function unsharpMask(
   amount: number,
 ) {
   if (!layer.bitmap) return;
-  const w = layer.bitmap.width;
-  const h = layer.bitmap.height;
-  const ctx = layer.bitmap.getContext("2d")!;
-  const src = ctx.getImageData(0, 0, w, h);
-  const blur = boxBlur3(new ImageData(new Uint8ClampedArray(src.data), w, h), radius);
-  const out = new ImageData(new Uint8ClampedArray(src.data.length), w, h);
-  const sd = src.data;
-  const bd = blur.data;
-  const od = out.data;
-  for (let i = 0; i < sd.length; i += 4) {
-    od[i] = clamp(sd[i] + amount * (sd[i] - bd[i]));
-    od[i + 1] = clamp(sd[i + 1] + amount * (sd[i + 1] - bd[i + 1]));
-    od[i + 2] = clamp(sd[i + 2] + amount * (sd[i + 2] - bd[i + 2]));
-    od[i + 3] = sd[i + 3];
-  }
-  applyPixelFilter(doc, layer, () => out);
+  applyPixelFilter(doc, layer, (src) => {
+    const blur = boxBlur3(new ImageData(new Uint8ClampedArray(src.data), src.width, src.height), radius);
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    const sd = src.data;
+    const bd = blur.data;
+    const od = out.data;
+    for (let i = 0; i < sd.length; i += 4) {
+      od[i] = clamp(sd[i] + amount * (sd[i] - bd[i]));
+      od[i + 1] = clamp(sd[i + 1] + amount * (sd[i + 1] - bd[i + 1]));
+      od[i + 2] = clamp(sd[i + 2] + amount * (sd[i + 2] - bd[i + 2]));
+      od[i + 3] = sd[i + 3];
+    }
+    return out;
+  }, gaussianInfluenceRadius(radius));
 }
 
 export function invertColors(doc: Document, layer: Layer) {
@@ -185,15 +251,17 @@ export function invertColors(doc: Document, layer: Layer) {
 
 export function hueRotate(doc: Document, layer: Layer, degrees: number) {
   if (!layer.bitmap) return;
-  const w = layer.bitmap.width;
-  const h = layer.bitmap.height;
-  // Cheap route: use canvas filter to render into a temp, then re-read.
-  const tmp = newCanvas(w, h);
-  const t = tmp.getContext("2d")!;
-  t.filter = `hue-rotate(${degrees}deg)`;
-  t.drawImage(layer.bitmap, 0, 0);
-  const shifted = t.getImageData(0, 0, w, h);
-  applyPixelFilter(doc, layer, () => shifted);
+  applyPixelFilter(doc, layer, (src) => {
+    // Use the canvas implementation for color conversion, but only allocate
+    // the bounded source region selected by applyPixelFilter.
+    const input = newCanvas(src.width, src.height);
+    input.getContext("2d")!.putImageData(src, 0, 0);
+    const shifted = newCanvas(src.width, src.height);
+    const context = shifted.getContext("2d")!;
+    context.filter = `hue-rotate(${degrees}deg)`;
+    context.drawImage(input, 0, 0);
+    return context.getImageData(0, 0, src.width, src.height);
+  });
 }
 
 export function desaturate(doc: Document, layer: Layer, amount = 1) {

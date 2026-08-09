@@ -245,3 +245,13 @@ test("group opacity multiplies with child opacity", () => {
     "0.5 group x 0.5 child",
   );
 });
+
+test("nested isolated groups retain independent reusable buffers", () => {
+  const outer = group("outer", { opacity: 0.5 });
+  const inner = group("inner", { opacity: 0.5, parentId: outer.id });
+  check(
+    compose([outer, inner, child(inner.id, "blue", "#0000ff"), raster("red", "#ff0000")]),
+    { r: 191, g: 0, b: 64 },
+    "0.5 outer group x 0.5 inner group",
+  );
+});

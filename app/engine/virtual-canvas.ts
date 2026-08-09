@@ -96,6 +96,7 @@ export class VirtualCanvasPyramid {
   readonly height: number;
   readonly tileSize: number;
   readonly maxLevel: number;
+  private readonly levelCache: Array<PyramidLevel | undefined>;
 
   constructor(width: number, height: number, tileSize = 256, maxLevel?: number) {
     assertFiniteInteger(width, "width", 1);
@@ -112,16 +113,29 @@ export class VirtualCanvasPyramid {
       assertFiniteInteger(maxLevel, "maxLevel", 0, 52);
       this.maxLevel = maxLevel;
     }
+    this.levelCache = new Array(this.maxLevel + 1);
   }
 
   level(level: number): PyramidLevel {
     this.assertLevel(level);
+    const cached = this.levelCache[level];
+    if (cached) return cached;
     const scale = 2 ** level;
     const width = Math.max(1, Math.ceil(this.width / scale));
     const height = Math.max(1, Math.ceil(this.height / scale));
     const columns = Math.ceil(width / this.tileSize);
     const rows = Math.ceil(height / this.tileSize);
-    return { level, scale, width, height, columns, rows, totalTiles: columns * rows };
+    const descriptor = Object.freeze({
+      level,
+      scale,
+      width,
+      height,
+      columns,
+      rows,
+      totalTiles: columns * rows,
+    });
+    this.levelCache[level] = descriptor;
+    return descriptor;
   }
 
   key(level: number, column: number, row: number): VirtualTileKey {
@@ -136,8 +150,7 @@ export class VirtualCanvasPyramid {
   }
 
   address(level: number, column: number, row: number): VirtualTileAddress {
-    this.assertCoordinates(level, column, row);
-    const descriptor = this.level(level);
+    const descriptor = this.assertCoordinates(level, column, row);
     const x = column * this.tileSize;
     const y = row * this.tileSize;
     const levelRect = {
@@ -265,12 +278,12 @@ export class VirtualCanvasPyramid {
   }
 
   private assertCoordinates(level: number, column: number, row: number) {
-    this.assertLevel(level);
     const descriptor = this.level(level);
     if (!Number.isSafeInteger(column) || !Number.isSafeInteger(row) ||
         column < 0 || row < 0 || column >= descriptor.columns || row >= descriptor.rows) {
       throw new Error(`Virtual tile coordinates out of bounds: ${level}/${column}/${row}`);
     }
+    return descriptor;
   }
 }
 
@@ -402,20 +415,27 @@ export class PyramidDirtyTracker {
     this.revision += 1;
     let touched = 0;
     const broadLevels: number[] = [];
+    const broadLevelSet = new Set<number>();
     for (let level = 0; level <= this.pyramid.maxLevel; level += 1) {
       const range = this.pyramid.tileRangeIntersecting(level, expanded);
       if (!range) continue;
       if (range.totalTiles > this.maxTrackedTilesPerLevel) {
         this.wholeLevelRevisions.set(level, this.revision);
         broadLevels.push(level);
-        for (const entry of this.dirty.values()) {
-          if (entry.address.level === level) this.dirty.delete(entry.key);
-        }
+        broadLevelSet.add(level);
         continue;
       }
       for (const address of this.pyramid.tilesIntersecting(level, expanded)) {
         this.dirty.set(address.key, { key: address.key, address, revision: this.revision });
         touched += 1;
+      }
+    }
+    if (broadLevelSet.size) {
+      // Sweep once even when many pyramid levels switch to generation-based
+      // invalidation. The previous implementation rescanned the full map once
+      // per broad level.
+      for (const entry of this.dirty.values()) {
+        if (broadLevelSet.has(entry.address.level)) this.dirty.delete(entry.key);
       }
     }
     return { revision: this.revision, touched, broadLevels };
@@ -437,10 +457,12 @@ export class PyramidDirtyTracker {
 
   peek(level?: number) {
     if (level !== undefined) this.pyramid.level(level);
-    return [...this.dirty.values()]
-      .filter((entry) => level === undefined || entry.address.level === level)
-      .sort((a, b) => a.address.level - b.address.level ||
-        a.address.row - b.address.row || a.address.column - b.address.column);
+    const result: DirtyPyramidTile[] = [];
+    for (const entry of this.dirty.values()) {
+      if (level === undefined || entry.address.level === level) result.push(entry);
+    }
+    return result.sort((a, b) => a.address.level - b.address.level ||
+      a.address.row - b.address.row || a.address.column - b.address.column);
   }
 
   drain(level?: number) {

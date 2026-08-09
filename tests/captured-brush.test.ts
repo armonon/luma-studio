@@ -9,6 +9,7 @@ import {
   type RgbaSurface,
 } from "../app/engine/brush.ts";
 import { Studio } from "../app/engine/studio.ts";
+import { PrecisionTileSurface } from "../app/engine/tile-store.ts";
 import { pixelAt, testCanvas } from "./canvas-harness.ts";
 
 function rgbaSurface(width = 24, height = 24): RgbaSurface {
@@ -125,6 +126,26 @@ test("Studio creates circular, bounded document brush assets and reusable tips",
   assert.equal(tip.workingData?.length, tip.data.length);
   assert.equal(studio.removeCapturedBrush(asset.id), true);
   assert.equal(studio.capturedBrushTip(asset.id), null);
+  studio.dispose();
+});
+
+test("document brush capture renders only the sampled region for merged and layer sources", () => {
+  const studio = new Studio(64, 64, testCanvas(64, 64));
+  const layer = studio.addBlankRaster("Sample source");
+  const context = layer.bitmap!.getContext("2d")!;
+  context.fillStyle = "#ed294f";
+  context.fillRect(20, 20, 16, 16);
+  layer.surface = PrecisionTileSurface.fromImageData(context.getImageData(0, 0, 64, 64));
+
+  const isolated = studio.captureBrushFromDocument(28, 28, 4, { sourceLayerId: layer.id, name: "Layer sample" });
+  assert.ok(isolated);
+  assert.equal(isolated.bitmap.width, 8);
+  assert.ok(pixelAt(isolated.bitmap, 4, 4).r > 220);
+
+  const merged = studio.captureBrushFromDocument(28, 28, 4, { name: "Merged sample" });
+  assert.ok(merged);
+  assert.equal(merged.bitmap.width, 8);
+  assert.ok(pixelAt(merged.bitmap, 4, 4).r > 220);
   studio.dispose();
 });
 

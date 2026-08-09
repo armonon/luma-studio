@@ -32,7 +32,7 @@ export type ColorTransformMetadata = {
   readonly sourceProfileId: string;
   readonly destinationProfileId: string;
   readonly requestedIntent: RenderingIntent;
-  readonly effectiveIntent: RenderingIntent;
+  readonly effectiveIntent: RenderingIntent | "mixed";
   readonly intentFallback: null | string;
   readonly blackPointCompensation: "disabled" | "heuristic";
   readonly extendedRange: "linear-extrapolated" | "clamped";
@@ -88,15 +88,26 @@ export function createColorTransform(
   const absolute = requestedIntent === "absolute-colorimetric";
   const sourceLut = selectIntentLut(source.lutToPcs, requestedIntent, Boolean(source.matrixToPcs && source.trc));
   const destinationLut = selectIntentLut(destination.lutFromPcs, requestedIntent, Boolean(destination.matrixFromPcs && destination.trc));
-  const nativeRequestedIntent = sourceLut.intent === requestedIntent || destinationLut.intent === requestedIntent;
-  const effectiveIntent: RenderingIntent = absolute
+  const sourceNativeIntent = requestedIntent === "relative-colorimetric"
+    ? sourceLut.intent === "relative-colorimetric" || !sourceLut.lut
+    : sourceLut.intent === requestedIntent;
+  const destinationNativeIntent = requestedIntent === "relative-colorimetric"
+    ? destinationLut.intent === "relative-colorimetric" || !destinationLut.lut
+    : destinationLut.intent === requestedIntent;
+  const nativeRequestedIntent = sourceNativeIntent && destinationNativeIntent;
+  const effectiveIntent: RenderingIntent | "mixed" = absolute
     ? "absolute-colorimetric"
     : nativeRequestedIntent
       ? requestedIntent
+      : sourceNativeIntent || destinationNativeIntent
+        ? "mixed"
       : "relative-colorimetric";
   const fallbackReasons: string[] = [];
   if ((requestedIntent === "perceptual" || requestedIntent === "saturation") && !nativeRequestedIntent) {
-    fallbackReasons.push(`Matrix/TRC profiles do not contain ${requestedIntent} gamut mapping and no native LUT was available; media-relative colorimetric processing was used.`);
+    const missing = !sourceNativeIntent && !destinationNativeIntent
+      ? "source and destination profiles"
+      : !sourceNativeIntent ? "source profile" : "destination profile";
+    fallbackReasons.push(`The ${missing} lacked native ${requestedIntent} tables; those stages used media-relative colorimetric processing.`);
   }
   if (sourceLut.lut && sourceLut.intent !== (absolute ? "relative-colorimetric" : requestedIntent)) {
     fallbackReasons.push(`The source profile used its ${sourceLut.intent} table.`);

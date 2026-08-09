@@ -32,7 +32,11 @@ type Scratch = {
   contentBuf: HTMLCanvasElement;
   effectBuf: HTMLCanvasElement;
   clipBuf: HTMLCanvasElement;
+  /** Reused by nesting depth; sibling groups never need distinct buffers. */
+  groupBufs: HTMLCanvasElement[];
 };
+
+type PreparedLayers = Map<string | undefined, Layer[]>;
 
 type RenderFrame = {
   x: number;
@@ -43,16 +47,92 @@ type RenderFrame = {
   outputHeight: number;
 };
 
-function scratch(width: number, height: number, cache: Scratch | null): Scratch {
-  if (cache && cache.a.width === width && cache.a.height === height) return cache;
-  return {
+type ScratchCacheEntry = {
+  buffers: Scratch;
+  bytes: number;
+  used: number;
+};
+
+const scratchCache = new Map<string, ScratchCacheEntry>();
+const MAX_SCRATCH_CACHE_ENTRIES = 6;
+const MAX_SCRATCH_CACHE_BYTES = 32 * 1024 * 1024;
+let scratchCacheBytes = 0;
+let scratchCacheClock = 0;
+
+function trimScratchCache(protectedKey: string) {
+  while ((scratchCache.size > MAX_SCRATCH_CACHE_ENTRIES || scratchCacheBytes > MAX_SCRATCH_CACHE_BYTES) &&
+    scratchCache.size > 1) {
+    let oldestKey = "";
+    let oldestUse = Infinity;
+    for (const [candidate, entry] of scratchCache) {
+      if (candidate === protectedKey || entry.used >= oldestUse) continue;
+      oldestKey = candidate;
+      oldestUse = entry.used;
+    }
+    if (!oldestKey) break;
+    scratchCacheBytes -= scratchCache.get(oldestKey)!.bytes;
+    scratchCache.delete(oldestKey);
+  }
+  const protectedEntry = scratchCache.get(protectedKey);
+  if (protectedEntry && protectedEntry.bytes > MAX_SCRATCH_CACHE_BYTES) {
+    // The active render still owns the buffers, but an oversized full-document
+    // scratch set must not remain retained by the cache after the frame.
+    scratchCacheBytes -= protectedEntry.bytes;
+    scratchCache.delete(protectedKey);
+  }
+}
+
+function scratch(width: number, height: number): Scratch {
+  const key = `${width}:${height}`;
+  const hit = scratchCache.get(key);
+  if (hit) {
+    hit.used = ++scratchCacheClock;
+    return hit.buffers;
+  }
+  const buffers = {
     a: newCanvas(width, height),
     b: newCanvas(width, height),
     layerBuf: newCanvas(width, height),
     contentBuf: newCanvas(width, height),
     effectBuf: newCanvas(width, height),
     clipBuf: newCanvas(width, height),
+    groupBufs: [],
   };
+  const bytes = width * height * 4 * 6;
+  scratchCache.set(key, { buffers, bytes, used: ++scratchCacheClock });
+  scratchCacheBytes += bytes;
+  trimScratchCache(key);
+  return buffers;
+}
+
+function groupBuffer(s: Scratch, depth: number, width: number, height: number) {
+  let canvas = s.groupBufs[depth];
+  if (!canvas) {
+    canvas = newCanvas(width, height);
+    s.groupBufs[depth] = canvas;
+    const key = `${width}:${height}`;
+    const entry = scratchCache.get(key);
+    if (entry) {
+      const bytes = width * height * 4;
+      entry.bytes += bytes;
+      scratchCacheBytes += bytes;
+      trimScratchCache(key);
+    }
+  }
+  clearContext(canvas.getContext("2d")!, width, height);
+  return canvas;
+}
+
+function prepareLayers(doc: Document): PreparedLayers {
+  const knownGroups = new Set(doc.layers.filter((layer) => layer.kind === "group").map((layer) => layer.id));
+  const prepared: PreparedLayers = new Map();
+  for (const layer of doc.layers) {
+    const parentId = layer.parentId && knownGroups.has(layer.parentId) ? layer.parentId : undefined;
+    const siblings = prepared.get(parentId);
+    if (siblings) siblings.push(layer);
+    else prepared.set(parentId, [layer]);
+  }
+  return prepared;
 }
 
 function clearContext(ctx: CanvasRenderingContext2D, width: number, height: number) {
@@ -131,7 +211,6 @@ function clamp255(x: number) {
   return x < 0 ? 0 : x > 255 ? 255 : x;
 }
 
-let cachedScratch: Scratch | null = null;
 let antsOffset = 0;
 
 export type RenderOptions = {
@@ -230,9 +309,11 @@ export function viewportTileKeysForDirtyRegions(
   return keys;
 }
 
-type ViewportCacheEntry = { canvas: HTMLCanvasElement; used: number };
-const viewportCaches = new WeakMap<Document, Map<string, ViewportCacheEntry>>();
+type ViewportCacheEntry = { canvas: HTMLCanvasElement; used: number; bytes: number };
+type ViewportCacheState = { tiles: Map<string, ViewportCacheEntry>; bytes: number };
+const viewportCaches = new WeakMap<Document, ViewportCacheState>();
 const MAX_VIEWPORT_CACHE_TILES = 96;
+const MAX_VIEWPORT_CACHE_BYTES = 32 * 1024 * 1024;
 let viewportCacheClock = 0;
 let viewportCacheHits = 0;
 let viewportCacheMisses = 0;
@@ -256,13 +337,15 @@ function viewportTile(
   doc: Document,
   frame: RenderFrame,
   options: RenderOptions,
+  preparedLayers: () => PreparedLayers,
 ) {
-  if (options.cacheRevision === undefined) return renderCompositeRegion(doc, frame, options);
-  let cache = viewportCaches.get(doc);
-  if (!cache) {
-    cache = new Map();
-    viewportCaches.set(doc, cache);
+  if (options.cacheRevision === undefined) return renderCompositeRegion(doc, frame, options, preparedLayers());
+  let state = viewportCaches.get(doc);
+  if (!state) {
+    state = { tiles: new Map(), bytes: 0 };
+    viewportCaches.set(doc, state);
   }
+  const cache = state.tiles;
   const key = viewportCacheKey(frame, options);
   viewportCacheClock += 1;
   const hit = cache.get(key);
@@ -272,11 +355,13 @@ function viewportTile(
     return hit.canvas;
   }
   viewportCacheMisses += 1;
-  const rendered = renderCompositeRegion(doc, frame, options);
+  const rendered = renderCompositeRegion(doc, frame, options, preparedLayers());
   const canvas = newCanvas(frame.outputWidth, frame.outputHeight);
   canvas.getContext("2d")!.drawImage(rendered, 0, 0);
-  cache.set(key, { canvas, used: viewportCacheClock });
-  if (cache.size > MAX_VIEWPORT_CACHE_TILES) {
+  const bytes = frame.outputWidth * frame.outputHeight * 4;
+  cache.set(key, { canvas, used: viewportCacheClock, bytes });
+  state.bytes += bytes;
+  while ((cache.size > MAX_VIEWPORT_CACHE_TILES || state.bytes > MAX_VIEWPORT_CACHE_BYTES) && cache.size > 1) {
     let oldestKey = "";
     let oldestUse = Infinity;
     for (const [candidate, entry] of cache) {
@@ -285,9 +370,10 @@ function viewportTile(
       oldestUse = entry.used;
     }
     if (oldestKey) {
+      state.bytes -= cache.get(oldestKey)!.bytes;
       cache.delete(oldestKey);
       viewportCacheEvictions += 1;
-    }
+    } else break;
   }
   return canvas;
 }
@@ -298,15 +384,24 @@ export function viewportRenderCacheStats() {
     misses: viewportCacheMisses,
     evictions: viewportCacheEvictions,
     maxTilesPerDocument: MAX_VIEWPORT_CACHE_TILES,
+    maxBytesPerDocument: MAX_VIEWPORT_CACHE_BYTES,
+    scratchCacheEntries: scratchCache.size,
+    scratchCacheBytes,
+    maxScratchCacheBytes: MAX_SCRATCH_CACHE_BYTES,
   };
 }
 
-function renderCompositeRegion(doc: Document, frame: RenderFrame, options: RenderOptions) {
-  const s = (cachedScratch = scratch(frame.outputWidth, frame.outputHeight, cachedScratch));
+function renderCompositeRegion(
+  doc: Document,
+  frame: RenderFrame,
+  options: RenderOptions,
+  preparedLayers = prepareLayers(doc),
+) {
+  const s = scratch(frame.outputWidth, frame.outputHeight);
   const composite = s.a.getContext("2d")!;
   clearContext(composite, frame.outputWidth, frame.outputHeight);
 
-  renderLayerSequence(composite, s, doc, frame, undefined);
+  renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
 
   if (options.proofing ?? true) applySoftProof(composite, doc, frame.outputWidth, frame.outputHeight);
   applyChannelView(composite, frame.outputWidth, frame.outputHeight, options.channelView ?? "rgb");
@@ -337,23 +432,21 @@ function renderLayerSequence(
   s: Scratch,
   doc: Document,
   frame: RenderFrame,
+  preparedLayers: PreparedLayers,
   parentId: string | undefined,
+  groupDepth: number,
 ) {
-  const knownGroups = new Set(doc.layers.filter((layer) => layer.kind === "group").map((layer) => layer.id));
-  const siblings = doc.layers.filter((layer) => {
-    const resolvedParent = layer.parentId && knownGroups.has(layer.parentId) ? layer.parentId : undefined;
-    return resolvedParent === parentId;
-  });
+  const siblings = preparedLayers.get(parentId) ?? [];
   for (let i = siblings.length - 1; i >= 0; i--) {
     const layer = siblings[i];
     if (!layer.visible || layer.opacity <= 0) continue;
     if (layer.kind === "group") {
       if (groupIsPassThrough(layer)) {
-        renderLayerSequence(composite, s, doc, frame, layer.id);
+        renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth);
       } else {
-        const groupCanvas = newCanvas(frame.outputWidth, frame.outputHeight);
+        const groupCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const groupContext = groupCanvas.getContext("2d")!;
-        renderLayerSequence(groupContext, s, doc, frame, layer.id);
+        renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1);
         if (layer.mask) {
           groupContext.globalCompositeOperation = "destination-in";
           drawProjectedCanvas(groupContext, layer.mask, frame);
@@ -434,6 +527,10 @@ export function renderViewport(
   if (target.height !== viewport.outputHeight) target.height = viewport.outputHeight;
   const out = getDisplayCtx(target)!;
   const fullFrame: RenderFrame = viewport;
+  let preparedLayers: PreparedLayers | null = null;
+  // Resolve lazily so a frame served entirely from the tile cache never walks
+  // the layer hierarchy. Misses still share one prepared hierarchy per frame.
+  const getPreparedLayers = () => (preparedLayers ??= prepareLayers(doc));
 
   const tilePixels = DEFAULT_TILE_SIZE;
   const overscan = renderOverscanPixels(doc, viewport.zoom);
@@ -482,7 +579,7 @@ export function renderViewport(
         outputWidth: expandedWidth,
         outputHeight: expandedHeight,
       };
-      const composite = viewportTile(doc, frame, options);
+      const composite = viewportTile(doc, frame, options, getPreparedLayers);
       out.drawImage(
         composite,
         left - expandedLeft,
