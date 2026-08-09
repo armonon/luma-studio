@@ -15,7 +15,7 @@ test("the public surface exports its documented pillars", () => {
     // editions
     "currentEdition", "hasCapability", "isAvailable", "proOnlyCapabilities",
     // compositing
-    "blendRgb", "renderViewport", "renderGL", "isGLSupported",
+    "blendRgb", "renderViewport", "renderGL", "isGLSupported", "compositeNativeTile", "isNativeCoreAvailable",
     // selection
     "selectRect", "selectAll", "deselect", "invertSelection",
     // history
@@ -54,8 +54,8 @@ test("edition gating is reachable from the entry point", () => {
   assert.equal(engine.currentEdition({}), "web");
   assert.equal(engine.hasCapability("pro", "filesystem-access"), true);
   assert.equal(engine.hasCapability("web", "filesystem-access"), false);
-  // Planned work must not read as usable through the public API either.
-  assert.equal(engine.isAvailable("pro", "filesystem-access"), false);
+  assert.equal(engine.isAvailable("pro", "filesystem-access"), true);
+  assert.equal(engine.isAvailable("web", "filesystem-access"), false);
 });
 
 test("blend math is exported and matches the catalogue", () => {

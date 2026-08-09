@@ -1,297 +1,197 @@
-# vinext-starter
+# Luma Studio
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Luma Studio is a local-first, nondestructive image editor for the web and a
+packaged Tauri desktop edition. The TypeScript editing engine is shared between
+both editions; the desktop app adds native filesystem dialogs and a threaded
+Rust `f32` compositor.
 
-## Prerequisites
+The product deliberately reports what it can do today. Planned native RAW,
+streaming large-document editing, and disk-installed plugins stay unavailable
+until their full user-facing paths ship.
 
-- Node.js `>=22.13.0`
+## What is implemented
 
-## Quick Start
+- Raster, text, shape, path, group, adjustment, and smart-object layers.
+- All 27 Photoshop layer blend modes, per-pass opacity, multiple blend passes
+  per layer, fill opacity, Blend If, clipping masks, layer masks, and effects.
+- Nondestructive levels, curves, HSL, tone, editable smart filters, soft proof,
+  gamut warnings, 8/16/32-bit precision masters, sRGB, Display P3, and linear
+  sRGB working spaces.
+- Pressure/tilt-aware brushes, symmetry, paint, erase, mixer, clone, healing,
+  removal, dodge/burn, blur/sharpen, smudge, sponge, gradients, and patterns.
+- Marquee, lasso, polygonal, magnetic, color, quick, text-mask, and local
+  semantic selections with feather, smooth, contrast, and edge shifting.
+- Editable text, paragraph and vertical type, cubic-Bezier path type, pen/direct
+  selection, shapes, perspective tools, crop, straighten, and transforms.
+- DNG sensor decode for uncompressed and lossless-JPEG CFA data, retained sensor
+  bytes, repeatable white balance/exposure/highlight development, and `f32`
+  precision tiles. Other camera RAW formats use an explicitly labelled embedded
+  preview when one exists.
+- PSD/PSB preflight, untouched-source byte passthrough, 16-bit source promotion,
+  editable adjustment/text/vector metadata, smart-object payload preservation,
+  resolution/guides/effects preservation, and explicit warnings for conversions.
+- Branching version history, bounded recovery, multi-document tabs, actions,
+  batch ZIP export, PNG/JPEG/WebP export, and `.luma` project round trips.
+- Local segmentation/matting models plus authenticated GPT Image 2 masked edits,
+  bounded parallel variations, provenance metadata, cancellation, validation,
+  per-user concurrency limits, and rate limits.
+
+## Run and verify
+
+Requires Node.js `>=22.13.0`.
 
 ```bash
 npm install
 npm run dev
-npm run build
+npm test
+npx tsc --noEmit
 ```
 
-This starter does not use `wrangler.jsonc`.
+Useful commands:
 
-## Included Shape
+- `npm run build` builds the hosted web edition.
+- `npm run desktop:build` builds the static desktop frontend.
+- `npm run pro:dev` starts the Tauri desktop development build.
+- `npm run pro:build` produces signed-platform-ready desktop bundles.
+- `cd src-tauri && cargo test` verifies the Rust compositor and IPC protocol.
+- `npm run lint` runs the repository lint rules.
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+Generative editing requires `OPENAI_API_KEY` on the hosted server. The endpoint
+also requires a Sign in with ChatGPT identity and never exposes the API key to
+the browser. `AI_IMAGE_MODEL` can pin a deployment-specific model; the default
+is `gpt-image-2`.
 
-## Workspace Auth Headers
+## Architecture
 
-OpenAI workspace sites can read the current user's email from
-`oai-authenticated-user-email`.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```text
+app/studio/page.tsx        professional editing UI
+        │
+        ▼
+app/engine/               shared document, rendering, color, RAW, PSD, history
+        │
+        ├── web build      Canvas/WebGL, browser files, hosted AI endpoint
+        │
+        └── desktop build  static Vite entry + Tauri IPC
+                                  │
+                                  ▼
+                          crates/luma-core (Rust f32 + Rayon)
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+The document remains editable in the shared engine. Raster masters can live in
+sparse half/float tiles while canvas bitmaps act as display and compatibility
+mirrors. Eligible desktop flattened exports send bounded raw binary tiles to
+`luma-core`; unsupported document constructs safely fall back to the shared
+compositor.
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+The native bridge uses a validated binary protocol instead of serializing
+millions of floats through JSON. Native file commands cap file size, sanitize
+suggested names, and use operating-system Open/Save dialogs for `.luma`, PSD,
+PSB, raster, RAW, and export files.
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+## Editions and honest gating
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+| Capability | Web | Desktop Pro | Status |
+|---|---:|---:|---|
+| Browser/local picker | Yes | Yes | Shipped |
+| Native Open/Save dialogs | No | Yes | Shipped |
+| RGBA16F GPU export | Yes | Yes | Shipped |
+| On-device models | Yes | Yes | Shipped |
+| Threaded native `f32` flattened export | No | Eligible documents | Shipped |
+| DNG sensor development | Yes | Yes | Shipped |
+| Non-DNG sensor decode | No | No | Planned |
+| Streaming documents beyond canvas limits | No | No | Planned |
+| Install plugins from disk | No | No | Planned |
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+`app/engine/edition.ts` separates permission from implementation:
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+- `hasCapability(edition, capability)` answers whether an edition may expose it.
+- `isAvailable(edition, capability)` is true only when that capability is also
+  marked `shipped`.
 
-## Useful Commands
+User interfaces must gate on `isAvailable`; tests pin this behavior.
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+## Photoshop interchange policy
 
-## Learn More
+Luma does not silently call lossy conversion “compatible.” The Document panel
+contains a live Photoshop preflight for the selected PSD/PSB output mode.
 
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+- An untouched imported PSD/PSB can be returned byte-for-byte.
+- Original Photoshop resources and unsupported descriptors are retained where
+  possible for round trips.
+- Edited 16/32-bit or wide-gamut projects currently export through an 8-bit RGB
+  compatibility mirror and show a warning before export.
+- Luma smart-filter results remain visible, but are not translated to native
+  Photoshop smart-filter descriptors.
+- Multi-pass Luma blending expands to ordered Photoshop layers.
 
-## Scripting surface
+Those last two items, full high-depth PSD writing, CMYK/Lab editing, a complete
+LUT-based ICC engine, artboards, and parity with Photoshop's entire plugin
+ecosystem remain real gaps. They are not advertised as complete.
 
-Luma exposes a scripting hook on `window.luma` for automating the editor from
-the devtools console. It is an **internal tool, not a third-party extension
-point**: `activate(studio)` receives the whole `Studio`, with no capability
-scoping or sandboxing. Only run scripts you trust.
+## Desktop packaging
 
-Because it grants full document access plus `export()`, it is enabled in
-development builds only. To turn it on in a production build:
+The desktop build has a dedicated static entry in `desktop/`; Tauri serves
+`dist-desktop` with bundling enabled. The content-security policy allows only
+the local app, Tauri IPC/assets, development localhost, and the configured Luma
+host. System dialogs come from the official Tauri dialog plugin.
+
+```bash
+npm run desktop:build
+cd src-tauri && cargo test
+npm run pro:build
+```
+
+`pro:build` can take several minutes because it compiles the Rust release binary
+and platform installer. Signing and notarization credentials remain a release
+operations concern and are not committed to the repository.
+
+## Scripting and plugins
+
+Development builds expose `window.luma` for trusted automation. It is an
+internal, unsandboxed surface, not a third-party security boundary. Production
+users must explicitly opt in:
 
 ```js
-localStorage.setItem("luma.scripting", "on"); // then reload
+localStorage.setItem("luma.scripting", "on");
+location.reload();
 ```
 
-### Example
+Examples:
 
 ```js
-luma.version;                 // "0.3" — the API version
-luma.layers();                // Layer[]
-luma.active();                // the selected layer, or null
-luma.engine();                // renderer / memory / plugin telemetry
+luma.version;
+luma.layers();
+luma.active();
+luma.engine();
 await luma.export("image/png");
-```
 
-### Plugins
-
-```js
 luma.registerPlugin({
   id: "auto-contrast",
   name: "Auto Contrast",
   version: "1.0.0",
-  apiVersion: "0.3",          // checked against LUMA_API_VERSION
+  apiVersion: "0.3",
   activate(studio) {
-    const layer = studio.doc.layers[0];
-    if (layer) studio.addLevelsLayer();
-    return () => { /* optional teardown */ };
+    studio.addLevelsLayer();
+    return () => {};
   },
 });
 ```
 
-`registerPlugin` returns an unregister function. `apiVersion` is optional; when
-present it must match the running build's `LUMA_API_VERSION` on major.minor
-(pre-1.0, the minor is the breaking-change axis) or registration throws.
+Plugins are session-only, receive full document access, and must be registered
+again after reload. Import public APIs from `@/app/engine`; that entry point is
+the supported contract.
 
-A plugin's teardown is run defensively — a handler that throws is logged and
-skipped, and cannot abort Studio teardown or strand other plugins.
+## Quality bar
 
-### Limitations
+The test suite covers blend reference formulas, CPU/GPU catalog parity,
+compositing, groups, masks, brush determinism, transformed-coordinate editing,
+filters, retouching, selection refinement, color transforms, ICC parsing,
+proofing, DNG decoding/development, PSD/PSB preservation, project/history
+round trips, sparse tiles, virtual viewport planning, native IPC, file packets,
+AI validation/limits, and rendered routes.
 
-- Plugins are session-only. They are not persisted in `.luma` projects and must
-  be re-registered after reload.
-- There is no lifecycle hook for document switching. `switchDocument` swaps the
-  active document underneath a plugin; hold ids, not layer references.
-
-## Editions
-
-One engine, two products. Everything ships from `app/engine`, which is
-DOM-optional — document, history, selection, blend and plugin work run
-headlessly, and only rendering/export need a canvas.
-
-| | **web** | **pro** |
-|---|---|---|
-| Runs | Browser tab | Packaged desktop build |
-| Files | Picker only | Native filesystem *(planned)* |
-| Document size | Browser canvas ceiling (~64MP) | Larger *(planned)* |
-| RAW | DNG sensor decode; other RAW → embedded JPEG | Native RAW library *(planned)* |
-| GPU export | RGBA16F | RGBA16F |
-| On-device models | Yes | Yes |
-| Plugins | Scripting console | Install from disk *(planned)* |
-
-Select the edition at build time:
-
-```bash
-NEXT_PUBLIC_LUMA_EDITION=pro npm run build
-```
-
-### Gating features honestly
-
-`app/engine/edition.ts` separates two different questions, because conflating
-them is how products end up advertising things they cannot do:
-
-- `hasCapability(edition, cap)` — is this edition *permitted* to do it?
-- `isAvailable(edition, cap)` — is it permitted **and actually built**?
-
-UI must gate on `isAvailable`. Capabilities marked `planned` in
-`CAPABILITY_STATUS` return `false` from `isAvailable` in every edition, and a
-test enforces it. Promote a capability to `shipped` only when a user can
-really use it.
-
-### Public API
-
-Import from `@/app/engine`, never from individual modules — internals are free
-to move, the entry point is the contract:
-
-```ts
-import { Studio, currentEdition, isAvailable } from "@/app/engine";
-```
-
-`tests/engine-api.test.ts` pins that surface, including a headless undo/redo
-round-trip, so breaking the desktop edition fails CI.
-
-## Pro edition (desktop)
-
-The desktop build is a [Tauri](https://tauri.app) shell around the same
-`app/engine`. The Rust process owns only the window; all editing runs in the
-shared engine, so there is no second implementation to keep in sync.
-
-```bash
-npm run pro:dev      # desktop shell against the dev server
-npm run pro:build    # packaged build (see Packaging status below)
-```
-
-Both set `NEXT_PUBLIC_LUMA_EDITION=pro`, which is what flips the capability
-matrix in `app/engine/edition.ts`.
-
-### The pro edition is not the web build in a window
-
-The desktop edition exists because the browser engine is structurally capped,
-not because a native window is nicer. `app/engine` stores every layer as a
-`Uint8ClampedArray` behind an `HTMLCanvasElement`, composites on the main
-thread, and uses no workers and no SIMD. Wrapping that in Tauri inherits every
-one of those limits.
-
-`crates/luma-core` is the native imaging core that removes them:
-
-| | web engine | luma-core |
-|---|---|---|
-| Precision | 8-bit, clipped every stage | `f32`, unclamped at rest |
-| Threading | main thread only | rayon, all cores |
-| Blend space | gamma-encoded sRGB | sRGB or linear light |
-| Headroom | none | HDR values survive the pipeline |
-
-Measured on this machine (8 threads, 2048x1536, 8 layers, `cargo run --release
---example bench -- <mode>`):
-
-| blend mode | web engine | luma-core | speedup |
-|---|---|---|---|
-| `multiply` (native canvas operator) | 49 ms | 26 ms | 1.7x |
-| `subtract` (no native operator) | **5891 ms** | **25 ms** | **220x** |
-
-The gap is not uniform, and the reason matters. For `multiply` the browser
-hands off to Skia's optimised compositor, so the honest win is modest — and
-luma-core is doing 4x the precision work while achieving it. For `subtract`
-there is no native operator, so the web engine round-trips through
-`getImageData` and does the maths in JavaScript on one thread. **11 of the 27
-blend modes have no native operator**, which makes more than a third of the
-catalogue unusable at real resolutions in the browser.
-
-Blend maths is kept in lockstep between the two: `crates/luma-core/tests/
-parity.rs` asserts against the *same* hand-derived W3C reference values as
-`tests/blend-golden.test.ts`, so "one engine, two editions" is enforced rather
-than hoped for.
-
-**Status:** the core is a tested, benchmarked library and is linked into the
-desktop binary. It does **not** yet back the editing UI — that bridge is the
-next increment, and until it lands the desktop build still renders through the
-web path.
-
-### Why Tauri over Electron
-
-| | Tauri | Electron |
-|---|---|---|
-| Bundle | ~3–10 MB | ~120–150 MB |
-| Engine | OS webview (WebKit/WebView2) | Bundled Chromium |
-| Backend | Rust | Node |
-| Memory | Materially lower | Chromium per app |
-| Rendering | Varies by OS webview | Identical everywhere |
-
-Tauri wins on size and memory, which matters for a tool users install
-alongside a full creative suite. The real cost is that the OS webview is not
-Chromium — on macOS it is WebKit, so **WebGL2 float support and canvas
-`colorSpace` behaviour must be verified per platform**, not assumed. Both
-already have runtime fallbacks (`isGLSupported`, `getDisplayCtx`), so a
-missing capability degrades rather than breaks.
-
-Electron would be the right call if we needed guaranteed Chromium parity — a
-reasonable future reason to switch, not a reason to start there.
-
-### Packaging status
-
-`npm run pro:dev` works today: it points the webview at the dev server.
-
-Packaging is **not** finished, and the blocker is architectural rather than
-cosmetic. `npm run build` emits `dist/server` + `dist/client` for a Worker
-runtime — there is no static `index.html` for a webview to load. Three ways
-forward:
-
-1. **Static studio entry (recommended).** `/studio` is already `"use client"`,
-   so a small Vite entry can mount it and produce a real static bundle. Keeps
-   Tauri's size advantage.
-2. **Ship Node and run the server in-process.** Works, but bundles a runtime
-   and erases most of the size win.
-3. **Point at a hosted URL.** Not meaningfully a download.
-
-`bundle.active` is `false` in `src-tauri/tauri.conf.json` until (1) lands:
-without a `frontendDist`, a production build has no frontend to serve. The
-Rust shell itself compiles clean (`cd src-tauri && cargo check`), and the icon
-set in `src-tauri/icons/` is generated from `public/favicon.svg`.
+Before a release, run the web build, TypeScript check, full tests, desktop static
+build, Rust tests, and the platform Tauri bundle. Passing tests are necessary;
+large real-world PSD/RAW corpora, long-session memory profiling, color-chart
+validation, signed installers, and assistive-technology audits are still
+required before claiming Photoshop-level production parity.

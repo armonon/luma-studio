@@ -73,6 +73,7 @@ test("variation orchestration is ordered, bounded to two requests, and carries p
       headers: {
         "content-type": "image/png",
         "x-luma-provenance": `variation-${index}`,
+        "x-luma-model": "gpt-image-2",
         "x-openai-request-id": `request-${index}`,
       },
     });
@@ -90,6 +91,7 @@ test("variation orchestration is ordered, bounded to two requests, and carries p
   assert.deepEqual(results.map((result) => result.provenanceId), [
     "variation-0", "variation-1", "variation-2", "variation-3",
   ]);
+  assert.deepEqual(results.map((result) => result.model), Array(4).fill("gpt-image-2"));
 });
 
 test("AI and local semantic work can be cancelled before expensive work starts", async () => {

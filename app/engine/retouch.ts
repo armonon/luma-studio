@@ -48,6 +48,26 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
   if ((operation.mode === "clone" || operation.mode === "heal" || operation.mode === "patch") && !operation.sample) {
     throw new Error(`${operation.mode} retouch requires a source sampler`);
   }
+  const sampleLocal: RetouchSample = (documentX, documentY) => {
+    const localX = Math.max(0, Math.min(surface.width - 1, documentX - (surface.originX ?? 0) - 0.5));
+    const localY = Math.max(0, Math.min(surface.height - 1, documentY - (surface.originY ?? 0) - 0.5));
+    const x0 = Math.floor(localX);
+    const y0 = Math.floor(localY);
+    const x1 = Math.min(surface.width - 1, x0 + 1);
+    const y1 = Math.min(surface.height - 1, y0 + 1);
+    const fx = localX - x0;
+    const fy = localY - y0;
+    const result = [0, 0, 0, 0];
+    for (let channel = 0; channel < 4; channel += 1) {
+      const top = surface.data[(y0 * surface.width + x0) * 4 + channel] * (1 - fx)
+        + surface.data[(y0 * surface.width + x1) * 4 + channel] * fx;
+      const bottom = surface.data[(y1 * surface.width + x0) * 4 + channel] * (1 - fx)
+        + surface.data[(y1 * surface.width + x1) * 4 + channel] * fx;
+      result[channel] = top * (1 - fy) + bottom * fy;
+    }
+    return result as [number, number, number, number];
+  };
+  const sample = operation.sample ?? sampleLocal;
   const coverage = new Float32Array(surface.width * surface.height);
   for (const dab of operation.dabs) {
     const radius = dab.size / 2 + 1;
@@ -72,7 +92,6 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
   const strength = clamp01(operation.strength ?? 0.25);
   const brushColor = parseBrushColor(operation.params.color);
   const sampledAround = (x: number, y: number, radius: number) => {
-    const sample = operation.sample!;
     const points = [
       sample(x - radius, y), sample(x + radius, y), sample(x, y - radius), sample(x, y + radius),
       sample(x - radius * 0.7, y - radius * 0.7), sample(x + radius * 0.7, y - radius * 0.7),
@@ -103,7 +122,7 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
         ? destination.map((channel, index) => channel + (channel - average[index]) * (0.5 + strength))
         : average;
     } else if (operation.mode === "smudge" || operation.mode === "liquify") {
-      source = operation.sample!(
+      source = sample(
         x + (operation.sourceOffsetX ?? 0) * (operation.mode === "liquify" ? 1.5 : 1),
         y + (operation.sourceOffsetY ?? 0) * (operation.mode === "liquify" ? 1.5 : 1),
       );
@@ -113,7 +132,7 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
     } else if (operation.mode === "mixer") {
       source = [brushColor[0] / 255, brushColor[1] / 255, brushColor[2] / 255];
     } else {
-      const sampled = operation.sample!(
+      const sampled = sample(
         x + (operation.sourceOffsetX ?? 0),
         y + (operation.sourceOffsetY ?? 0),
       );
@@ -128,7 +147,7 @@ export function replayRetouch(surface: FloatRgbaSurface, operation: RetouchOpera
       surface.data[offset + channel] = destination[channel] * (1 - amount) + source[channel] * amount;
     }
     if (["clone", "heal", "patch", "spot-heal", "remove", "smudge", "liquify"].includes(operation.mode)) {
-      const sampledAlpha = operation.sample!(
+      const sampledAlpha = sample(
         x + (operation.sourceOffsetX ?? 0),
         y + (operation.sourceOffsetY ?? 0),
       )[3];

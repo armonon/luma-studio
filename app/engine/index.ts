@@ -66,6 +66,14 @@ export type { Capability, CapabilityStatus, LumaEdition } from "./edition";
 export { blendRgb, compositeBlendStack, isNeutralBlendIf } from "./blend";
 export { render, renderClean, renderViewport } from "./renderer";
 export { isGLSupported, renderGL } from "./gl-renderer";
+export {
+  compositeNativeTile,
+  encodeNativeTileRequest,
+  isNativeCoreAvailable,
+  nativeCoreInfo,
+} from "./native-core";
+export type { NativeTileLayer, NativeTileRequest } from "./native-core";
+export { isNativeFilesystemAvailable, openNativeFile, saveNativeFile } from "./native-files";
 
 // ---------- selection ----------
 export {

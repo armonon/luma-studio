@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFileSync } from "node:fs";
 import { BLEND_LABELS } from "../app/engine/document.ts";
 import { normalizeAiOperation } from "../app/engine/ai-edit.ts";
+import { HISTORY_LIMIT } from "../app/engine/studio.ts";
 
 // The marketing page makes concrete, checkable claims. When the engine changes
 // underneath them they become false silently, which is exactly how "10 creative
@@ -47,6 +48,14 @@ test("no fabricated timing benchmarks in showcase metrics", () => {
       `"${mode}" claims a timing benchmark (${metric}) with nothing measuring it`,
     );
   }
+});
+
+test("the performance section only advertises implementation-backed metrics", () => {
+  assert.match(page, new RegExp(`<strong>${Object.keys(BLEND_LABELS).length}</strong>[\\s\\S]*?verified blend modes`));
+  assert.match(page, /<strong>32<\/strong><span>-bit<\/span>[\s\S]*?float tile masters/);
+  assert.match(page, /<strong>2<\/strong>[\s\S]*?on-device semantic models/);
+  assert.match(page, new RegExp(`<strong>${HISTORY_LIMIT}</strong>[\\s\\S]*?bounded recovery nodes`));
+  assert.doesNotMatch(page, /Metal-first|120<\/strong><span>fps|16K<\/strong>|blocking autosave|∞<\/strong>/);
 });
 
 test("every advertised neural action is a real engine operation", () => {

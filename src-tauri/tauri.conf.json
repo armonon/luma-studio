@@ -6,9 +6,11 @@
   "build": {
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run desktop:build",
+    "frontendDist": "../dist-desktop"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Luma Studio",
@@ -20,11 +22,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://localhost:3000 ws://localhost:3000 https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": "all"
   }
 }

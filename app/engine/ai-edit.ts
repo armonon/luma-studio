@@ -311,6 +311,7 @@ export class AiEditHttpError extends Error {
 export type AiEditVariation = {
   index: number;
   image: Blob;
+  model?: string;
   provenanceId?: string;
   upstreamRequestId?: string;
 };
@@ -405,6 +406,7 @@ export async function runAiEditVariations(options: {
       const variation = {
         index,
         image: await response.blob(),
+        model: response.headers.get("x-luma-model") ?? undefined,
         provenanceId: response.headers.get("x-luma-provenance") ?? undefined,
         upstreamRequestId: response.headers.get("x-openai-request-id") ?? undefined,
       };

@@ -26,6 +26,9 @@ import {
   TextStyle,
   ToneParams,
   Transform,
+  documentPointToLayer,
+  inverseAffineForLayerTransform,
+  rotateLayerTransformAround,
   cloneCurves,
   createAdjustmentLayer,
   createCurvesLayer,
@@ -45,6 +48,7 @@ import {
   resolvedFillOpacity,
 } from "./document";
 import { isNeutralBlendIf } from "./blend";
+import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
 import {
   BrushParams,
   BrushPoint,
@@ -114,7 +118,7 @@ import {
 } from "./psd";
 import { OperationHistory } from "./operation-history";
 import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
-import { precisionPreviewCacheStats } from "./precision-renderer";
+import { drawLayerContentManaged, precisionPreviewCacheStats } from "./precision-renderer";
 import { displaySrgbToWorking } from "./color";
 import { replayRetouch, type RetouchMode } from "./retouch";
 import { IndexedDbTileBacking } from "./tile-backing";
@@ -861,22 +865,8 @@ export class Studio {
     const before = cloneDocument(this.doc);
     const centerX = this.doc.width / 2;
     const centerY = this.doc.height / 2;
-    const cosine = Math.cos(angleRadians);
-    const sine = Math.sin(angleRadians);
     for (const layer of this.doc.layers) {
-      const t = layer.transform;
-      const layerCenterX = t.tx + this.doc.width * t.sx / 2;
-      const layerCenterY = t.ty + this.doc.height * t.sy / 2;
-      const dx = layerCenterX - centerX;
-      const dy = layerCenterY - centerY;
-      const rotatedCenterX = centerX + dx * cosine - dy * sine;
-      const rotatedCenterY = centerY + dx * sine + dy * cosine;
-      layer.transform = {
-        ...t,
-        rotation: t.rotation + angleRadians,
-        tx: rotatedCenterX - this.doc.width * t.sx / 2,
-        ty: rotatedCenterY - this.doc.height * t.sy / 2,
-      };
+      layer.transform = rotateLayerTransformAround(layer.transform, angleRadians, centerX, centerY);
     }
     const after = cloneDocument(this.doc);
     this.commit({ label: "Straighten image", before: [], after: [], documentBefore: before, documentAfter: after });
@@ -884,11 +874,20 @@ export class Studio {
     return true;
   }
 
-  sampleLayerColor(layerId: string, x: number, y: number) {
+  sampleLayerColor(layerId: string, x: number, y: number, sampleMerged = false) {
+    if (sampleMerged) {
+      if (x < 0 || y < 0 || x >= this.doc.width || y >= this.doc.height) return null;
+      const composite = this.flatten();
+      return rgbaToHex(composite.getContext("2d")!.getImageData(Math.floor(x), Math.floor(y), 1, 1).data);
+    }
     const layer = this.findLayer(layerId);
     if (!layer?.bitmap) return null;
-    const px = Math.max(0, Math.min(layer.bitmap.width - 1, Math.round(x)));
-    const py = Math.max(0, Math.min(layer.bitmap.height - 1, Math.round(y)));
+    const local = documentPointToLayer(layer.transform, x, y);
+    if (!local || local.x < 0 || local.y < 0 || local.x >= layer.bitmap.width || local.y >= layer.bitmap.height) {
+      return null;
+    }
+    const px = Math.floor(local.x);
+    const py = Math.floor(local.y);
     return rgbaToHex(layer.bitmap.getContext("2d")!.getImageData(px, py, 1, 1).data);
   }
 
@@ -904,7 +903,13 @@ export class Studio {
       context.drawImage(this.doc.selection.mask, 0, 0);
       context.globalCompositeOperation = "source-over";
     }
-    layer.bitmap.getContext("2d")!.drawImage(generated, 0, 0);
+    const inverse = inverseAffineForLayerTransform(layer.transform);
+    if (!inverse) return false;
+    const localGenerated = newCanvas(layer.bitmap.width, layer.bitmap.height);
+    const localContext = localGenerated.getContext("2d")!;
+    localContext.setTransform(inverse.a, inverse.b, inverse.c, inverse.d, inverse.e, inverse.f);
+    localContext.drawImage(generated, 0, 0);
+    layer.bitmap.getContext("2d")!.drawImage(localGenerated, 0, 0);
     bumpBitmapVersion(layer.bitmap);
     this.syncLayerSurface(layer);
     this.checkpointLayerSurface(layer);
@@ -1088,6 +1093,27 @@ export class Studio {
     this.resetVirtualGeometry(width, height);
     const after = cloneDocument(this.doc);
     this.commit({ label: "Image resized", before: [], after: [], documentBefore: before, documentAfter: after });
+    this.requestRender();
+    return true;
+  }
+
+  /** Change print-resolution metadata without resampling document pixels. */
+  setDocumentResolution(horizontal: number, vertical = horizontal) {
+    if (!Number.isFinite(horizontal) || !Number.isFinite(vertical)) return false;
+    const x = Math.round(horizontal * 100) / 100;
+    const y = Math.round(vertical * 100) / 100;
+    if (x < 1 || y < 1 || x > 12000 || y > 12000) return false;
+    if (x === this.doc.resolution.x && y === this.doc.resolution.y) return false;
+    const before = cloneDocument(this.doc);
+    this.doc.resolution = { x, y, unit: "ppi" };
+    const after = cloneDocument(this.doc);
+    this.commit({
+      label: `Resolution: ${x === y ? x : `${x} × ${y}`} ppi`,
+      before: [],
+      after: [],
+      documentBefore: before,
+      documentAfter: after,
+    });
     this.requestRender();
     return true;
   }
@@ -1398,6 +1424,82 @@ export class Studio {
     this.requestRender();
   }
 
+  private mutateSmartFilter(
+    layerId: string,
+    filterId: string,
+    patch: Partial<Pick<SmartFilter, "enabled" | "opacity" | "params">>,
+  ) {
+    const layer = this.findLayer(layerId);
+    const filter = layer?.filters?.find((candidate) => candidate.id === filterId);
+    if (!layer || !filter || layer.locked) return false;
+    if (typeof patch.enabled === "boolean") filter.enabled = patch.enabled;
+    if (patch.opacity !== undefined && Number.isFinite(patch.opacity)) {
+      filter.opacity = Math.max(0, Math.min(1, patch.opacity));
+    }
+    if (patch.params) {
+      filter.params = Object.fromEntries(Object.entries({ ...filter.params, ...patch.params })
+        .filter(([, value]) => Number.isFinite(value)));
+    }
+    return true;
+  }
+
+  liveUpdateSmartFilter(
+    layerId: string,
+    filterId: string,
+    patch: Partial<Pick<SmartFilter, "enabled" | "opacity" | "params">>,
+  ) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.filters || layer.locked) return false;
+    const key = `smart-filter:${layerId}:${filterId}`;
+    if (!this.liveSnapshots.has(key)) {
+      this.liveSnapshots.set(key, { layerId, filters: cloneFilters(layer.filters) });
+    }
+    const changed = this.mutateSmartFilter(layerId, filterId, patch);
+    if (changed) this.requestRender();
+    return changed;
+  }
+
+  updateSmartFilter(
+    layerId: string,
+    filterId: string,
+    patch: Partial<Pick<SmartFilter, "enabled" | "opacity" | "params">>,
+  ) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.filters || layer.locked) return false;
+    const key = `smart-filter:${layerId}:${filterId}`;
+    const before = this.liveSnapshots.get(key) ?? { layerId, filters: cloneFilters(layer.filters) };
+    this.liveSnapshots.delete(key);
+    if (!this.mutateSmartFilter(layerId, filterId, patch)) return false;
+    const after: LayerSnapshot = { layerId, filters: cloneFilters(layer.filters) };
+    if (JSON.stringify(before.filters ?? []) === JSON.stringify(after.filters ?? [])) {
+      this.requestRender();
+      return true;
+    }
+    this.commit({ label: "Smart filter updated", before: [before], after: [after] });
+    this.requestRender();
+    return true;
+  }
+
+  moveSmartFilter(layerId: string, filterId: string, direction: -1 | 1) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.filters || layer.locked) return false;
+    const index = layer.filters.findIndex((filter) => filter.id === filterId);
+    const destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= layer.filters.length) return false;
+    const before: LayerSnapshot = { layerId, filters: cloneFilters(layer.filters) };
+    const filters = [...layer.filters];
+    const [filter] = filters.splice(index, 1);
+    filters.splice(destination, 0, filter);
+    layer.filters = filters;
+    this.commit({
+      label: "Smart filter reordered",
+      before: [before],
+      after: [{ layerId, filters: cloneFilters(filters) }],
+    });
+    this.requestRender();
+    return true;
+  }
+
   convertToSmartObject(layerId: string) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
@@ -1437,7 +1539,7 @@ export class Studio {
     this.requestRender();
   }
 
-  addTextLayer(text: string, style: Partial<TextStyle> = {}) {
+  addTextLayer(text: string, style: Partial<TextStyle> = {}, transform: Transform = IDENTITY_TRANSFORM) {
     const s: TextStyle = {
       text,
       font: "700 96px 'Inter', system-ui, sans-serif",
@@ -1449,6 +1551,7 @@ export class Studio {
       ...style,
     };
     const layer = createTextLayer(text.split("\n")[0] || "Text", s);
+    layer.transform = { ...transform };
     this.commitStructural(`Text added`, () => this.doc.layers.unshift(layer));
     this.requestRender();
     return layer;
@@ -1731,9 +1834,28 @@ export class Studio {
   }
 
   // --- painting ---
+  private layerStrokePoint(layer: Layer, params: BrushParams, point: BrushPoint) {
+    if (params.mode === "mask-add" || params.mode === "mask-remove") return { ...point };
+    const local = documentPointToLayer(layer.transform, point.x, point.y);
+    return local ? { ...point, x: local.x, y: local.y } : null;
+  }
+
+  private selectionTileForLayer(layer: Layer, x: number, y: number, width: number, height: number) {
+    if (!this.doc.selection) return null;
+    const inverse = inverseAffineForLayerTransform(layer.transform);
+    if (!inverse) return null;
+    const local = newCanvas(width, height);
+    const context = local.getContext("2d")!;
+    context.setTransform(inverse.a, inverse.b, inverse.c, inverse.d, inverse.e - x, inverse.f - y);
+    context.drawImage(this.doc.selection.mask, 0, 0);
+    return context.getImageData(0, 0, width, height).data;
+  }
+
   beginStroke(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
+    const localPoint = this.layerStrokePoint(layer, params, point);
+    if (!localPoint) return;
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
     if (!precisionPaint && !paintTarget(layer, params, this.doc.width, this.doc.height)) return;
     this.strokeTiles = new Map();
@@ -1743,15 +1865,23 @@ export class Studio {
       points: [],
       before: new Map(),
     } : null;
-    this.lastPoint = point;
+    this.lastPoint = localPoint;
     this.paintSegmentState = null;
-    this.paintTo(layerId, params, point);
+    this.paintToLayer(layerId, params, localPoint);
     this.paintSegmentState = createPaintSegmentState(params);
-    this.paintSegmentState.planner.start(point, false);
+    this.paintSegmentState.planner.start(localPoint, false);
     this.paintSegmentState.started = true;
   }
 
   paintTo(layerId: string, params: BrushParams, point: BrushPoint) {
+    const layer = this.findLayer(layerId);
+    if (!layer) return;
+    const localPoint = this.layerStrokePoint(layer, params, point);
+    if (!localPoint) return;
+    this.paintToLayer(layerId, params, localPoint);
+  }
+
+  private paintToLayer(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer) return;
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
@@ -1783,8 +1913,8 @@ export class Studio {
       const radius = params.size * 0.55 + 2;
       const x = Math.max(0, Math.floor(Math.min(prev.x, next.x) - radius));
       const y = Math.max(0, Math.floor(Math.min(prev.y, next.y) - radius));
-      const right = Math.min(this.doc.width, Math.ceil(Math.max(prev.x, next.x) + radius));
-      const bottom = Math.min(this.doc.height, Math.ceil(Math.max(prev.y, next.y) + radius));
+      const right = Math.min(target!.width, Math.ceil(Math.max(prev.x, next.x) + radius));
+      const bottom = Math.min(target!.height, Math.ceil(Math.max(prev.y, next.y) + radius));
       const scratch = newCanvas(Math.max(1, right - x), Math.max(1, bottom - y));
       const sctx = scratch.getContext("2d")!;
       sctx.translate(-x, -y);
@@ -1798,7 +1928,17 @@ export class Studio {
       // Mask scratch by selection
       sctx.setTransform(1, 0, 0, 1, 0, 0);
       sctx.globalCompositeOperation = "destination-in";
-      sctx.drawImage(this.doc.selection.mask, x, y, scratch.width, scratch.height, 0, 0, scratch.width, scratch.height);
+      const selection = this.selectionTileForLayer(layer, x, y, scratch.width, scratch.height);
+      if (selection) {
+        const selectionCanvas = newCanvas(scratch.width, scratch.height);
+        const selectionContext = selectionCanvas.getContext("2d")!;
+        const selectionImage = selectionContext.createImageData(scratch.width, scratch.height);
+        selectionImage.data.set(selection);
+        selectionContext.putImageData(selectionImage, 0, 0);
+        sctx.drawImage(selectionCanvas, 0, 0);
+      } else {
+        sctx.clearRect(0, 0, scratch.width, scratch.height);
+      }
       sctx.globalCompositeOperation = "source-over";
       // Composite scratch into layer (erase uses destination-out)
       ctx.globalCompositeOperation = params.mode === "erase" ? "destination-out" : "source-over";
@@ -1903,8 +2043,8 @@ export class Studio {
         originY: tile.y,
       }, { layerId: layer.id, params, points: state.points }, workingColor);
       if (this.doc.selection && beforeValues) {
-        const selection = this.doc.selection.mask.getContext("2d")!
-          .getImageData(tile.x, tile.y, tile.width, tile.height).data;
+        const selection = this.selectionTileForLayer(layer, tile.x, tile.y, tile.width, tile.height);
+        if (!selection) continue;
         for (let pixel = 0; pixel < tile.width * tile.height; pixel += 1) {
           const alpha = selection[pixel * 4 + 3] / 255;
           for (let channel = 0; channel < 4; channel += 1) {
@@ -1941,6 +2081,9 @@ export class Studio {
     const layer = this.findLayer(layerId);
     if (!layer?.surface || layer.locked) return false;
     if ((mode === "clone" || mode === "heal" || mode === "patch") && !sourcePoint) return false;
+    const localDestination = documentPointToLayer(layer.transform, destination.x, destination.y);
+    const localSource = sourcePoint ? documentPointToLayer(layer.transform, sourcePoint.x, sourcePoint.y) : null;
+    if (!localDestination || (sourcePoint && !localSource)) return false;
     this.retouchStroke = {
       layerId,
       mode,
@@ -1948,8 +2091,8 @@ export class Studio {
       points: [],
       before: new Map(),
       source: layer.surface.clone(),
-      sourceOffsetX: (sourcePoint?.x ?? destination.x) - destination.x,
-      sourceOffsetY: (sourcePoint?.y ?? destination.y) - destination.y,
+      sourceOffsetX: (localSource?.x ?? localDestination.x) - localDestination.x,
+      sourceOffsetY: (localSource?.y ?? localDestination.y) - localDestination.y,
     };
     this.retouchTo(layerId, destination);
     return true;
@@ -1960,6 +2103,9 @@ export class Studio {
     const layer = this.findLayer(layerId);
     const surface = layer?.surface;
     if (!state || !layer || !surface || state.layerId !== layerId) return;
+    const local = documentPointToLayer(layer.transform, point.x, point.y);
+    if (!local) return;
+    point = { ...point, x: local.x, y: local.y };
     const previous = state.points.at(-1);
     if (previous && (state.mode === "smudge" || state.mode === "liquify")) {
       state.sourceOffsetX = previous.x - point.x;
@@ -2002,8 +2148,8 @@ export class Studio {
         sample: (x, y) => state.source.sampleBilinearWorking(x, y),
       });
       if (this.doc.selection && beforeValues) {
-        const selection = this.doc.selection.mask.getContext("2d")!
-          .getImageData(tile.x, tile.y, tile.width, tile.height).data;
+        const selection = this.selectionTileForLayer(layer, tile.x, tile.y, tile.width, tile.height);
+        if (!selection) continue;
         for (let pixel = 0; pixel < tile.width * tile.height; pixel += 1) {
           const alpha = selection[pixel * 4 + 3] / 255;
           for (let channel = 0; channel < 4; channel += 1) {
@@ -2256,7 +2402,7 @@ export class Studio {
         id: result.provenanceId ?? nextId("ai"),
         operation,
         provider: "openai",
-        model: "gpt-image-2",
+        model: result.model ?? "gpt-image-2",
         prompt,
         createdAt: new Date().toISOString(),
         sourceLayerIds: [layerId],
@@ -2354,7 +2500,9 @@ export class Studio {
   selectByColor(layerId: string, x: number, y: number, tolerance: number, mode: SelectionMode = "replace", contiguous = true) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
-    this.commitSelection("Magic wand", () => selectByColor(this.doc, layer.bitmap!, x, y, tolerance, mode, contiguous));
+    const documentLayer = newCanvas(this.doc.width, this.doc.height);
+    drawLayerContentManaged(documentLayer.getContext("2d")!, layer);
+    this.commitSelection("Magic wand", () => selectByColor(this.doc, documentLayer, x, y, tolerance, mode, contiguous));
   }
   selectAll() {
     this.commitSelection("Select all", () => selectAll(this.doc));
@@ -2501,13 +2649,19 @@ export class Studio {
       throw new Error("Large-document JPEG/WebP export is unavailable; export PNG or reduce the document dimensions.");
     }
     const output = newCanvas(this.doc.width, this.doc.height);
+    const nativeComposite = await this.flattenNative().catch((error) => {
+      console.warn("Native compositing failed; using the portable renderer", error);
+      return null;
+    });
     if (type === "image/jpeg") {
-      const clean = newCanvas(this.doc.width, this.doc.height);
-      if (!this.useGL || !renderGL(this.doc, clean, false, false)) renderClean(this.doc, clean);
+      const clean = nativeComposite ?? newCanvas(this.doc.width, this.doc.height);
+      if (!nativeComposite && (!this.useGL || !renderGL(this.doc, clean, false, false))) renderClean(this.doc, clean);
       const ctx = output.getContext("2d")!;
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, output.width, output.height);
       ctx.drawImage(clean, 0, 0);
+    } else if (nativeComposite) {
+      output.getContext("2d")!.drawImage(nativeComposite, 0, 0);
     } else if (!this.useGL || !renderGL(this.doc, output, false, false)) renderClean(this.doc, output);
     return new Promise((resolve, reject) => {
       output.toBlob((blob) => blob ? resolve(blob) : reject(new Error("toBlob failed")), type, quality);
@@ -2515,6 +2669,86 @@ export class Studio {
   }
 
   exportPNG(): Promise<Blob> { return this.exportImage("image/png"); }
+
+  /**
+   * Use the Rust f32 compositor for export when the current document can be
+   * represented without flattening vector, adjustment, transform, effect, or
+   * Blend If semantics. Unsupported documents fall back to the portable path.
+   */
+  async flattenNative(): Promise<HTMLCanvasElement | null> {
+    if (!isNativeCoreAvailable() || this.doc.colorSpace !== "srgb") return null;
+    const layers = this.doc.layers.filter((layer) => layer.visible && layer.opacity > 0);
+    if (layers.some((layer) =>
+      (layer.kind !== "raster" && layer.kind !== "smart-object")
+      || !layer.surface
+      || layer.parentId
+      || layer.clipping
+      || layer.filters?.some((filter) => filter.enabled)
+      || layer.effects?.some((effect) => effect.enabled)
+      || !isNeutralBlendIf(resolvedBlendIf(layer))
+      || layer.transform.tx !== 0
+      || layer.transform.ty !== 0
+      || layer.transform.sx !== 1
+      || layer.transform.sy !== 1
+      || layer.transform.rotation !== 0
+    )) return null;
+
+    const output = newCanvas(this.doc.width, this.doc.height);
+    if (!layers.length) return output;
+    const reference = layers[0].surface!;
+    if (layers.some((layer) => {
+      const grid = layer.surface!.grid;
+      return grid.width !== reference.grid.width
+        || grid.height !== reference.grid.height
+        || grid.tileSize !== reference.grid.tileSize;
+    })) return null;
+
+    const outputContext = output.getContext("2d")!;
+    const addresses = reference.grid.tilesIntersecting({ x: 0, y: 0, width: this.doc.width, height: this.doc.height });
+    for (const address of addresses) {
+      const maskCache = new Map<string, Float32Array>();
+      const nativeLayers = layers.flatMap((layer) => {
+        const pixels = layer.surface!.tileToWorkingFloat32(address.key);
+        let maskAlpha: Float32Array | undefined;
+        if (layer.mask) {
+          maskAlpha = maskCache.get(layer.id);
+          if (!maskAlpha) {
+            const mask = layer.mask.getContext("2d")!
+              .getImageData(address.x, address.y, address.width, address.height).data;
+            maskAlpha = new Float32Array(address.width * address.height);
+            for (let pixel = 0; pixel < maskAlpha.length; pixel += 1) maskAlpha[pixel] = mask[pixel * 4 + 3] / 255;
+            maskCache.set(layer.id, maskAlpha);
+          }
+        }
+        return resolvedBlendPasses(layer)
+          .filter((pass) => pass.enabled && pass.opacity > 0)
+          .reverse()
+          .map((pass) => ({
+            pixels,
+            maskAlpha,
+            mode: pass.mode,
+            opacity: layer.opacity * resolvedFillOpacity(layer) * pass.opacity,
+            linear: false,
+          }));
+      });
+      const composite = await compositeNativeTile({
+        width: address.width,
+        height: address.height,
+        layers: nativeLayers,
+      });
+      if (!composite) return null;
+      const image = outputContext.createImageData(address.width, address.height);
+      for (let pixel = 0; pixel < address.width * address.height; pixel += 1) {
+        const offset = pixel * 4;
+        image.data[offset] = Math.round(Math.max(0, Math.min(1, composite[offset])) * 255);
+        image.data[offset + 1] = Math.round(Math.max(0, Math.min(1, composite[offset + 1])) * 255);
+        image.data[offset + 2] = Math.round(Math.max(0, Math.min(1, composite[offset + 2])) * 255);
+        image.data[offset + 3] = Math.round(Math.max(0, Math.min(1, composite[offset + 3])) * 255);
+      }
+      outputContext.putImageData(image, address.x, address.y);
+    }
+    return output;
+  }
 
   // Rasterize the entire document into a fresh canvas without the checkerboard.
   flatten(): HTMLCanvasElement {

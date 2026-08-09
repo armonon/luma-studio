@@ -1186,6 +1186,30 @@ button {
   }
 }
 
+/* Keyboard access is part of the editing surface, not an afterthought. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid #69b7ff !important;
+  outline-offset: 2px;
+}
+
+.studio-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 1000;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #fff;
+  color: #090a0f;
+  font-size: 12px;
+  font-weight: 700;
+  transform: translateY(-160%);
+}
+
+.studio-skip-link:focus {
+  transform: translateY(0);
+}
+
 /* Unified studio: native depth + local AI workflows */
 
 .workspace-switcher {

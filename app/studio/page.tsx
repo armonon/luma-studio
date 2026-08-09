@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import NextImage from "next/image";
 import { LUMA_API_VERSION, LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
@@ -31,10 +30,12 @@ import {
   PathStyle,
   ProofProfile,
   ProofSettings,
+  SmartFilter,
   ToneParams,
   Transform,
   cloneCurves,
   curveToLut,
+  documentPointToLayer,
   layerCorners,
   resolvedBlendPasses,
   resolvedBlendIf,
@@ -61,6 +62,11 @@ import {
   viewportPointToDocument,
   type DisplayViewport,
 } from "@/app/engine/viewport";
+import {
+  isNativeFilesystemAvailable,
+  openNativeFile,
+  saveNativeFile,
+} from "@/app/engine/native-files";
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -410,6 +416,78 @@ function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   );
 }
 
+function SmartFilterEditor({
+  layer,
+  filter,
+  index,
+  count,
+  studio,
+}: {
+  layer: Layer;
+  filter: SmartFilter;
+  index: number;
+  count: number;
+  studio: Studio;
+}) {
+  const parameter = (
+    label: string,
+    key: string,
+    minimum: number,
+    maximum: number,
+    step: number,
+    fallback: number,
+    suffix = "",
+  ) => {
+    const value = filter.params[key] ?? fallback;
+    const patch = (next: number) => ({ params: { [key]: next } });
+    return (
+      <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
+        <span>{label}</span>
+        <input
+          type="range"
+          min={minimum}
+          max={maximum}
+          step={step}
+          value={value}
+          onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, patch(Number(event.target.value)))}
+          onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))}
+          onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))}
+          aria-label={`${filter.kind} ${label}`}
+        />
+        <output>{Math.round(value * 10) / 10}{suffix}</output>
+      </label>
+    );
+  };
+  return (
+    <div style={{ display: "grid", gap: 5, padding: 7, border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, opacity: filter.enabled ? 1 : 0.55 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <button onClick={() => studio.updateSmartFilter(layer.id, filter.id, { enabled: !filter.enabled })} aria-label={`${filter.enabled ? "Disable" : "Enable"} ${filter.kind} filter`}>{filter.enabled ? "◉" : "○"}</button>
+        <strong style={{ flex: 1, fontSize: 11 }}>fx · {filter.kind}</strong>
+        <button onClick={() => studio.moveSmartFilter(layer.id, filter.id, -1)} disabled={index === 0} aria-label="Move filter earlier">↑</button>
+        <button onClick={() => studio.moveSmartFilter(layer.id, filter.id, 1)} disabled={index === count - 1} aria-label="Move filter later">↓</button>
+        <button onClick={() => studio.removeSmartFilter(layer.id, filter.id)} aria-label={`Remove ${filter.kind} filter`}>×</button>
+      </div>
+      <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
+        <span>Opacity</span>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={Math.round(filter.opacity * 100)}
+          onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, { opacity: Number(event.target.value) / 100 })}
+          onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })}
+          onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })}
+        />
+        <output>{Math.round(filter.opacity * 100)}%</output>
+      </label>
+      {(filter.kind === "blur" || filter.kind === "sharpen") && parameter("Radius", "radius", 0.5, 64, 0.5, filter.kind === "blur" ? 8 : 2, "px")}
+      {filter.kind === "sharpen" && parameter("Amount", "amount", 0, 3, 0.05, 0.6)}
+      {filter.kind === "desaturate" && parameter("Amount", "amount", 0, 1, 0.01, 1)}
+      {filter.kind === "hue" && parameter("Degrees", "degrees", -180, 180, 1, 45, "°")}
+    </div>
+  );
+}
+
 type CurveChannel = "rgb" | "r" | "g" | "b";
 
 function CurvesEditor({
@@ -652,6 +730,19 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   });
 }
 
+function mimeForFileName(fileName: string) {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  if (extension === "png") return "image/png";
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "webp") return "image/webp";
+  if (extension === "gif") return "image/gif";
+  if (extension === "bmp") return "image/bmp";
+  if (extension === "tif" || extension === "tiff") return "image/tiff";
+  if (extension === "psd" || extension === "psb") return "image/vnd.adobe.photoshop";
+  if (extension === "luma") return "application/x-luma-project";
+  return "application/octet-stream";
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
@@ -744,6 +835,7 @@ export default function SpatialStudio() {
   const [showGuides, setShowGuides] = useState(true);
   const resizeWidthRef = useRef<HTMLInputElement>(null);
   const resizeHeightRef = useRef<HTMLInputElement>(null);
+  const resolutionRef = useRef<HTMLInputElement>(null);
   const glSupported = !!studio && Studio.canUseGL();
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
@@ -1129,7 +1221,13 @@ export default function SpatialStudio() {
       if (activeTool === "type-mask") studio.selectTextMask(textDraft, p.x, p.y, "700 96px 'Inter', system-ui, sans-serif", false);
       else if (activeTool === "path-text") {
         if (!activeLayer?.path) { notify("Select a path layer first"); return; }
-        studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: "path", path: activeLayer.path, color: brushColor });
+        const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
+        if (!local) return;
+        studio.addTextLayer(
+          textDraft,
+          { x: local.x, y: local.y, layout: "path", path: activeLayer.path, color: brushColor },
+          activeLayer.transform,
+        );
       } else studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor });
       notify(activeTool === "type-mask" ? "Type selection created" : "Text added");
       return;
@@ -1144,10 +1242,12 @@ export default function SpatialStudio() {
     }
     if (activeTool === "direct-select") {
       if (!activeLayer?.path) { notify("Select a path layer"); return; }
+      const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
+      if (!local) return;
       let index = 0;
       let distance = Infinity;
       activeLayer.path.anchors.forEach((anchor, candidate) => {
-        const d = Math.hypot(anchor.x - p.x, anchor.y - p.y);
+        const d = Math.hypot(anchor.x - local.x, anchor.y - local.y);
         if (d < distance) { distance = d; index = candidate; }
       });
       const original = structuredClone(activeLayer.path);
@@ -1199,8 +1299,12 @@ export default function SpatialStudio() {
     if (activeTool === "direct-select" && directAnchorRef.current && e.buttons !== 0) {
       const p = eventToDoc(e);
       const edit = directAnchorRef.current;
+      const pathLayer = studio.doc.layers.find((layer) => layer.id === edit.layerId);
+      if (!pathLayer) return;
+      const local = documentPointToLayer(pathLayer.transform, p.x, p.y);
+      if (!local) return;
       const next = structuredClone(edit.next);
-      next.anchors[edit.index] = { ...next.anchors[edit.index], x: p.x, y: p.y };
+      next.anchors[edit.index] = { ...next.anchors[edit.index], x: local.x, y: local.y };
       edit.next = next;
       studio.liveUpdatePath(edit.layerId, next);
       return;
@@ -1357,9 +1461,31 @@ export default function SpatialStudio() {
     }
   };
 
-  const onFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+  const importDocumentFile = async (file: File) => {
     if (!file || !studio) return;
+    if (/\.luma$/i.test(file.name)) {
+      const project = await studio.importProject(file);
+      setActiveLayerId(project.doc.layers[0]?.id ?? null);
+      setActiveAdjustmentId(null);
+      setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
+      await writeRecovery(await studio.exportProject(project.name));
+      setSaveState("saved");
+      const restoredOperations = project.history?.summary().operations ?? 0;
+      notify(`${project.name} opened · ${restoredOperations} versions restored`);
+      return;
+    }
+    if (/\.ps[db]$/i.test(file.name)) {
+      const d = await studio.importPsd(await file.arrayBuffer());
+      setPhotoshopFormat("source");
+      setActiveLayerId(d.layers[0]?.id ?? null);
+      setActiveAdjustmentId(null);
+      setCustomName(file.name.replace(/\.ps[db]$/i, ""));
+      setTone({ ...NEUTRAL_TONE });
+      const report = studio.photoshopCompatibility({ format: "source" });
+      const previewOnly = report.issues.filter((issue) => issue.severity === "warning").length;
+      notify(`${file.name} · ${d.layers.length} layers · ${report.container.toUpperCase()}${previewOnly ? ` · ${previewOnly} review note${previewOnly === 1 ? "" : "s"}` : " · preservation ready"}`);
+      return;
+    }
     let url = URL.createObjectURL(file);
     const name = file.name.replace(/\.[^/.]+$/, "") || "Imported";
     try {
@@ -1423,23 +1549,43 @@ export default function SpatialStudio() {
       notify(error instanceof Error ? error.message : "Failed to import");
     } finally {
       URL.revokeObjectURL(url);
+    }
+  };
+
+  const onFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    try {
+      if (file) await importDocumentFile(file);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Failed to import");
+    } finally {
       e.target.value = "";
     }
   };
 
+  const openNativeDocument = async () => {
+    try {
+      const opened = await openNativeFile();
+      if (!opened) return;
+      const bytes = opened.data.buffer.slice(
+        opened.data.byteOffset,
+        opened.data.byteOffset + opened.data.byteLength,
+      ) as ArrayBuffer;
+      await importDocumentFile(new File([bytes], opened.name, { type: mimeForFileName(opened.name) }));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Native open failed");
+    }
+  };
+
+  const requestDocumentOpen = () => {
+    if (isNativeFilesystemAvailable()) void openNativeDocument();
+    else fileInput.current?.click();
+  };
+
   const onPsdImport = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !studio) return;
     try {
-      const buf = await file.arrayBuffer();
-      const d = await studio.importPsd(buf);
-      setPhotoshopFormat("source");
-      setActiveLayerId(d.layers[0]?.id ?? null);
-      setActiveAdjustmentId(null);
-      setTone({ ...NEUTRAL_TONE });
-      const report = studio.photoshopCompatibility({ format: "source" });
-      const previewOnly = report.issues.filter((issue) => issue.severity === "warning").length;
-      notify(`${file.name} · ${d.layers.length} layers · ${report.container.toUpperCase()}${previewOnly ? ` · ${previewOnly} review note${previewOnly === 1 ? "" : "s"}` : " · preservation ready"}`);
+      if (file) await importDocumentFile(file);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Photoshop import failed");
     } finally {
@@ -1449,17 +1595,24 @@ export default function SpatialStudio() {
 
   const projectName = customName || filmstrip[activePreset].name || "Untitled";
 
+  const downloadOrSave = async (blob: Blob, fileName: string) => {
+    if (isNativeFilesystemAvailable()) return saveNativeFile(blob, fileName);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return true;
+  };
+
   const saveProject = async () => {
     if (!studio) return;
     setSaveState("saving");
     try {
       const blob = await studio.exportProject(projectName);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${projectName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const saved = await downloadOrSave(blob, `${projectName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`);
+      if (!saved) { setSaveState("saved"); return; }
       await writeRecovery(blob);
       setSaveState("saved");
       notify("Project + version history saved");
@@ -1471,18 +1624,10 @@ export default function SpatialStudio() {
 
   const onProjectImport = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !studio) return;
     try {
-      const project = await studio.importProject(file);
-      setActiveLayerId(project.doc.layers[0]?.id ?? null);
-      setActiveAdjustmentId(null);
-      setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
-      await writeRecovery(await studio.exportProject(project.name));
-      setSaveState("saved");
-      const restoredOperations = project.history?.summary().operations ?? 0;
-      notify(`${project.name} opened · ${restoredOperations} versions restored`);
-    } catch {
-      notify("Luma project could not be opened");
+      if (file) await importDocumentFile(file);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Luma project could not be opened");
     } finally {
       e.target.value = "";
     }
@@ -1606,13 +1751,8 @@ export default function SpatialStudio() {
     try {
       const mime = exportFormat === "jpeg" ? "image/jpeg" : exportFormat === "webp" ? "image/webp" : "image/png";
       const blob = await studio.exportImage(mime, 0.92);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${customName || filmstrip[activePreset].name}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      notify(`Exported ${exportFormat.toUpperCase()}`);
+      const saved = await downloadOrSave(blob, `${customName || filmstrip[activePreset].name}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`);
+      if (saved) notify(`Exported ${exportFormat.toUpperCase()}`);
     } catch { notify("Export failed"); }
   };
 
@@ -1625,13 +1765,8 @@ export default function SpatialStudio() {
       const zip = await runBatch(studio, batchFiles, action ?? null, (i, total, name) => {
         setBatchProgress({ i, total, name });
       });
-      const url = URL.createObjectURL(zip);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `luma-batch-${Date.now()}.zip`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      notify(`Batch complete · ${batchFiles.length} images`);
+      const saved = await downloadOrSave(zip, `luma-batch-${Date.now()}.zip`);
+      if (saved) notify(`Batch complete · ${batchFiles.length} images`);
     } catch (err) {
       console.warn(err);
       notify("Batch failed");
@@ -1640,17 +1775,13 @@ export default function SpatialStudio() {
     }
   };
 
-  const exportPsd = () => {
+  const exportPsd = async () => {
     if (!studio) return;
     try {
       const { buffer: buf, report } = studio.exportPhotoshop({ format: photoshopFormat });
       const blob = new Blob([buf], { type: "image/vnd.adobe.photoshop" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${customName || filmstrip[activePreset].name}-luma.${report.container}`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      const saved = await downloadOrSave(blob, `${customName || filmstrip[activePreset].name}-luma.${report.container}`);
+      if (!saved) return;
       const warnings = report.issues.filter((issue) => issue.severity === "warning").length;
       notify(`Exported ${report.container.toUpperCase()}${warnings ? ` · ${warnings} compatibility warning${warnings === 1 ? "" : "s"}` : " · editable fidelity preserved"}`);
     } catch (error) { notify(error instanceof Error ? error.message : "Photoshop export failed"); }
@@ -1725,6 +1856,7 @@ export default function SpatialStudio() {
   const currentTools = modeTools[workspace];
   const historyState = studio?.historyState();
   const engineState = studio?.engineState();
+  const photoshopReport = studio?.photoshopCompatibility({ format: photoshopFormat });
   const canvasCursor = useMemo(() => {
     if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool || transformDragTool || pointSelectionTool || quadTool) return "crosshair";
     if (activeTool === "pen" || activeTool === "sel-sam" || activeTool === "eyedropper" || activeTool === "color-sampler" || activeTool === "direct-select") return "crosshair";
@@ -1976,6 +2108,7 @@ export default function SpatialStudio() {
 
   return (
     <main className="spatial-studio">
+      <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
       <div className="spatial-aura aura-violet" />
 
@@ -1986,9 +2119,9 @@ export default function SpatialStudio() {
             <span className="dot-yellow" />
             <span className="dot-green" />
             <button onClick={() => history.back()} aria-label="Back">‹</button>
-            <button onClick={() => fileInput.current?.click()} aria-label="Import image">↗</button>
-            <button onClick={() => psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB" className="control-label">PSD/B</button>
-            <button onClick={() => projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project" className="control-label">LUMA</button>
+            <button onClick={requestDocumentOpen} aria-label="Open document">↗</button>
+            <button onClick={() => isNativeFilesystemAvailable() ? void openNativeDocument() : psdInput.current?.click()} aria-label="Import PSD or PSB" title="Import PSD or PSB" className="control-label">PSD/B</button>
+            <button onClick={() => isNativeFilesystemAvailable() ? void openNativeDocument() : projectInput.current?.click()} aria-label="Open Luma project" title="Open .luma project" className="control-label">LUMA</button>
           </div>
 
           <nav className="workspace-switcher" aria-label="Studio workspace">
@@ -2005,11 +2138,11 @@ export default function SpatialStudio() {
           </nav>
 
           <div className="spatial-share-actions">
-            <button className="spatial-search" onClick={saveProject} title="Save Luma project">
+            <button className="spatial-search" onClick={saveProject} title="Save Luma project" aria-label="Save Luma project">
               {saveState === "saving" ? "•••" : saveState === "error" ? "!" : "✓"}
             </button>
-            <button className="spatial-search" onClick={() => studio?.undo()} title="Undo (⌘Z)" disabled={!studio?.canUndo()}>↶</button>
-            <button className="spatial-search" onClick={() => studio?.redo()} title="Redo (⇧⌘Z)" disabled={!studio?.canRedo()}>↷</button>
+            <button className="spatial-search" onClick={() => studio?.undo()} title="Undo (⌘Z)" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
+            <button className="spatial-search" onClick={() => studio?.redo()} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
             <button className="batch-top-button" onClick={() => setShowFilters((v) => !v)}>
               <span>◐</span> Filters
             </button>
@@ -2070,25 +2203,38 @@ export default function SpatialStudio() {
           <section className="spatial-canvas-column">
             <div className="spatial-document-tabs" style={{ display: "flex", gap: 4, padding: "5px 8px", overflowX: "auto", background: "rgba(12,12,16,.76)", borderBottom: "1px solid rgba(255,255,255,.08)" }}>
               {openDocuments.map((documentTab) => (
-                <button
+                <div
                   key={documentTab.id}
-                  onClick={() => {
-                    studio?.switchDocument(documentTab.id);
-                    setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
-                    setCustomName(documentTab.name);
-                  }}
-                  style={{ display: "flex", gap: 8, alignItems: "center", minWidth: 112, justifyContent: "space-between", padding: "5px 8px", borderRadius: 7, border: "1px solid rgba(255,255,255,.1)", background: documentTab.active ? "rgba(124,92,231,.24)" : "rgba(255,255,255,.04)", color: "inherit" }}
+                  style={{ display: "flex", alignItems: "center", minWidth: 112, borderRadius: 7, border: "1px solid rgba(255,255,255,.1)", background: documentTab.active ? "rgba(124,92,231,.24)" : "rgba(255,255,255,.04)" }}
                 >
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{documentTab.name}</span>
+                  <button
+                    onClick={() => {
+                      studio?.switchDocument(documentTab.id);
+                      setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
+                      setCustomName(documentTab.name);
+                    }}
+                    aria-current={documentTab.active ? "page" : undefined}
+                    style={{ flex: 1, minWidth: 0, padding: "5px 8px", border: 0, background: "transparent", color: "inherit", textAlign: "left" }}
+                  >
+                    <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{documentTab.name}</span>
+                  </button>
                   {openDocuments.length > 1 && (
-                    <i onClick={(event) => { event.stopPropagation(); studio?.closeDocument(documentTab.id); setActiveLayerId(studio?.doc.layers[0]?.id ?? null); }}>×</i>
+                    <button
+                      onClick={() => { studio?.closeDocument(documentTab.id); setActiveLayerId(studio?.doc.layers[0]?.id ?? null); }}
+                      aria-label={`Close ${documentTab.name}`}
+                      style={{ padding: "5px 8px", border: 0, background: "transparent", color: "inherit" }}
+                    >×</button>
                   )}
-                </button>
+                </div>
               ))}
             </div>
             <div
               ref={stageRef}
+              id="studio-canvas"
               className="spatial-canvas-stage"
+              tabIndex={0}
+              role="application"
+              aria-label={`${projectName} image canvas. Active tool: ${activeTool}.`}
               onWheel={(e) => {
                 if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey) return;
                 e.preventDefault();
@@ -2182,10 +2328,13 @@ export default function SpatialStudio() {
                   onClick={() => openPreset(index)}
                   aria-label={`Open ${photo.name}`}
                 >
-                  <NextImage src={photo.src} alt="" width={80} height={52} sizes="80px" unoptimized /><span>{photo.name}</span>
+                  {/* A plain image keeps the studio portable between the hosted
+                      Next/Vite build and the static Tauri frontend. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={photo.src} alt="" width={80} height={52} /><span>{photo.name}</span>
                 </button>
               ))}
-              <button className="film-add" onClick={() => fileInput.current?.click()} aria-label="Add photo">＋</button>
+              <button className="film-add" onClick={requestDocumentOpen} aria-label="Add photo">＋</button>
             </div>
           </section>
 
@@ -2284,10 +2433,15 @@ export default function SpatialStudio() {
                   )}
                   {!!activeLayer.filters?.length && (
                     <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
-                      {activeLayer.filters.map((filter) => (
-                        <button key={filter.id} onClick={() => studio?.removeSmartFilter(activeLayer.id, filter.id)} title="Remove Smart Filter" style={{ display: "flex", justifyContent: "space-between" }}>
-                          <span>fx · {filter.kind}</span><span>×</span>
-                        </button>
+                      {activeLayer.filters.map((filter, index) => studio && (
+                        <SmartFilterEditor
+                          key={filter.id}
+                          layer={activeLayer}
+                          filter={filter}
+                          index={index}
+                          count={activeLayer.filters!.length}
+                          studio={studio}
+                        />
                       ))}
                     </div>
                   )}
@@ -2322,6 +2476,23 @@ export default function SpatialStudio() {
                 }} style={{ alignSelf: "end" }}>Resize</button>
               </div>
               <div style={{ display: "grid", gap: 7, padding: "0 10px 10px" }}>
+                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr auto", alignItems: "center", gap: 6, fontSize: 10 }}>
+                  <span>Resolution</span>
+                  <input
+                    key={`resolution-${doc?.resolution.x}`}
+                    ref={resolutionRef}
+                    type="number"
+                    min="1"
+                    max="12000"
+                    step="1"
+                    defaultValue={doc?.resolution.x ?? 72}
+                    aria-label="Document print resolution in pixels per inch"
+                  />
+                  <button onClick={() => {
+                    const ppi = Number(resolutionRef.current?.value);
+                    if (studio?.setDocumentResolution(ppi)) notify(`Resolution set to ${ppi} ppi without resampling`);
+                  }}>Set ppi</button>
+                </label>
                 <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
                   <span>Color space</span>
                   <select
@@ -2366,6 +2537,23 @@ export default function SpatialStudio() {
                 <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
                   Photoshop bridge · {engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.preserved ?? 0} preserved features · {engineState?.photoshop.warnings ?? 0} compatibility notes
                 </small>
+                {photoshopReport && (
+                  <details className="advanced-blending">
+                    <summary>
+                      <span>Photoshop preflight</span>
+                      <small>{photoshopReport.canExport ? `${photoshopReport.container.toUpperCase()} ready` : "Action required"}</small>
+                    </summary>
+                    <div className="advanced-blending-body" style={{ gap: 5 }}>
+                      {photoshopReport.issues.length === 0 ? (
+                        <small>No compatibility issues detected.</small>
+                      ) : photoshopReport.issues.map((issue, index) => (
+                        <small key={`${issue.code}-${issue.layerId ?? "document"}-${index}`} style={{ lineHeight: 1.35 }}>
+                          {issue.severity === "error" ? "●" : issue.severity === "warning" ? "▲" : "ℹ"} {issue.message}
+                        </small>
+                      ))}
+                    </div>
+                  </details>
+                )}
                 <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
                   <span>Soft proof</span>
                   <select
@@ -3007,6 +3195,8 @@ export default function SpatialStudio() {
       />
       {neural && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: "fixed",
             bottom: 32,
@@ -3042,7 +3232,7 @@ export default function SpatialStudio() {
           </div>
         </div>
       )}
-      <input ref={fileInput} className="visually-hidden" type="file" accept={`image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
+      <input ref={fileInput} className="visually-hidden" type="file" accept={`.luma,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
       <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}

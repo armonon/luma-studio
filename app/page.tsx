@@ -387,30 +387,31 @@ export default function MarketingHome() {
       <section className="performance-section" id="performance">
         <div className="performance-orb" />
         <div className="performance-copy reveal">
-          <p>BUILT FOR APPLE SILICON</p>
-          <h2>Faster than<br /><span>your next thought.</span></h2>
+          <p>LOCAL-FIRST IMAGE ENGINE</p>
+          <h2>Precision you can<br /><span>build upon.</span></h2>
           <p>
-            A Metal-first renderer keeps the canvas fluid while Luma’s local-first
-            architecture keeps your work close.
+            Tiled rendering keeps viewport work bounded while 32-bit float tile
+            masters preserve edit precision. Luma Pro’s native engine is being
+            integrated for desktop-scale documents.
           </p>
           <a href="/studio">Feel it in the live studio <span>→</span></a>
         </div>
         <div className="performance-stats">
           <article className="reveal">
-            <strong>120</strong><span>fps</span>
-            <p>fluid canvas navigation</p>
+            <strong>27</strong>
+            <p>verified blend modes</p>
           </article>
           <article className="reveal">
-            <strong>16K</strong>
-            <p>working canvas, no proxy</p>
+            <strong>32</strong><span>-bit</span>
+            <p>float tile masters</p>
           </article>
           <article className="reveal">
-            <strong>0</strong><span>ms</span>
-            <p>blocking autosave</p>
+            <strong>2</strong>
+            <p>on-device semantic models</p>
           </article>
           <article className="reveal">
-            <strong>∞</strong>
-            <p>nondestructive history</p>
+            <strong>80</strong>
+            <p>bounded recovery nodes</p>
           </article>
         </div>
       </section>

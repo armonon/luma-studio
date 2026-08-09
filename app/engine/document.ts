@@ -166,6 +166,77 @@ export const IDENTITY_TRANSFORM: Transform = {
   rotation: 0,
 };
 
+export type AffineTransform = {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+};
+
+export function affineForLayerTransform(transform: Transform): AffineTransform {
+  const cosine = Math.cos(transform.rotation);
+  const sine = Math.sin(transform.rotation);
+  return {
+    a: cosine * transform.sx,
+    b: sine * transform.sx,
+    c: -sine * transform.sy,
+    d: cosine * transform.sy,
+    e: transform.tx,
+    f: transform.ty,
+  };
+}
+
+export function inverseAffineForLayerTransform(transform: Transform): AffineTransform | null {
+  const forward = affineForLayerTransform(transform);
+  const determinant = forward.a * forward.d - forward.b * forward.c;
+  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) return null;
+  const a = forward.d / determinant;
+  const b = -forward.b / determinant;
+  const c = -forward.c / determinant;
+  const d = forward.a / determinant;
+  return {
+    a,
+    b,
+    c,
+    d,
+    e: -(a * forward.e + c * forward.f),
+    f: -(b * forward.e + d * forward.f),
+  };
+}
+
+export function transformPoint(matrix: AffineTransform, x: number, y: number) {
+  return {
+    x: matrix.a * x + matrix.c * y + matrix.e,
+    y: matrix.b * x + matrix.d * y + matrix.f,
+  };
+}
+
+export function documentPointToLayer(transform: Transform, x: number, y: number) {
+  const inverse = inverseAffineForLayerTransform(transform);
+  return inverse ? transformPoint(inverse, x, y) : null;
+}
+
+/** Compose a document-space rotation around an arbitrary pivot with a layer transform. */
+export function rotateLayerTransformAround(
+  transform: Transform,
+  angleRadians: number,
+  pivotX: number,
+  pivotY: number,
+): Transform {
+  const cosine = Math.cos(angleRadians);
+  const sine = Math.sin(angleRadians);
+  const dx = transform.tx - pivotX;
+  const dy = transform.ty - pivotY;
+  return {
+    ...transform,
+    rotation: transform.rotation + angleRadians,
+    tx: pivotX + dx * cosine - dy * sine,
+    ty: pivotY + dx * sine + dy * cosine,
+  };
+}
+
 export type LayerKind =
   | "raster"
   | "smart-object"
@@ -232,6 +303,110 @@ export type PathStyle = {
   stroke: string;
   strokeWidth: number;
 };
+
+export type PathArcSample = { x: number; y: number; distance: number };
+
+const midpoint = (a: number, b: number) => (a + b) / 2;
+
+function flattenCubic(
+  output: Array<{ x: number; y: number }>,
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  tolerance: number,
+  depth = 0,
+) {
+  const chord = Math.hypot(p3.x - p0.x, p3.y - p0.y);
+  const polygon = Math.hypot(p1.x - p0.x, p1.y - p0.y)
+    + Math.hypot(p2.x - p1.x, p2.y - p1.y)
+    + Math.hypot(p3.x - p2.x, p3.y - p2.y);
+  if (depth >= 12 || polygon - chord <= tolerance) {
+    output.push(p3);
+    return;
+  }
+  const p01 = { x: midpoint(p0.x, p1.x), y: midpoint(p0.y, p1.y) };
+  const p12 = { x: midpoint(p1.x, p2.x), y: midpoint(p1.y, p2.y) };
+  const p23 = { x: midpoint(p2.x, p3.x), y: midpoint(p2.y, p3.y) };
+  const p012 = { x: midpoint(p01.x, p12.x), y: midpoint(p01.y, p12.y) };
+  const p123 = { x: midpoint(p12.x, p23.x), y: midpoint(p12.y, p23.y) };
+  const center = { x: midpoint(p012.x, p123.x), y: midpoint(p012.y, p123.y) };
+  flattenCubic(output, p0, p01, p012, center, tolerance, depth + 1);
+  flattenCubic(output, center, p123, p23, p3, tolerance, depth + 1);
+}
+
+/** Adaptive Bezier flattening with cumulative arc length for text and tools. */
+export function pathArcTable(path: PathStyle, tolerance = 0.25): PathArcSample[] {
+  if (path.anchors.length < 2) return [];
+  const points: Array<{ x: number; y: number }> = [{ x: path.anchors[0].x, y: path.anchors[0].y }];
+  const segmentCount = path.anchors.length - 1 + (path.closed ? 1 : 0);
+  for (let index = 0; index < segmentCount; index += 1) {
+    const from = path.anchors[index % path.anchors.length];
+    const to = path.anchors[(index + 1) % path.anchors.length];
+    flattenCubic(
+      points,
+      from,
+      { x: from.x + from.hOut.dx, y: from.y + from.hOut.dy },
+      { x: to.x + to.hIn.dx, y: to.y + to.hIn.dy },
+      to,
+      Math.max(0.01, tolerance),
+    );
+  }
+  let distance = 0;
+  return points.map((point, index) => {
+    if (index > 0) distance += Math.hypot(point.x - points[index - 1].x, point.y - points[index - 1].y);
+    return { ...point, distance };
+  });
+}
+
+export function nearestPathDistance(table: ReadonlyArray<PathArcSample>, x: number, y: number) {
+  if (table.length < 2) return 0;
+  let nearestDistance = 0;
+  let nearestSquared = Infinity;
+  for (let index = 1; index < table.length; index += 1) {
+    const from = table[index - 1];
+    const to = table[index];
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const amount = lengthSquared > 0
+      ? Math.max(0, Math.min(1, ((x - from.x) * dx + (y - from.y) * dy) / lengthSquared))
+      : 0;
+    const px = from.x + dx * amount;
+    const py = from.y + dy * amount;
+    const squared = (x - px) ** 2 + (y - py) ** 2;
+    if (squared < nearestSquared) {
+      nearestSquared = squared;
+      nearestDistance = from.distance + (to.distance - from.distance) * amount;
+    }
+  }
+  return nearestDistance;
+}
+
+export function samplePathDistance(table: ReadonlyArray<PathArcSample>, distance: number, closed = false) {
+  if (table.length < 2) return null;
+  const total = table.at(-1)!.distance;
+  if (total <= 0) return null;
+  let target = distance;
+  if (closed) target = ((target % total) + total) % total;
+  else if (target < 0 || target > total) return null;
+  let low = 1;
+  let high = table.length - 1;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (table[middle].distance < target) low = middle + 1;
+    else high = middle;
+  }
+  const to = table[low];
+  const from = table[low - 1];
+  const span = Math.max(1e-9, to.distance - from.distance);
+  const amount = (target - from.distance) / span;
+  return {
+    x: from.x + (to.x - from.x) * amount,
+    y: from.y + (to.y - from.y) * amount,
+    angle: Math.atan2(to.y - from.y, to.x - from.x),
+  };
+}
 
 export type TextStyle = {
   text: string;
@@ -871,30 +1046,30 @@ export function drawLayerContent(
       const maximumLines = s.boxHeight ? Math.max(1, Math.floor(s.boxHeight / lh)) : lines.length;
       lines.slice(0, maximumLines).forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));
     } else if (s.layout === "path" && s.path?.anchors.length) {
-      const anchors = s.path.anchors;
-      const segments = anchors.slice(0, -1).map((anchor, index) => ({ from: anchor, to: anchors[index + 1] }));
-      if (s.path.closed && anchors.length > 1) segments.push({ from: anchors.at(-1)!, to: anchors[0] });
-      const lengths = segments.map(({ from, to }) => Math.hypot(to.x - from.x, to.y - from.y));
-      let distance = 0;
-      for (const character of s.text) {
+      const table = pathArcTable(s.path);
+      let distance = nearestPathDistance(table, s.x, s.y);
+      let previous = "";
+      const characters = typeof Intl.Segmenter === "function"
+        ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(s.text)].map((entry) => entry.segment)
+        : Array.from(s.text);
+      ctx.textAlign = "left";
+      for (const character of characters) {
         const advance = ctx.measureText(character).width;
-        const center = distance + advance / 2;
-        let remaining = center;
-        let segmentIndex = 0;
-        while (segmentIndex < lengths.length - 1 && remaining > lengths[segmentIndex]) {
-          remaining -= lengths[segmentIndex++];
+        if (previous) {
+          distance += ctx.measureText(previous + character).width
+            - ctx.measureText(previous).width
+            - advance;
         }
-        const segment = segments[segmentIndex];
-        if (!segment) break;
-        const amount = Math.min(1, remaining / Math.max(1e-6, lengths[segmentIndex]));
-        const x = segment.from.x + (segment.to.x - segment.from.x) * amount;
-        const y = segment.from.y + (segment.to.y - segment.from.y) * amount;
+        const center = distance + advance / 2;
+        const sample = samplePathDistance(table, center, s.path.closed);
+        if (!sample) break;
         ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(Math.atan2(segment.to.y - segment.from.y, segment.to.x - segment.from.x));
+        ctx.translate(sample.x, sample.y);
+        ctx.rotate(sample.angle);
         ctx.fillText(character, -advance / 2, 0);
         ctx.restore();
         distance += advance;
+        previous = character;
       }
     } else {
       s.text.split("\n").forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));

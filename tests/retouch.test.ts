@@ -83,6 +83,22 @@ test("blur and sharpen move local values in opposite directions", () => {
   assert.ok(sharpened.data[center] > 0.8);
 });
 
+test("sampling retouch modes fall back to the local float surface safely", () => {
+  const surface = floatSurface(8, 8, 0.4);
+  const points = [{ x: 4.5, y: 4.5, p: 1 }];
+  assert.doesNotThrow(() => replayRetouch(surface, {
+    mode: "blur",
+    params,
+    dabs: planStroke(points, params),
+  }));
+  assert.doesNotThrow(() => replayRetouch(surface, {
+    mode: "liquify",
+    params,
+    dabs: planStroke(points, params),
+    sourceOffsetX: 1,
+  }));
+});
+
 test("sponge and mixer brushes perform distinct color operations", () => {
   const points = [{ x: 6.5, y: 6.5, p: 1 }];
   const dabs = planStroke(points, params);

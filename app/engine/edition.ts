@@ -57,7 +57,7 @@ export type CapabilityStatus = "shipped" | "planned";
 export const CAPABILITY_STATUS: Readonly<Record<Capability, CapabilityStatus>> = {
   "gpu-export": "shipped",
   "on-device-models": "shipped",
-  "filesystem-access": "planned",
+  "filesystem-access": "shipped",
   "large-documents": "planned",
   "native-raw": "planned",
   "plugin-install": "planned",

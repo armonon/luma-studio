@@ -1,4 +1,10 @@
-import { Document, Layer, SmartFilter, newCanvas } from "./document";
+import {
+  Document,
+  Layer,
+  SmartFilter,
+  inverseAffineForLayerTransform,
+  newCanvas,
+} from "./document";
 
 // Apply an ImageData transform to `layer.bitmap`, constrained to `doc.selection`
 // (if present). Returns nothing; mutates the layer's bitmap.
@@ -16,8 +22,13 @@ function applyPixelFilter(
 
   if (doc.selection) {
     // Blend the filtered pixels into the source by selection alpha.
-    const sel = doc.selection.mask.getContext("2d")!;
-    const selData = sel.getImageData(0, 0, w, h).data;
+    const localSelection = newCanvas(w, h);
+    const localSelectionContext = localSelection.getContext("2d")!;
+    const inverse = inverseAffineForLayerTransform(layer.transform);
+    if (!inverse) return;
+    localSelectionContext.setTransform(inverse.a, inverse.b, inverse.c, inverse.d, inverse.e, inverse.f);
+    localSelectionContext.drawImage(doc.selection.mask, 0, 0);
+    const selData = localSelectionContext.getImageData(0, 0, w, h).data;
     const outData = output.data;
     const srcData = input.data;
     for (let i = 0; i < srcData.length; i += 4) {
@@ -69,137 +80,66 @@ function boxRadiiForGaussian(sigma: number, n: number): number[] {
 }
 
 function boxBlurH(src: Uint8ClampedArray, dst: Uint8ClampedArray, w: number, h: number, r: number) {
-  const iarr = 1 / (r + r + 1);
+  const radius = Math.max(0, Math.floor(r));
+  const iarr = 1 / (radius + radius + 1);
+  const prefix = new Float64Array((w + 1) * 4);
   for (let y = 0; y < h; y++) {
-    let ti = y * w;
-    let li = ti;
-    let ri = ti + r;
     const rowStart = y * w;
-    const first = src.subarray(rowStart * 4, rowStart * 4 + 4);
-    const last = src.subarray((rowStart + w - 1) * 4, (rowStart + w - 1) * 4 + 4);
-    const fv0 = first[0], fv1 = first[1], fv2 = first[2], fv3 = first[3];
-    const lv0 = last[0], lv1 = last[1], lv2 = last[2], lv3 = last[3];
-    let val0 = (r + 1) * fv0;
-    let val1 = (r + 1) * fv1;
-    let val2 = (r + 1) * fv2;
-    let val3 = (r + 1) * fv3;
-    for (let j = 0; j < r; j++) {
-      const idx = (rowStart + j) * 4;
-      val0 += src[idx];
-      val1 += src[idx + 1];
-      val2 += src[idx + 2];
-      val3 += src[idx + 3];
+    prefix.fill(0);
+    for (let x = 0; x < w; x += 1) {
+      const source = (rowStart + x) * 4;
+      const previous = x * 4;
+      const next = (x + 1) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        prefix[next + channel] = prefix[previous + channel] + src[source + channel];
+      }
     }
-    for (let j = 0; j <= r; j++) {
-      const idx = (rowStart + j + r) * 4;
-      val0 += src[idx] - fv0;
-      val1 += src[idx + 1] - fv1;
-      val2 += src[idx + 2] - fv2;
-      val3 += src[idx + 3] - fv3;
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      ti++;
-    }
-    for (let j = r + 1; j < w - r; j++) {
-      const ai = (li + r + 1) * 4;
-      const bi = li * 4;
-      val0 += src[(ri + 1) * 4] - src[bi];
-      val1 += src[(ri + 1) * 4 + 1] - src[bi + 1];
-      val2 += src[(ri + 1) * 4 + 2] - src[bi + 2];
-      val3 += src[(ri + 1) * 4 + 3] - src[bi + 3];
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      li++;
-      ri++;
-      ti++;
-      void ai;
-    }
-    for (let j = w - r; j < w; j++) {
-      const bi = li * 4;
-      val0 += lv0 - src[bi];
-      val1 += lv1 - src[bi + 1];
-      val2 += lv2 - src[bi + 2];
-      val3 += lv3 - src[bi + 3];
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      li++;
-      ti++;
+    const first = rowStart * 4;
+    const last = (rowStart + w - 1) * 4;
+    for (let x = 0; x < w; x += 1) {
+      const left = Math.max(0, x - radius);
+      const right = Math.min(w - 1, x + radius);
+      const repeatedLeft = Math.max(0, radius - x);
+      const repeatedRight = Math.max(0, x + radius - (w - 1));
+      const to = (rowStart + x) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const range = prefix[(right + 1) * 4 + channel] - prefix[left * 4 + channel];
+        dst[to + channel] = (
+          range + repeatedLeft * src[first + channel] + repeatedRight * src[last + channel]
+        ) * iarr;
+      }
     }
   }
 }
 
 function boxBlurV(src: Uint8ClampedArray, dst: Uint8ClampedArray, w: number, h: number, r: number) {
-  const iarr = 1 / (r + r + 1);
+  const radius = Math.max(0, Math.floor(r));
+  const iarr = 1 / (radius + radius + 1);
+  const prefix = new Float64Array((h + 1) * 4);
   for (let x = 0; x < w; x++) {
-    let ti = x;
-    let li = ti;
-    let ri = ti + r * w;
+    prefix.fill(0);
+    for (let y = 0; y < h; y += 1) {
+      const source = (y * w + x) * 4;
+      const previous = y * 4;
+      const next = (y + 1) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        prefix[next + channel] = prefix[previous + channel] + src[source + channel];
+      }
+    }
     const firstIdx = x * 4;
     const lastIdx = ((h - 1) * w + x) * 4;
-    const fv0 = src[firstIdx], fv1 = src[firstIdx + 1], fv2 = src[firstIdx + 2], fv3 = src[firstIdx + 3];
-    const lv0 = src[lastIdx], lv1 = src[lastIdx + 1], lv2 = src[lastIdx + 2], lv3 = src[lastIdx + 3];
-    let val0 = (r + 1) * fv0;
-    let val1 = (r + 1) * fv1;
-    let val2 = (r + 1) * fv2;
-    let val3 = (r + 1) * fv3;
-    for (let j = 0; j < r; j++) {
-      const idx = (j * w + x) * 4;
-      val0 += src[idx];
-      val1 += src[idx + 1];
-      val2 += src[idx + 2];
-      val3 += src[idx + 3];
-    }
-    for (let j = 0; j <= r; j++) {
-      const rIdx = ((j + r) * w + x) * 4;
-      val0 += src[rIdx] - fv0;
-      val1 += src[rIdx + 1] - fv1;
-      val2 += src[rIdx + 2] - fv2;
-      val3 += src[rIdx + 3] - fv3;
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      ti += w;
-    }
-    for (let j = r + 1; j < h - r; j++) {
-      const rIdx = ((ri + w) * 4);
-      const lIdx = li * 4;
-      val0 += src[rIdx] - src[lIdx];
-      val1 += src[rIdx + 1] - src[lIdx + 1];
-      val2 += src[rIdx + 2] - src[lIdx + 2];
-      val3 += src[rIdx + 3] - src[lIdx + 3];
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      li += w;
-      ri += w;
-      ti += w;
-    }
-    for (let j = h - r; j < h; j++) {
-      const lIdx = li * 4;
-      val0 += lv0 - src[lIdx];
-      val1 += lv1 - src[lIdx + 1];
-      val2 += lv2 - src[lIdx + 2];
-      val3 += lv3 - src[lIdx + 3];
-      const to = ti * 4;
-      dst[to] = val0 * iarr;
-      dst[to + 1] = val1 * iarr;
-      dst[to + 2] = val2 * iarr;
-      dst[to + 3] = val3 * iarr;
-      li += w;
-      ti += w;
+    for (let y = 0; y < h; y += 1) {
+      const top = Math.max(0, y - radius);
+      const bottom = Math.min(h - 1, y + radius);
+      const repeatedTop = Math.max(0, radius - y);
+      const repeatedBottom = Math.max(0, y + radius - (h - 1));
+      const to = (y * w + x) * 4;
+      for (let channel = 0; channel < 4; channel += 1) {
+        const range = prefix[(bottom + 1) * 4 + channel] - prefix[top * 4 + channel];
+        dst[to + channel] = (
+          range + repeatedTop * src[firstIdx + channel] + repeatedBottom * src[lastIdx + channel]
+        ) * iarr;
+      }
     }
   }
 }

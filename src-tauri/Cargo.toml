@@ -10,6 +10,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 # The pro edition's imaging core. Linked here so the desktop binary carries
 # the native f32/parallel engine rather than driving the browser compositor.
 luma-core = { path = "../crates/luma-core" }
