@@ -197,3 +197,58 @@ import { Studio, currentEdition, isAvailable } from "@/app/engine";
 
 `tests/engine-api.test.ts` pins that surface, including a headless undo/redo
 round-trip, so breaking the desktop edition fails CI.
+
+## Pro edition (desktop)
+
+The desktop build is a [Tauri](https://tauri.app) shell around the same
+`app/engine`. The Rust process owns only the window; all editing runs in the
+shared engine, so there is no second implementation to keep in sync.
+
+```bash
+npm run pro:dev      # desktop shell against the dev server
+npm run pro:build    # packaged build (see Packaging status below)
+```
+
+Both set `NEXT_PUBLIC_LUMA_EDITION=pro`, which is what flips the capability
+matrix in `app/engine/edition.ts`.
+
+### Why Tauri over Electron
+
+| | Tauri | Electron |
+|---|---|---|
+| Bundle | ~3–10 MB | ~120–150 MB |
+| Engine | OS webview (WebKit/WebView2) | Bundled Chromium |
+| Backend | Rust | Node |
+| Memory | Materially lower | Chromium per app |
+| Rendering | Varies by OS webview | Identical everywhere |
+
+Tauri wins on size and memory, which matters for a tool users install
+alongside a full creative suite. The real cost is that the OS webview is not
+Chromium — on macOS it is WebKit, so **WebGL2 float support and canvas
+`colorSpace` behaviour must be verified per platform**, not assumed. Both
+already have runtime fallbacks (`isGLSupported`, `getDisplayCtx`), so a
+missing capability degrades rather than breaks.
+
+Electron would be the right call if we needed guaranteed Chromium parity — a
+reasonable future reason to switch, not a reason to start there.
+
+### Packaging status
+
+`npm run pro:dev` works today: it points the webview at the dev server.
+
+Packaging is **not** finished, and the blocker is architectural rather than
+cosmetic. `npm run build` emits `dist/server` + `dist/client` for a Worker
+runtime — there is no static `index.html` for a webview to load. Three ways
+forward:
+
+1. **Static studio entry (recommended).** `/studio` is already `"use client"`,
+   so a small Vite entry can mount it and produce a real static bundle. Keeps
+   Tauri's size advantage.
+2. **Ship Node and run the server in-process.** Works, but bundles a runtime
+   and erases most of the size win.
+3. **Point at a hosted URL.** Not meaningfully a download.
+
+`bundle.active` is `false` in `src-tauri/tauri.conf.json` until (1) lands:
+without a `frontendDist`, a production build has no frontend to serve. The
+Rust shell itself compiles clean (`cd src-tauri && cargo check`), and the icon
+set in `src-tauri/icons/` is generated from `public/favicon.svg`.

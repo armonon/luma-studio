@@ -11,7 +11,9 @@
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "pro:dev": "NEXT_PUBLIC_LUMA_EDITION=pro tauri dev",
+    "pro:build": "NEXT_PUBLIC_LUMA_EDITION=pro tauri build"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -27,6 +29,7 @@
     "@cloudflare/workers-types": "5.20260804.1",
     "@napi-rs/canvas": "^1.0.3",
     "@tailwindcss/postcss": "4.2.1",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
