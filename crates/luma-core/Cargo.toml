@@ -1,0 +1,13 @@
+[package]
+name = "luma-core"
+version = "0.1.0"
+edition = "2021"
+description = "Native imaging core for Luma Studio — 32-bit float, parallel, HDR-capable"
+
+[dependencies]
+rayon = "1"
+
+[dev-dependencies]
+
+[profile.bench]
+lto = true

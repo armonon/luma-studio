@@ -212,6 +212,49 @@ npm run pro:build    # packaged build (see Packaging status below)
 Both set `NEXT_PUBLIC_LUMA_EDITION=pro`, which is what flips the capability
 matrix in `app/engine/edition.ts`.
 
+### The pro edition is not the web build in a window
+
+The desktop edition exists because the browser engine is structurally capped,
+not because a native window is nicer. `app/engine` stores every layer as a
+`Uint8ClampedArray` behind an `HTMLCanvasElement`, composites on the main
+thread, and uses no workers and no SIMD. Wrapping that in Tauri inherits every
+one of those limits.
+
+`crates/luma-core` is the native imaging core that removes them:
+
+| | web engine | luma-core |
+|---|---|---|
+| Precision | 8-bit, clipped every stage | `f32`, unclamped at rest |
+| Threading | main thread only | rayon, all cores |
+| Blend space | gamma-encoded sRGB | sRGB or linear light |
+| Headroom | none | HDR values survive the pipeline |
+
+Measured on this machine (8 threads, 2048x1536, 8 layers, `cargo run --release
+--example bench -- <mode>`):
+
+| blend mode | web engine | luma-core | speedup |
+|---|---|---|---|
+| `multiply` (native canvas operator) | 49 ms | 26 ms | 1.7x |
+| `subtract` (no native operator) | **5891 ms** | **25 ms** | **220x** |
+
+The gap is not uniform, and the reason matters. For `multiply` the browser
+hands off to Skia's optimised compositor, so the honest win is modest — and
+luma-core is doing 4x the precision work while achieving it. For `subtract`
+there is no native operator, so the web engine round-trips through
+`getImageData` and does the maths in JavaScript on one thread. **11 of the 27
+blend modes have no native operator**, which makes more than a third of the
+catalogue unusable at real resolutions in the browser.
+
+Blend maths is kept in lockstep between the two: `crates/luma-core/tests/
+parity.rs` asserts against the *same* hand-derived W3C reference values as
+`tests/blend-golden.test.ts`, so "one engine, two editions" is enforced rather
+than hoped for.
+
+**Status:** the core is a tested, benchmarked library and is linked into the
+desktop binary. It does **not** yet back the editing UI — that bridge is the
+next increment, and until it lands the desktop build still renders through the
+web path.
+
 ### Why Tauri over Electron
 
 | | Tauri | Electron |

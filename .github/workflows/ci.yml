@@ -34,3 +34,23 @@ jobs:
       # covers the production build as well as the unit suite.
       - name: Test
         run: npm test
+
+  native-core:
+    name: Native core (luma-core)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/luma-core
+
+      # Parity against the same W3C reference values as the TypeScript suite.
+      - name: Test
+        run: cargo test --manifest-path crates/luma-core/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path crates/luma-core/Cargo.toml -- -D warnings
