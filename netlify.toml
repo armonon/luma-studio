@@ -1,0 +1,10 @@
+[build]
+  command = "npm run build:netlify"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "24"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+[functions]
+  node_bundler = "esbuild"

@@ -49,3 +49,6 @@ next-env.d.ts
 
 # Rust build artefacts
 /crates/*/target
+
+# Local Netlify folder
+.netlify

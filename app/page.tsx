@@ -12,6 +12,8 @@ const showcaseModes = [
     metric: "1 click",
     metricLabel: "from project to working context",
     accent: "#7656ef",
+    image: "/desert.jpg",
+    imageAlt: "Saturated orange desert dunes inside the Layer Focus workflow",
   },
   {
     name: "Blend",
@@ -21,6 +23,8 @@ const showcaseModes = [
     metric: "8×",
     metricLabel: "blend passes on every layer",
     accent: "#2385f4",
+    image: "/film-sun.jpg",
+    imageAlt: "Mountain lake photograph being refined with multi-pass blending",
   },
   {
     name: "Paint",
@@ -30,6 +34,8 @@ const showcaseModes = [
     metric: "1",
     metricLabel: "sample becomes a living brush",
     accent: "#f06d3b",
+    image: "/film-lake.jpg",
+    imageAlt: "Turquoise alpine lake used as a source for a captured image brush",
   },
   {
     name: "Develop",
@@ -39,6 +45,8 @@ const showcaseModes = [
     metric: "32-bit",
     metricLabel: "floating-point tile master",
     accent: "#47a56b",
+    image: "/film-mountain.jpg",
+    imageAlt: "Mountain landscape preserved in a floating-point develop workflow",
   },
 ] as const;
 
@@ -78,6 +86,30 @@ const neuralActions = [
   ["◐", "Relight"],
   ["◑", "Harmonize"],
   ["↑", "Upscale"],
+] as const;
+
+const creatorProfiles = [
+  {
+    label: "PHOTOGRAPHERS",
+    copy: "Develop DNG, soft-proof color, retouch locally and preserve the original sensor data.",
+    image: "/film-sun.jpg",
+    alt: "A still mountain lake at first light",
+    badge: "RAW · P3 · 32-BIT",
+  },
+  {
+    label: "DESIGNERS",
+    copy: "Compose with artboards, smart objects, masks, type and PSD-aware export preflight.",
+    image: "/desert.jpg",
+    alt: "Sculptural orange desert dunes",
+    badge: "PSD · PSB · ARTBOARDS",
+  },
+  {
+    label: "ARTISTS",
+    copy: "Capture brushes from images, paint with pressure and branch history without losing an idea.",
+    image: "/film-wave.jpg",
+    alt: "A pastel shoreline at sunset",
+    badge: "BRUSHES · MASKS · HISTORY",
+  },
 ] as const;
 
 export default function MarketingHome() {
@@ -332,10 +364,11 @@ export default function MarketingHome() {
               <div className={`mode-visual mode-${currentMode.name.toLowerCase()}`}>
                 <div className="mode-canvas">
                   <Image
-                    src="/desert.jpg"
-                    alt=""
-                    width={2200}
-                    height={1467}
+                    key={currentMode.image}
+                    src={currentMode.image}
+                    alt={currentMode.imageAlt}
+                    width={900}
+                    height={600}
                     sizes="(max-width: 900px) 100vw, 55vw"
                   />
                   <div className="mode-overlay" />
@@ -367,14 +400,14 @@ export default function MarketingHome() {
         <div className="neural-product reveal">
           <div className="neural-image">
             <Image
-              src="/desert.jpg"
-              alt="Desert image with AI depth mapping"
-              width={2200}
-              height={1467}
+              src="/film-wave.jpg"
+              alt="Pastel shoreline separated into editable scene-aware depth regions"
+              width={900}
+              height={598}
               sizes="(max-width: 900px) 100vw, 70vw"
             />
             <span className="depth-tag sky-tag">Sky · 0.9</span>
-            <span className="depth-tag dune-tag">Dunes · 0.6</span>
+            <span className="depth-tag dune-tag">Water · 0.6</span>
             <span className="depth-tag foreground-tag">Foreground · 0.2</span>
           </div>
           <div className="neural-action-grid">
@@ -389,7 +422,7 @@ export default function MarketingHome() {
           </div>
           <div className="neural-prompt">
             <span>✦</span>
-            <p>Extend the sunset beyond the canvas…</p>
+            <p>Relight the shoreline after sunset…</p>
             <button>Generate</button>
           </div>
         </div>
@@ -433,16 +466,24 @@ export default function MarketingHome() {
           <h2>From first frame<br />to final delivery.</h2>
         </div>
         <div className="creator-cards">
-          {[
-            ["PHOTOGRAPHERS", "Develop DNG, soft-proof color, retouch locally and preserve the original sensor data."],
-            ["DESIGNERS", "Compose with artboards, smart objects, masks, type and PSD-aware export preflight."],
-            ["ARTISTS", "Capture brushes from images, paint with pressure and branch history without losing an idea."],
-          ].map(([label, copy], index) => (
-            <article className="reveal" key={label}>
-              <span>0{index + 1}</span>
-              <h3>{label}</h3>
-              <p>{copy}</p>
-              <i>↗</i>
+          {creatorProfiles.map((profile, index) => (
+            <article className="reveal" key={profile.label}>
+              <div className="creator-image">
+                <Image
+                  src={profile.image}
+                  alt={profile.alt}
+                  width={900}
+                  height={600}
+                  sizes="(max-width: 900px) 100vw, 33vw"
+                />
+                <span>{profile.badge}</span>
+              </div>
+              <div className="creator-card-copy">
+                <small>0{index + 1}</small>
+                <h3>{profile.label}</h3>
+                <p>{profile.copy}</p>
+              </div>
+              <i aria-hidden="true">↗</i>
             </article>
           ))}
         </div>
@@ -469,7 +510,7 @@ export default function MarketingHome() {
           <a href="#intelligence">Neural Lab</a>
           <a href="/studio">Live Studio</a>
         </div>
-        <small>© 2026 Luma Studio. Preview concept.</small>
+        <small>© 2026 Luma Studio. Professional imaging, focused.</small>
       </footer>
     </main>
   );

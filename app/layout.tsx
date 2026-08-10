@@ -12,7 +12,13 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const siteUrl =
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  process.env.URL ??
+  "https://luma-studio-preview.armonon.chatgpt.site";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Luma Studio — Complex canvas. Clear workspace.",
   description:
     "Professional image editing with Layer Focus, multi-pass blending, capture brushes, precision color, branching history and editable AI.",
@@ -20,12 +26,12 @@ export const metadata: Metadata = {
     title: "Luma Studio — Complex canvas. Clear workspace.",
     description: "Layer Focus, multi-pass blending and capture brushes in one precision image studio.",
     type: "website",
-    url: "https://luma-studio-preview.armonon.chatgpt.site",
+    url: "/",
     images: [
       {
-        url: "https://luma-studio-preview.armonon.chatgpt.site/og-luma-studio.png",
-        width: 1735,
-        height: 906,
+        url: "/og-luma-studio.jpg",
+        width: 1200,
+        height: 630,
         alt: "Luma Studio — Complex canvas. Clear workspace.",
       },
     ],
@@ -34,7 +40,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Luma Studio — Complex canvas. Clear workspace.",
     description: "Layer Focus, multi-pass blending and capture brushes in one precision image studio.",
-    images: ["https://luma-studio-preview.armonon.chatgpt.site/og-luma-studio.png"],
+    images: ["/og-luma-studio.jpg"],
   },
   icons: {
     icon: "/favicon.svg",
