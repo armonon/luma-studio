@@ -95,3 +95,49 @@ test("renderer scratch and viewport caches expose strict memory ceilings", () =>
   assert.ok(stats.scratchCacheEntries <= 6);
   assert.ok(stats.scratchCacheBytes <= stats.maxScratchCacheBytes);
 });
+
+test("Focus Off isolates one layer while Full preserves the project composite", () => {
+  const doc = createDocument(512, 512);
+  const blue = createRasterLayer("Blue", solidCanvas(512, 512, "#0000ff"));
+  const red = createRasterLayer("Red", solidCanvas(512, 512, "#ff0000"));
+  doc.layers = [blue, red];
+  const target = testCanvas(512, 512);
+
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 200, focus: { layerId: red.id, target: "pixels", context: "off" } });
+  assert.deepEqual(pixelAt(target, 10, 10), { r: 255, g: 0, b: 0, a: 255 });
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 200, focus: { layerId: red.id, target: "pixels", context: "full" } });
+  assert.deepEqual(pixelAt(target, 10, 10), { r: 0, g: 0, b: 255, a: 255 });
+});
+
+test("Focus Ghost keeps muted project context underneath the active layer", () => {
+  const doc = createDocument(512, 512);
+  const focusedBitmap = testCanvas(512, 512);
+  focusedBitmap.getContext("2d")!.fillStyle = "#ff0000";
+  focusedBitmap.getContext("2d")!.fillRect(0, 0, 256, 512);
+  const focused = createRasterLayer("Focused", focusedBitmap);
+  const context = createRasterLayer("Context", solidCanvas(512, 512, "#0000ff"));
+  doc.layers = [focused, context];
+  const target = testCanvas(512, 512);
+
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 201, focus: { layerId: focused.id, target: "pixels", context: "ghost" } });
+  assert.deepEqual(pixelAt(target, 20, 20), { r: 255, g: 0, b: 0, a: 255 });
+  const ghost = pixelAt(target, 400, 20);
+  assert.ok(ghost.a > 70 && ghost.a < 120, `expected muted context alpha, received ${ghost.a}`);
+  assert.ok(ghost.b > ghost.r);
+});
+
+test("focused masks render as an unambiguous grayscale editing target", () => {
+  const doc = createDocument(512, 512);
+  const layer = createRasterLayer("Masked", solidCanvas(512, 512, "#ff0000"));
+  layer.mask = testCanvas(512, 512);
+  layer.mask.getContext("2d")!.fillStyle = "rgba(0,0,0,1)";
+  layer.mask.getContext("2d")!.fillRect(0, 0, 256, 512);
+  doc.layers = [layer];
+  const target = testCanvas(512, 512);
+
+  renderViewport(doc, target, viewport, { checkerboard: false, cacheRevision: 202, focus: { layerId: layer.id, target: "mask", context: "off" } });
+  const inside = pixelAt(target, 20, 20);
+  const outside = pixelAt(target, 400, 20);
+  assert.ok(inside.r > 240 && inside.g > 240 && inside.b > 240);
+  assert.ok(outside.r < 50 && outside.g < 50 && outside.b < 50);
+});

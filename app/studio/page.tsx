@@ -14,30 +14,19 @@ import {
 import { LUMA_API_VERSION, LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
-  BLEND_MODE_GROUPS,
-  BLEND_LABELS,
-  BlendIf,
-  BlendIfRange,
-  BlendMode,
   CapturedBrushAsset,
-  Curves,
-  HslParams,
   Layer,
-  LevelsParams,
   NEUTRAL_CURVES,
   NEUTRAL_HSL,
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
-  MAX_LAYER_BLEND_PASSES,
   PathAnchor,
   PathStyle,
   ProofProfile,
   ProofSettings,
-  SmartFilter,
   ToneParams,
   Transform,
   cloneCurves,
-  curveToLut,
   documentPointToLayer,
   layerCorners,
   resolvedBlendPasses,
@@ -78,12 +67,33 @@ import {
   shortcutConflict,
   type WorkflowPreferences,
 } from "@/app/engine/workflow-preferences";
+import {
+  EMPTY_LAYER_FOCUS_STATE,
+  enterLayerFocus,
+  fitViewToLayer,
+  focusBreadcrumbLayers,
+  focusItems,
+  hitTestEditableLayer,
+  leaveLayerFocus,
+  reconcileLayerFocus,
+  supportsIsolatedFocus,
+  type FocusContextMode,
+  type FocusEditTarget,
+  type LayerFocusState,
+} from "./layer-focus-model";
+import type { FocusCreateAction } from "./layer-focus-panel";
 
 const ExportPopover = lazy(() => import("./export-popover"));
 const ToolDock = lazy(() => import("./tool-dock"));
 const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
 const StudioTitlebar = lazy(() => import("./studio-titlebar"));
 const ContextToolbar = lazy(() => import("./context-toolbar"));
+const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
+const BlendStackEditor = lazy(() => import("./blend-stack-editor"));
+const SmartFilterEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.SmartFilterEditor })));
+const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
+const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
+const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.HslEditor })));
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -255,504 +265,6 @@ const filmstrip = [
   { name: "Lake", src: "/film-lake.jpg" },
 ] as const;
 
-function geometricPath(kind: "triangle" | "polygon" | "line" | "custom-shape", x: number, y: number, width: number, height: number, color: string): PathStyle {
-  const centerX = x + width / 2;
-  const centerY = y + height / 2;
-  let points: Point[];
-  if (kind === "line") points = [{ x, y }, { x: x + width, y: y + height }];
-  else {
-    const sides = kind === "triangle" ? 3 : kind === "polygon" ? 6 : 10;
-    points = Array.from({ length: sides }, (_, index) => {
-      const angle = -Math.PI / 2 + index / sides * Math.PI * 2;
-      const starScale = kind === "custom-shape" && index % 2 ? 0.42 : 1;
-      return {
-        x: centerX + Math.cos(angle) * width / 2 * starScale,
-        y: centerY + Math.sin(angle) * height / 2 * starScale,
-      };
-    });
-  }
-  return {
-    anchors: points.map((point) => ({ ...point, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } })),
-    closed: kind !== "line",
-    fill: kind === "line" ? "transparent" : color,
-    stroke: kind === "line" ? color : "#000000",
-    strokeWidth: kind === "line" ? Math.max(2, Math.min(width, height) * 0.04) : 0,
-  };
-}
-
-function BlendIfRangeEditor({
-  label,
-  range,
-  onChange,
-}: {
-  label: string;
-  range: BlendIfRange;
-  onChange: (range: BlendIfRange) => void;
-}) {
-  const fields: ReadonlyArray<readonly [keyof BlendIfRange, string]> = [
-    ["black", "Black hide"],
-    ["blackFeather", "Black fade"],
-    ["whiteFeather", "White fade"],
-    ["white", "White hide"],
-  ];
-  const update = (key: keyof BlendIfRange, value: number) => onChange({ ...range, [key]: value / 255 });
-  return (
-    <div className="blend-if-range">
-      <div className="blend-if-range-heading">
-        <strong>{label}</strong>
-        <span>{Math.round(range.black * 255)} · {Math.round(range.blackFeather * 255)} / {Math.round(range.whiteFeather * 255)} · {Math.round(range.white * 255)}</span>
-      </div>
-      <div
-        className="blend-if-preview"
-        style={{
-          "--black": `${range.black * 100}%`,
-          "--black-feather": `${range.blackFeather * 100}%`,
-          "--white-feather": `${range.whiteFeather * 100}%`,
-          "--white": `${range.white * 100}%`,
-        } as React.CSSProperties}
-      />
-      {fields.map(([key, name]) => (
-        <label key={key}>
-          <span>{name}</span>
-          <input
-            type="range"
-            min="0"
-            max="255"
-            value={Math.round(range[key] * 255)}
-            onChange={(event) => update(key, Number(event.target.value))}
-            aria-label={`${label} ${name}`}
-          />
-          <output>{Math.round(range[key] * 255)}</output>
-        </label>
-      ))}
-    </div>
-  );
-}
-
-function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
-  const passes = resolvedBlendPasses(layer);
-  const blendIf = resolvedBlendIf(layer);
-  const fillOpacity = resolvedFillOpacity(layer);
-  const hasAdvancedSettings = !isNeutralBlendIf(blendIf) || fillOpacity < 1;
-  const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedSettings);
-  const [draggedPass, setDraggedPass] = useState<string | null>(null);
-  const activeBlendIf = blendIf.channels[blendIf.activeChannel];
-  const setRange = (key: "source" | "underlying", range: BlendIfRange) => {
-    studio.setLayerBlendIf(layer.id, {
-      ...blendIf,
-      channels: {
-        ...blendIf.channels,
-        [blendIf.activeChannel]: { ...activeBlendIf, [key]: range },
-      },
-    });
-  };
-  return (
-    <div className="blend-stack-editor">
-      <div className="blend-stack-heading">
-        <span><strong>Blending</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} modes</small></span>
-        <button
-          type="button"
-          onClick={() => studio.addBlendPass(layer.id)}
-          disabled={passes.length >= MAX_LAYER_BLEND_PASSES}
-          title="Add another blend pass"
-        >＋ Add blend mode</button>
-      </div>
-      <p>Pass 1 is applied first. Every pass blends this layer again with its own mode and opacity.</p>
-      <div className="blend-pass-list">
-        {passes.map((pass, index) => (
-          <div
-            className={`blend-pass ${pass.enabled ? "" : "disabled"}`}
-            key={pass.id}
-            draggable
-            onDragStart={() => setDraggedPass(pass.id)}
-            onDragEnd={() => setDraggedPass(null)}
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={() => {
-              if (!draggedPass || draggedPass === pass.id) return;
-              const from = passes.findIndex((candidate) => candidate.id === draggedPass);
-              studio.moveBlendPass(layer.id, draggedPass, index - from);
-              setDraggedPass(null);
-            }}
-          >
-            <div className="blend-pass-topline">
-              <button
-                type="button"
-                className="blend-pass-toggle"
-                onClick={() => studio.updateBlendPass(layer.id, pass.id, { enabled: !pass.enabled })}
-                aria-label={`${pass.enabled ? "Disable" : "Enable"} blend pass ${index + 1}`}
-                title={pass.enabled ? "Disable pass" : "Enable pass"}
-              >{pass.enabled ? "◉" : "○"}</button>
-              <span>Pass {index + 1}</span>
-              <div className="blend-pass-order">
-                <button type="button" onClick={() => studio.moveBlendPass(layer.id, pass.id, -1)} disabled={index === 0} aria-label="Move pass earlier">↑</button>
-                <button type="button" onClick={() => studio.moveBlendPass(layer.id, pass.id, 1)} disabled={index === passes.length - 1} aria-label="Move pass later">↓</button>
-                <button type="button" onClick={() => studio.removeBlendPass(layer.id, pass.id)} disabled={passes.length === 1} aria-label="Remove blend pass">×</button>
-              </div>
-            </div>
-            <select
-              value={pass.mode}
-              onChange={(event) => studio.updateBlendPass(layer.id, pass.id, { mode: event.target.value as BlendMode })}
-              aria-label={`Blend mode for pass ${index + 1}`}
-            >
-              {BLEND_MODE_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.modes.map((mode) => <option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>)}
-                </optgroup>
-              ))}
-            </select>
-            <label>
-              <span>Pass opacity</span>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={Math.round(pass.opacity * 100)}
-                onChange={(event) => studio.updateBlendPass(layer.id, pass.id, { opacity: Number(event.target.value) / 100 })}
-              />
-              <output>{Math.round(pass.opacity * 100)}%</output>
-            </label>
-          </div>
-        ))}
-      </div>
-      <details className="advanced-blending" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
-        <summary><span>Advanced blending</span><small>Fill · Blend If</small></summary>
-        <div className="advanced-blending-body">
-          <label className="fill-opacity-control">
-            <span>Fill opacity</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={Math.round(fillOpacity * 100)}
-              onChange={(event) => studio.setLayerFillOpacity(layer.id, Number(event.target.value) / 100)}
-            />
-            <output>{Math.round(fillOpacity * 100)}%</output>
-          </label>
-          <div className="blend-if-heading">
-            <span><strong>Blend If</strong><small>Feathered tonal visibility</small></span>
-            <select
-              value={blendIf.activeChannel}
-              onChange={(event) => studio.setLayerBlendIf(layer.id, { ...blendIf, activeChannel: event.target.value as BlendIf["activeChannel"] })}
-              aria-label="Blend If channel"
-            >
-              <option value="gray">Gray</option>
-              <option value="red">Red</option>
-              <option value="green">Green</option>
-              <option value="blue">Blue</option>
-            </select>
-          </div>
-          <BlendIfRangeEditor label="This layer" range={activeBlendIf.source} onChange={(range) => setRange("source", range)} />
-          <BlendIfRangeEditor label="Underlying" range={activeBlendIf.underlying} onChange={(range) => setRange("underlying", range)} />
-          <button
-            type="button"
-            className="blend-if-reset"
-            onClick={() => studio.resetLayerBlendIf(layer.id)}
-            disabled={!layer.blendIf}
-          >Reset Blend If</button>
-        </div>
-      </details>
-    </div>
-  );
-}
-
-function SmartFilterEditor({
-  layer,
-  filter,
-  index,
-  count,
-  studio,
-}: {
-  layer: Layer;
-  filter: SmartFilter;
-  index: number;
-  count: number;
-  studio: Studio;
-}) {
-  const parameter = (
-    label: string,
-    key: string,
-    minimum: number,
-    maximum: number,
-    step: number,
-    fallback: number,
-    suffix = "",
-  ) => {
-    const value = filter.params[key] ?? fallback;
-    const patch = (next: number) => ({ params: { [key]: next } });
-    return (
-      <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
-        <span>{label}</span>
-        <input
-          type="range"
-          min={minimum}
-          max={maximum}
-          step={step}
-          value={value}
-          onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, patch(Number(event.target.value)))}
-          onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))}
-          onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))}
-          aria-label={`${filter.kind} ${label}`}
-        />
-        <output>{Math.round(value * 10) / 10}{suffix}</output>
-      </label>
-    );
-  };
-  return (
-    <div style={{ display: "grid", gap: 5, padding: 7, border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, opacity: filter.enabled ? 1 : 0.55 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        <button onClick={() => studio.updateSmartFilter(layer.id, filter.id, { enabled: !filter.enabled })} aria-label={`${filter.enabled ? "Disable" : "Enable"} ${filter.kind} filter`}>{filter.enabled ? "◉" : "○"}</button>
-        <strong style={{ flex: 1, fontSize: 11 }}>fx · {filter.kind}</strong>
-        <button onClick={() => studio.moveSmartFilter(layer.id, filter.id, -1)} disabled={index === 0} aria-label="Move filter earlier">↑</button>
-        <button onClick={() => studio.moveSmartFilter(layer.id, filter.id, 1)} disabled={index === count - 1} aria-label="Move filter later">↓</button>
-        <button onClick={() => studio.removeSmartFilter(layer.id, filter.id)} aria-label={`Remove ${filter.kind} filter`}>×</button>
-      </div>
-      <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
-        <span>Opacity</span>
-        <input
-          type="range"
-          min="0"
-          max="100"
-          value={Math.round(filter.opacity * 100)}
-          onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, { opacity: Number(event.target.value) / 100 })}
-          onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })}
-          onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })}
-        />
-        <output>{Math.round(filter.opacity * 100)}%</output>
-      </label>
-      {(filter.kind === "blur" || filter.kind === "sharpen") && parameter("Radius", "radius", 0.5, 64, 0.5, filter.kind === "blur" ? 8 : 2, "px")}
-      {filter.kind === "sharpen" && parameter("Amount", "amount", 0, 3, 0.05, 0.6)}
-      {filter.kind === "desaturate" && parameter("Amount", "amount", 0, 1, 0.01, 1)}
-      {filter.kind === "hue" && parameter("Degrees", "degrees", -180, 180, 1, 45, "°")}
-    </div>
-  );
-}
-
-type CurveChannel = "rgb" | "r" | "g" | "b";
-
-function CurvesEditor({
-  curves,
-  onLive,
-  onCommit,
-  onReset,
-}: {
-  curves: Curves;
-  onLive: (c: Curves) => void;
-  onCommit: (c: Curves) => void;
-  onReset: () => void;
-}) {
-  const [channel, setChannel] = useState<CurveChannel>("rgb");
-  const svgRef = useRef<SVGSVGElement>(null);
-  const [drag, setDrag] = useState<number | null>(null);
-
-  const size = 220;
-  const pts = curves[channel];
-  const lut = useMemo(() => curveToLut(pts), [pts]);
-
-  const toSvg = (p: { x: number; y: number }) => ({ x: p.x * size, y: (1 - p.y) * size });
-  const fromSvg = (x: number, y: number) => ({
-    x: Math.max(0, Math.min(1, x / size)),
-    y: Math.max(0, Math.min(1, 1 - y / size)),
-  });
-
-  const updateChannel = (nextPts: typeof pts, commit: boolean) => {
-    const next = cloneCurves(curves);
-    next[channel] = nextPts;
-    if (commit) onCommit(next);
-    else onLive(next);
-  };
-
-  const evToSvg = (e: React.PointerEvent<SVGSVGElement>) => {
-    const rect = svgRef.current!.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * size;
-    const y = ((e.clientY - rect.top) / rect.height) * size;
-    return { x, y };
-  };
-
-  const onDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const p = evToSvg(e);
-    // Hit test existing points
-    let hit = -1;
-    for (let i = 0; i < pts.length; i++) {
-      const sp = toSvg(pts[i]);
-      if (Math.hypot(sp.x - p.x, sp.y - p.y) < 8) { hit = i; break; }
-    }
-    if (hit === -1) {
-      // Add a new point at pointer
-      const np = fromSvg(p.x, p.y);
-      const next = [...pts, np].sort((a, b) => a.x - b.x);
-      updateChannel(next, false);
-      setDrag(next.findIndex((q) => q.x === np.x && q.y === np.y));
-    } else {
-      setDrag(hit);
-    }
-    (e.target as Element).setPointerCapture(e.pointerId);
-  };
-  const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (drag == null) return;
-    const p = evToSvg(e);
-    const np = fromSvg(p.x, p.y);
-    const next = pts.map((q, i) => (i === drag ? np : q));
-    // Keep first/last fixed on x edges to avoid ambiguity, but allow y to move.
-    if (drag === 0) next[0].x = 0;
-    if (drag === next.length - 1) next[next.length - 1].x = 1;
-    updateChannel(next, false);
-  };
-  const onUp = () => {
-    if (drag == null) return;
-    setDrag(null);
-    onCommit(curves);
-  };
-
-  const rmPoint = (i: number) => {
-    if (pts.length <= 2 || i === 0 || i === pts.length - 1) return;
-    updateChannel(pts.filter((_, k) => k !== i), true);
-  };
-
-  const linePath = pts.map((p, i) => {
-    const s = toSvg(p);
-    return `${i === 0 ? "M" : "L"}${s.x} ${s.y}`;
-  }).join(" ");
-  const lutPath = Array.from({ length: 256 }, (_, i) => {
-    const x = (i / 255) * size;
-    const y = (1 - lut[i] / 255) * size;
-    return `${i === 0 ? "M" : "L"}${x} ${y}`;
-  }).join(" ");
-
-  return (
-    <section className="glass-card tone-card">
-      <header>
-        <strong>Curves</strong>
-        <button onClick={onReset} aria-label="Reset curves">↺</button>
-      </header>
-      <div style={{ display: "flex", gap: 4, padding: "4px 12px" }}>
-        {(["rgb", "r", "g", "b"] as CurveChannel[]).map((c) => (
-          <button
-            key={c}
-            onClick={() => setChannel(c)}
-            style={{
-              flex: 1, padding: "4px 6px", fontSize: 11, borderRadius: 6,
-              background: channel === c ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.04)",
-              color: c === "r" ? "#ff6b6b" : c === "g" ? "#7bff8f" : c === "b" ? "#6ba6ff" : "#fff",
-              border: "1px solid rgba(255,255,255,0.14)",
-              textTransform: "uppercase",
-            }}
-          >
-            {c}
-          </button>
-        ))}
-      </div>
-      <div style={{ padding: 8 }}>
-        <svg
-          ref={svgRef}
-          viewBox={`0 0 ${size} ${size}`}
-          width="100%"
-          style={{ background: "rgba(0,0,0,0.3)", borderRadius: 8, aspectRatio: "1", touchAction: "none" }}
-          onPointerDown={onDown}
-          onPointerMove={onMove}
-          onPointerUp={onUp}
-        >
-          {/* grid */}
-          {Array.from({ length: 5 }).map((_, i) => {
-            const t = (i / 4) * size;
-            return (
-              <g key={i}>
-                <line x1={t} y1={0} x2={t} y2={size} stroke="rgba(255,255,255,.08)" />
-                <line x1={0} y1={t} x2={size} y2={t} stroke="rgba(255,255,255,.08)" />
-              </g>
-            );
-          })}
-          {/* baseline */}
-          <line x1={0} y1={size} x2={size} y2={0} stroke="rgba(255,255,255,.15)" strokeDasharray="4 4" />
-          <path d={lutPath} stroke={channel === "r" ? "#ff6b6b" : channel === "g" ? "#7bff8f" : channel === "b" ? "#6ba6ff" : "#fff"} strokeWidth={1.5} fill="none" />
-          {pts.map((p, i) => {
-            const s = toSvg(p);
-            return (
-              <circle
-                key={i}
-                cx={s.x} cy={s.y} r={5}
-                fill="#fff" stroke="rgba(0,0,0,.4)"
-                onDoubleClick={(e) => { e.stopPropagation(); rmPoint(i); }}
-                style={{ cursor: "pointer" }}
-              />
-            );
-          })}
-          {/* invisible baseline path */}
-          <path d={linePath} stroke="none" fill="none" />
-        </svg>
-      </div>
-      <p style={{ padding: "0 12px 8px", fontSize: 11, opacity: 0.65 }}>
-        Click to add a point · drag to move · double-click a point to delete
-      </p>
-    </section>
-  );
-}
-
-function LevelsEditor({
-  levels, onLive, onCommit, onReset,
-}: {
-  levels: LevelsParams;
-  onLive: (l: LevelsParams) => void;
-  onCommit: (l: LevelsParams) => void;
-  onReset: () => void;
-}) {
-  const set = (patch: Partial<LevelsParams>) => onLive({ ...levels, ...patch });
-  const rows: Array<[keyof LevelsParams, string, number, number, number]> = [
-    ["inBlack", "In black", 0, 1, 0.001],
-    ["inWhite", "In white", 0, 1, 0.001],
-    ["gamma", "Gamma", 0.1, 9.99, 0.01],
-    ["outBlack", "Out black", 0, 1, 0.001],
-    ["outWhite", "Out white", 0, 1, 0.001],
-  ];
-  return (
-    <section className="glass-card tone-card">
-      <header><strong>Levels</strong><button onClick={onReset}>↺</button></header>
-      <div className="tone-controls">
-        {rows.map(([k, label, min, max, step]) => (
-          <label key={k}>
-            <span>{label}</span>
-            <input type="range" min={min} max={max} step={step} value={levels[k]}
-              onChange={(e) => set({ [k]: Number(e.target.value) })}
-              onPointerUp={() => onCommit(levels)} />
-            <output>{k === "gamma" ? levels[k].toFixed(2) : levels[k].toFixed(3)}</output>
-          </label>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function HslEditor({
-  hsl, onLive, onCommit, onReset,
-}: {
-  hsl: HslParams;
-  onLive: (h: HslParams) => void;
-  onCommit: (h: HslParams) => void;
-  onReset: () => void;
-}) {
-  const set = (patch: Partial<HslParams>) => onLive({ ...hsl, ...patch });
-  const rows: Array<[keyof HslParams, string, number, number]> = [
-    ["hue", "Hue", -180, 180],
-    ["saturation", "Saturation", -100, 100],
-    ["lightness", "Lightness", -100, 100],
-  ];
-  return (
-    <section className="glass-card tone-card">
-      <header><strong>Hue / Saturation</strong><button onClick={onReset}>↺</button></header>
-      <div className="tone-controls">
-        {rows.map(([k, label, min, max]) => (
-          <label key={k}>
-            <span>{label}</span>
-            <input type="range" min={min} max={max} step={1} value={hsl[k]}
-              onChange={(e) => set({ [k]: Number(e.target.value) })}
-              onPointerUp={() => onCommit(hsl)} />
-            <output>{Math.round(hsl[k])}</output>
-          </label>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function rotMat(theta: number): [number, number, number, number] {
   // Returns the 2x2 rotation matrix in row-major: [r00, r01, r10, r11].
   const c = Math.cos(theta), s = Math.sin(theta);
@@ -782,19 +294,6 @@ function CapturedBrushThumbnail({ asset }: { asset: CapturedBrushAsset }) {
   return <canvas ref={ref} width={48} height={48} aria-hidden="true" />;
 }
 
-function mimeForFileName(fileName: string) {
-  const extension = fileName.split(".").pop()?.toLowerCase();
-  if (extension === "png") return "image/png";
-  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
-  if (extension === "webp") return "image/webp";
-  if (extension === "gif") return "image/gif";
-  if (extension === "bmp") return "image/bmp";
-  if (extension === "tif" || extension === "tiff") return "image/tiff";
-  if (extension === "psd" || extension === "psb") return "image/vnd.adobe.photoshop";
-  if (extension === "luma") return "application/x-luma-project";
-  return "application/octet-stream";
-}
-
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
@@ -807,6 +306,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const psdInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
   const captureInput = useRef<HTMLInputElement>(null);
+  const focusImportInput = useRef<HTMLInputElement>(null);
   const inspectorRef = useRef<HTMLElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
   const [, setVersion] = useState(0);
@@ -815,17 +315,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [workspace, setWorkspace] = useState<WorkspaceMode>("edit");
   const [activeTool, setActiveTool] = useState<Tool>("brush");
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
-  const [assetsOpen, setAssetsOpen] = useState(false);
+  const [assetsOpen, setAssetsOpen] = useState(true);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
   const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
+  const [recentLayerIds, setRecentLayerIds] = useState<string[]>([]);
+  const [pinnedLayerIds, setPinnedLayerIds] = useState<string[]>([]);
+  const [focusState, setFocusState] = useState<LayerFocusState>(EMPTY_LAYER_FOCUS_STATE);
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const activeLayerIdRef = useRef<string | null>(null);
   const setActiveLayerId = useCallback((id: string | null) => {
     activeLayerIdRef.current = id;
     setActiveLayerIdState(id);
+    if (id) setRecentLayerIds((current) => [id, ...current.filter((candidate) => candidate !== id)].slice(0, 24));
   }, []);
   const [activeAdjustmentId, setActiveAdjustmentId] = useState<string | null>(null);
   const [tone, setTone] = useState<ToneParams>({ ...NEUTRAL_TONE });
@@ -880,7 +384,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [selectionShift, setSelectionShift] = useState(0);
   const [selectionMode, setSelectionMode] = useState<SelectionCombineMode>("replace");
   const [toast, setToast] = useState("");
-  const [activePreset, setActivePreset] = useState(0);
+  const activePreset = 0;
   const [customName, setCustomName] = useState<string | null>(null);
   const [layerCompName, setLayerCompName] = useState("Layer Comp");
   const [artboardName, setArtboardName] = useState("Artboard");
@@ -919,6 +423,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const viewAnimationRef = useRef<number | null>(null);
   const [displayViewport, setDisplayViewport] = useState<DisplayViewport | null>(null);
   const spaceHeld = useRef(false);
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
@@ -1045,7 +550,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const doc = studio?.doc;
   const layers: Layer[] = doc?.layers ?? [];
   const openDocuments = studio?.listDocuments() ?? [];
+  const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
+  const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const focusedLayer = resolvedFocusState.scope
+    ? layers.find((layer) => layer.id === resolvedFocusState.scope?.layerId) ?? null
+    : null;
+  const focusPanelItems = doc
+    ? focusItems(doc, resolvedFocusState, activeLayerId, pinnedLayerIds, recentLayerIds)
+    : [];
+  const focusBreadcrumbs = doc ? focusBreadcrumbLayers(doc, resolvedFocusState) : [];
   const capturedBrushes = doc?.capturedBrushes ?? [];
   const capturedBrushRevision = doc?.capturedBrushes;
   const capturedBrushColorSpace = doc?.colorSpace;
@@ -1062,6 +576,68 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     : null;
   const setRawDevelop = (settings: RawDevelopSettings | null) => {
     setRawDevelopDraft(settings && activeLayer ? { layerId: activeLayer.id, settings } : null);
+  };
+
+  useEffect(() => {
+    const scope = resolvedFocusState.scope;
+    studio?.setFocusPreview(scope ? {
+      layerId: scope.layerId,
+      target: scope.target,
+      context: resolvedFocusState.context,
+    } : null);
+  }, [studio, resolvedFocusState.scope, resolvedFocusState.context]);
+
+  const animateCanvasView = useCallback((destination: typeof view) => {
+    if (viewAnimationRef.current !== null) cancelAnimationFrame(viewAnimationRef.current);
+    const source = { ...view };
+    const started = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / 190);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      setView({
+        zoom: source.zoom + (destination.zoom - source.zoom) * eased,
+        panX: source.panX + (destination.panX - source.panX) * eased,
+        panY: source.panY + (destination.panY - source.panY) * eased,
+      });
+      viewAnimationRef.current = progress < 1 ? requestAnimationFrame(tick) : null;
+    };
+    viewAnimationRef.current = requestAnimationFrame(tick);
+  }, [view]);
+
+  useEffect(() => () => {
+    if (viewAnimationRef.current !== null) cancelAnimationFrame(viewAnimationRef.current);
+  }, []);
+
+  const enterFocusMode = (layerId: string, target: FocusEditTarget = "pixels") => {
+    if (!doc || !activeDocumentId) return;
+    const layer = doc.layers.find((candidate) => candidate.id === layerId);
+    if (!layer) return;
+    const stage = stageRef.current?.getBoundingClientRect();
+    const next = enterLayerFocus(resolvedFocusState, doc, activeDocumentId, layerId, view, target);
+    setFocusState(next);
+    setActiveLayerId(layerId);
+    setAssetsOpen(true);
+    if (target === "mask" && layer.mask) {
+      setWorkspace("mask");
+      setActiveTool("mask-add");
+    }
+    if (stage) animateCanvasView(fitViewToLayer(doc, layerId, stage.width, stage.height));
+  };
+
+  const exitFocusMode = () => {
+    if (!resolvedFocusState.scope) return;
+    const destination = resolvedFocusState.projectView;
+    setFocusState(leaveLayerFocus(resolvedFocusState));
+    studio?.setFocusPreview(null);
+    if (destination) animateCanvasView(destination);
+  };
+
+  const setFocusContext = (context: FocusContextMode) => {
+    if (!resolvedFocusState.scope || !focusedLayer) return;
+    if (!supportsIsolatedFocus(focusedLayer) && context !== "full") {
+      return;
+    }
+    setFocusState({ ...resolvedFocusState, context });
   };
 
   useEffect(() => () => {
@@ -1317,8 +893,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (paintingTool) {
       if (!activeLayer) { notify("Select a layer"); return; }
       const params = brushParams();
-      if ((params.mode === "mask-add" || params.mode === "mask-remove") && activeLayer.kind !== "raster") {
-        notify("Mask brush needs a raster layer"); return;
+      if ((params.mode === "mask-add" || params.mode === "mask-remove") && activeLayer.locked) {
+        notify("Unlock the layer before editing its mask"); return;
       }
       if ((params.mode === "paint" || params.mode === "erase") && activeLayer.kind !== "raster") {
         notify("Brush needs a raster layer"); return;
@@ -1447,8 +1023,19 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       directAnchorRef.current = { layerId: activeLayer.id, index, original, next: structuredClone(original) };
       return;
     }
-    if (moveTool && activeLayer) {
-      setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: "move-layer", moveStart: { tx: activeLayer.transform.tx, ty: activeLayer.transform.ty } });
+    if (moveTool && doc) {
+      const hit = hitTestEditableLayer(doc, p.x, p.y, resolvedFocusState.scope?.layerId);
+      const interactionLayer = hit ?? activeLayer;
+      if (!interactionLayer) return;
+      if (hit && hit.id !== activeLayerId) setActiveLayerId(hit.id);
+      setDragBoth({
+        x0: p.x,
+        y0: p.y,
+        x1: p.x,
+        y1: p.y,
+        kind: "move-layer",
+        moveStart: { tx: interactionLayer.transform.tx, ty: interactionLayer.transform.ty },
+      });
       return;
     }
   };
@@ -1586,7 +1173,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     else if (d.kind === "sel-lasso" && d.path && d.path.length > 4) studio.selectLasso(d.path, mode, feather);
     else if (d.kind === "rect" && w > 2 && h > 2) studio.addShapeLayer({ kind: "rect", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
     else if (d.kind === "ellipse" && w > 2 && h > 2) studio.addShapeLayer({ kind: "ellipse", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
-    else if (["triangle", "polygon", "line", "custom-shape"].includes(d.kind) && w > 2 && h > 2) studio.addPathLayer(geometricPath(d.kind as "triangle" | "polygon" | "line" | "custom-shape", x, y, w, h, brushColor));
+    else if (["triangle", "polygon", "line", "custom-shape"].includes(d.kind) && w > 2 && h > 2) {
+      void import("./focus-import").then(({ geometricPath }) => studio.addPathLayer(geometricPath(d.kind as "triangle" | "polygon" | "line" | "custom-shape", x, y, w, h, brushColor)));
+    }
     else if (d.kind === "frame" && w > 2 && h > 2) studio.addFrame(x, y, w, h, e.shiftKey);
     else if (d.kind === "paragraph-text" && w > 8 && h > 8) studio.addTextLayer(textDraft, { x, y, layout: "paragraph", boxWidth: w, boxHeight: h, color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` });
     else if (d.kind === "gradient" && activeLayer?.kind === "raster") studio.gradientFill(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, brushColor, secondaryColor, gradientType);
@@ -1647,26 +1236,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activateTool = (tool: Tool, nextWorkspace: WorkspaceMode = workspace) => {
     setPointDraft([]);
     directAnchorRef.current = null;
+    if (resolvedFocusState.scope?.target === "mask" && tool !== "mask-add" && tool !== "mask-remove") {
+      setFocusState({
+        ...resolvedFocusState,
+        scope: { ...resolvedFocusState.scope, target: "pixels" },
+      });
+    }
     if (nextWorkspace !== workspace) setWorkspace(nextWorkspace);
     setActiveTool(tool);
     setInspectorTab("properties");
     if (tool === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
-  };
-
-  const openPreset = async (index: number) => {
-    if (!studio) return;
-    setActivePreset(index);
-    setCustomName(null);
-    try {
-      const img = await loadImage(filmstrip[index].src);
-      const layer = studio.openImage(filmstrip[index].name, img);
-      setActiveLayerId(layer.id);
-      setActiveAdjustmentId(null);
-      setTone({ ...NEUTRAL_TONE });
-      notify(`${filmstrip[index].name} opened`);
-    } catch {
-      notify("Failed to load");
-    }
   };
 
   const importDocumentFile = async (file: File) => {
@@ -1779,6 +1358,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         opened.data.byteOffset,
         opened.data.byteOffset + opened.data.byteLength,
       ) as ArrayBuffer;
+      const { mimeForFileName } = await import("./focus-import");
       await importDocumentFile(new File([bytes], opened.name, { type: mimeForFileName(opened.name) }));
     } catch (error) {
       notify(error instanceof Error ? error.message : "Native open failed");
@@ -1788,6 +1368,40 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const requestDocumentOpen = () => {
     if (isNativeFilesystemAvailable()) void openNativeDocument();
     else fileInput.current?.click();
+  };
+
+  const importLayerFile = async (file: File) => {
+    if (!studio) return;
+    try {
+      const { addImageFileAsLayer } = await import("./focus-import");
+      const { layer, name } = await addImageFileAsLayer(studio, file);
+      setActiveLayerId(layer.id);
+      setAssetsOpen(true);
+      notify(`${name} added as a layer`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : `${file.name} could not be added`);
+    }
+  };
+
+  const importLayerFiles = async (files: File[]) => {
+    for (const file of files) await importLayerFile(file);
+  };
+
+  const onFocusImportChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.target.files ?? [])];
+    event.target.value = "";
+    await importLayerFiles(files);
+  };
+
+  const pasteImageAsLayer = async () => {
+    try {
+      const { clipboardImageFile } = await import("./focus-import");
+      const file = await clipboardImageFile();
+      if (file) await importLayerFile(file);
+      else notify("The clipboard does not contain an image");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Clipboard access was not granted");
+    }
   };
 
   const onPsdImport = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1883,6 +1497,50 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!studio || !activeLayerId) return;
     studio.removeLayer(activeLayerId);
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+  };
+
+  const toggleFocusPin = (layerId: string) => {
+    setPinnedLayerIds((current) => current.includes(layerId)
+      ? current.filter((id) => id !== layerId)
+      : [...current, layerId]);
+  };
+
+  const reorderFocusItems = (sourceId: string, targetId: string) => {
+    setPinnedLayerIds((current) => {
+      const ordered = current.includes(sourceId) ? [...current] : [...current, sourceId];
+      if (!ordered.includes(targetId)) ordered.push(targetId);
+      const sourceIndex = ordered.indexOf(sourceId);
+      const targetIndex = ordered.indexOf(targetId);
+      ordered.splice(sourceIndex, 1);
+      ordered.splice(targetIndex, 0, sourceId);
+      return ordered;
+    });
+  };
+
+  const handleFocusCreate = (action: FocusCreateAction) => {
+    if (!studio) return;
+    if (action === "new") { addBlank(); return; }
+    if (action === "import") { focusImportInput.current?.click(); return; }
+    if (action === "adjustment") { addAdjust(); return; }
+    if (action === "text") {
+      const layer = studio.addTextLayer("Text", { x: studio.doc.width * 0.25, y: studio.doc.height * 0.5, color: brushColor });
+      setActiveLayerId(layer.id);
+      return;
+    }
+    if (action === "shape") {
+      const layer = studio.addShapeLayer({ kind: "rect", fill: brushColor });
+      setActiveLayerId(layer.id);
+      return;
+    }
+    if (action === "group") {
+      if (!activeLayerId) { notify("Select a layer to group"); return; }
+      const group = studio.groupLayer(activeLayerId);
+      if (group) setActiveLayerId(group.id);
+      else notify("Select a content layer to group");
+      return;
+    }
+    if (action === "generate") { focusInspector("ai"); return; }
+    if (action === "paste") void pasteImageAsLayer();
   };
 
   const runSubject = () => {
@@ -2060,6 +1718,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         return;
       }
       if (e.key === "Escape" && pointDraft.length) { setPointDraft([]); notify("Draft cancelled"); return; }
+      if (e.key === "Escape" && resolvedFocusState.scope) { e.preventDefault(); exitFocusMode(); return; }
+      if ((e.key === "Enter" || e.key === "Return") && activeLayerId && !resolvedFocusState.scope) {
+        e.preventDefault();
+        enterFocusMode(activeLayerId);
+        return;
+      }
       if (e.code === "Space" && !e.repeat) { spaceHeld.current = true; document.body.style.cursor = "grab"; }
       if (e.key === "0" && !e.metaKey && !e.ctrlKey) { setView({ zoom: 1, panX: 0, panY: 0 }); return; }
       if (e.key === "1" && !e.metaKey && !e.ctrlKey) { setView((v) => ({ ...v, zoom: 1 })); return; }
@@ -2100,7 +1764,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, studio, projectName, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode]);
+  }, [workspace, studio, projectName, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -2477,6 +2141,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 >
                   <button
                     onClick={() => {
+                      setFocusState(leaveLayerFocus(resolvedFocusState));
                       studio?.switchDocument(documentTab.id);
                       setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
                       setCustomName(documentTab.name);
@@ -2487,7 +2152,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </button>
                   {openDocuments.length > 1 && (
                     <button
-                      onClick={() => { studio?.closeDocument(documentTab.id); setActiveLayerId(studio?.doc.layers[0]?.id ?? null); }}
+                      onClick={() => {
+                        setFocusState(leaveLayerFocus(resolvedFocusState));
+                        studio?.closeDocument(documentTab.id);
+                        setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
+                      }}
                       aria-label={`Close ${documentTab.name}`}
                     >×</button>
                   )}
@@ -2516,6 +2185,36 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 });
               }}
             >
+              {resolvedFocusState.scope && focusedLayer && (
+                <nav className="focus-canvas-controls" aria-label="Focus navigation">
+                  <div className="focus-breadcrumbs">
+                    <button onClick={exitFocusMode}>Project</button>
+                    {focusBreadcrumbs.map((layer) => (
+                      <span key={layer.id}>
+                        <i aria-hidden="true">›</i>
+                        <button
+                          className={layer.id === resolvedFocusState.scope?.layerId ? "current" : ""}
+                          onClick={() => enterFocusMode(layer.id)}
+                          aria-current={layer.id === resolvedFocusState.scope?.layerId ? "page" : undefined}
+                        >{layer.name}</button>
+                      </span>
+                    ))}
+                    {resolvedFocusState.scope.target === "mask" && <span><i aria-hidden="true">›</i><button className="current">Mask</button></span>}
+                  </div>
+                  <div className="focus-target-switch" aria-label="Editing target">
+                    <button className={resolvedFocusState.scope.target === "pixels" ? "active" : ""} onClick={() => enterFocusMode(focusedLayer.id, "pixels")}>Pixels</button>
+                    <button disabled={!focusedLayer.mask} className={resolvedFocusState.scope.target === "mask" ? "active" : ""} onClick={() => enterFocusMode(focusedLayer.id, "mask")}>Mask</button>
+                  </div>
+                  <div className="focus-context-switch" aria-label="Context visibility">
+                    <span>Context</span>
+                    {(["off", "ghost", "full"] as FocusContextMode[]).map((mode) => (
+                      <button key={mode} disabled={!supportsIsolatedFocus(focusedLayer) && mode !== "full"} className={resolvedFocusState.context === mode ? "active" : ""} onClick={() => setFocusContext(mode)}>{mode[0].toUpperCase() + mode.slice(1)}</button>
+                    ))}
+                  </div>
+                  {(focusedLayer.locked || !focusedLayer.visible) && <span className="focus-edit-state">{focusedLayer.locked ? "Locked · view only" : "Hidden layer"}</span>}
+                  <button className="focus-exit" onClick={exitFocusMode} title="Exit Focus (Esc)">Exit Focus</button>
+                </nav>
+              )}
               <div
                 className={`spatial-canvas tool-${activeTool} workspace-${workspace}`}
               >
@@ -2617,27 +2316,30 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </div>
 
-            <div className="spatial-filmstrip">
-              <div className="filmstrip-mode">
-                <strong>Variations</strong>
-                <span>{filmstrip.length} items</span>
-                <button onClick={() => setAssetsOpen(false)} aria-label="Collapse variations tray">⌄</button>
-              </div>
-              {filmstrip.map((photo, index) => (
-                <button
-                  key={photo.name}
-                  className={activePreset === index && !customName ? "active" : ""}
-                  onClick={() => openPreset(index)}
-                  aria-label={`Open ${photo.name}`}
-                >
-                  {/* A plain image keeps the studio portable between the hosted
-                      Next/Vite build and the static Tauri frontend. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={photo.src} alt="" width={80} height={52} /><span>{photo.name}</span>
-                </button>
-              ))}
-              <button className="film-add" onClick={requestDocumentOpen} aria-label="Add photo">＋</button>
-            </div>
+            <Suspense fallback={<section className="layer-focus-panel" aria-label="Loading Layer Focus" />}>
+              <LayerFocusPanel
+                items={focusPanelItems}
+                selectedLayerId={activeLayerId}
+                focus={resolvedFocusState}
+                focusedLayerName={focusedLayer?.name}
+                projectName={projectName}
+                onSelect={(layerId) => {
+                  const layer = studio?.findLayer(layerId);
+                  setActiveLayerId(layerId);
+                  if (layer?.kind === "adjustment-tone") {
+                    setActiveAdjustmentId(layer.id);
+                    if (layer.tone) setTone({ ...layer.tone });
+                  }
+                }}
+                onFocus={enterFocusMode}
+                onExit={exitFocusMode}
+                onPin={toggleFocusPin}
+                onReorder={reorderFocusItems}
+                onCreate={handleFocusCreate}
+                onDropFiles={(files) => void importLayerFiles(files)}
+                onCollapse={() => setAssetsOpen(false)}
+              />
+            </Suspense>
           </section>
 
           <aside ref={inspectorRef} className="spatial-inspector" data-tab={inspectorTab}>
@@ -2730,7 +2432,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </label>
                   {activeLayer.kind === "group"
                     ? <div className="blend-group-note">Group opacity · children pass through</div>
-                    : studio && <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />}
+                    : studio && (
+                      <Suspense fallback={<div className="blend-stack-editor" aria-label="Loading blending controls" />}>
+                        <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />
+                      </Suspense>
+                    )}
                   <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
                     <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
                       {activeLayer.locked ? "Locked" : "Lock layer"}
@@ -2755,16 +2461,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   )}
                   {!!activeLayer.filters?.length && (
                     <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
-                      {activeLayer.filters.map((filter, index) => studio && (
-                        <SmartFilterEditor
-                          key={filter.id}
-                          layer={activeLayer}
-                          filter={filter}
-                          index={index}
-                          count={activeLayer.filters!.length}
-                          studio={studio}
-                        />
-                      ))}
+                      <Suspense fallback={<div aria-label="Loading smart filters" />}>
+                        {activeLayer.filters.map((filter, index) => studio && (
+                          <SmartFilterEditor key={filter.id} layer={activeLayer} filter={filter} index={index} count={activeLayer.filters!.length} studio={studio} />
+                        ))}
+                      </Suspense>
                     </div>
                   )}
                   {!!activeLayer.effects?.length && (
@@ -3179,28 +2880,19 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {workspace === "develop" && activeLayer?.kind === "adjustment-curves" && activeLayer.curves && (
-              <CurvesEditor
-                curves={activeLayer.curves}
-                onLive={(c) => studio?.liveUpdateCurves(activeLayer.id, c)}
-                onCommit={(c) => studio?.updateCurves(activeLayer.id, c)}
-                onReset={() => studio?.updateCurves(activeLayer.id, cloneCurves(NEUTRAL_CURVES))}
-              />
+              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading curves" />}>
+                <CurvesEditor curves={activeLayer.curves} onLive={(c) => studio?.liveUpdateCurves(activeLayer.id, c)} onCommit={(c) => studio?.updateCurves(activeLayer.id, c)} onReset={() => studio?.updateCurves(activeLayer.id, cloneCurves(NEUTRAL_CURVES))} />
+              </Suspense>
             )}
             {workspace === "develop" && activeLayer?.kind === "adjustment-levels" && activeLayer.levels && (
-              <LevelsEditor
-                levels={activeLayer.levels}
-                onLive={(l) => studio?.liveUpdateLevels(activeLayer.id, l)}
-                onCommit={(l) => studio?.updateLevels(activeLayer.id, l)}
-                onReset={() => studio?.updateLevels(activeLayer.id, { ...NEUTRAL_LEVELS })}
-              />
+              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading levels" />}>
+                <LevelsEditor levels={activeLayer.levels} onLive={(l) => studio?.liveUpdateLevels(activeLayer.id, l)} onCommit={(l) => studio?.updateLevels(activeLayer.id, l)} onReset={() => studio?.updateLevels(activeLayer.id, { ...NEUTRAL_LEVELS })} />
+              </Suspense>
             )}
             {workspace === "develop" && activeLayer?.kind === "adjustment-hsl" && activeLayer.hsl && (
-              <HslEditor
-                hsl={activeLayer.hsl}
-                onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)}
-                onCommit={(h) => studio?.updateHsl(activeLayer.id, h)}
-                onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })}
-              />
+              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading HSL" />}>
+                <HslEditor hsl={activeLayer.hsl} onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)} onCommit={(h) => studio?.updateHsl(activeLayer.id, h)} onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })} />
+              </Suspense>
             )}
             {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && (
               <section className="glass-card tone-card">
@@ -3920,6 +3612,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
+      <input ref={focusImportInput} className="visually-hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
     </main>
   );

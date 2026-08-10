@@ -54,8 +54,9 @@ test("renders the unified interactive studio route", async () => {
   assert.match(html, /Saved locally/);
   assert.match(html, /Inspector panels/);
   assert.match(html, />Inspector</);
-  assert.match(html, />Tray</);
-  assert.match(html, />Variations</);
+  assert.match(html, /Layer Focus/);
+  assert.match(html, />FOCUS</);
+  assert.match(html, />Focus</);
 });
 
 test("protects the generative image endpoint", async () => {

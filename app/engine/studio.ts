@@ -73,6 +73,7 @@ import {
   renderViewport,
   viewportRenderCacheStats,
   viewportRenderPerformanceStats,
+  type FocusRenderOptions,
 } from "./renderer";
 import { bumpBitmapVersion, gpuTextureCacheStats, isGLSupported, renderGL } from "./gl-renderer";
 import {
@@ -463,6 +464,7 @@ export class Studio {
   private virtualPlan: ViewportPlan | null = null;
   private displayViewport: DisplayViewport | null = null;
   private channelView: "rgb" | "red" | "green" | "blue" | "alpha" = "rgb";
+  private focusPreview: FocusRenderOptions | null = null;
   private readonly renderGovernor = new AdaptiveRenderGovernor();
   private renderQualityTimer: number | null = null;
 
@@ -571,6 +573,17 @@ export class Studio {
     return this.virtualPlan;
   }
 
+  /** Interactive editing scope; deliberately excluded from exports and project data. */
+  setFocusPreview(next: FocusRenderOptions | null) {
+    const currentKey = this.focusPreview
+      ? `${this.focusPreview.layerId}:${this.focusPreview.target}:${this.focusPreview.context}`
+      : "project";
+    const nextKey = next ? `${next.layerId}:${next.target}:${next.context}` : "project";
+    if (currentKey === nextKey) return;
+    this.focusPreview = next ? { ...next } : null;
+    this.requestRender();
+  }
+
   private scheduleFullQualityPreview() {
     if (!Studio.hasDom()) return;
     if (this.renderQualityTimer !== null) window.clearTimeout(this.renderQualityTimer);
@@ -630,6 +643,7 @@ export class Studio {
         cacheRevision: this.renderRevision,
         dirtyRegions,
         channelView: this.channelView,
+        focus: this.focusPreview,
       });
       if (this.renderGovernor.record(performance.now() - renderStartedAt, workload)) {
         this.requestRender();
@@ -857,6 +871,7 @@ export class Studio {
     this.activeSessionId = next.id;
     this.doc = next.doc;
     this.history = next.history;
+    this.focusPreview = null;
     this.resetVirtualGeometry(this.doc.width, this.doc.height);
     this.requestRender();
     this.emit();
@@ -873,6 +888,7 @@ export class Studio {
       this.activeSessionId = next.id;
       this.doc = next.doc;
       this.history = next.history;
+      this.focusPreview = null;
       this.resetVirtualGeometry(this.doc.width, this.doc.height);
       this.requestRender();
     }
@@ -892,6 +908,7 @@ export class Studio {
 
   private installDocument(doc: Document, name: string) {
     this.rawSessions.clear();
+    this.focusPreview = null;
     this.resetVirtualGeometry(doc.width, doc.height);
     this.ensureDocumentSurfaces(doc);
     this.saveActiveSession();

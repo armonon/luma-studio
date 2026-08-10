@@ -108,7 +108,7 @@ export default function ContextToolbar({
       <div className="studio-context-actions">
         <button onClick={onFit}>Fit</button>
         <button className={showGuides ? "active" : ""} onClick={onToggleGuides} aria-pressed={showGuides}>Guides</button>
-        <button className={assetsOpen ? "active" : ""} onClick={onToggleAssets} aria-pressed={assetsOpen}>Tray</button>
+        <button className={assetsOpen ? "active" : ""} onClick={onToggleAssets} aria-pressed={assetsOpen}>Focus</button>
       </div>
     </div>
   );

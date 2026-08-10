@@ -223,6 +223,14 @@ export type RenderOptions = {
   dirtyRegions?: readonly PixelRect[];
   /** Non-destructive channel inspection; omitted for the RGB composite. */
   channelView?: "rgb" | "red" | "green" | "blue" | "alpha";
+  /** Interactive-only layer isolation. Export paths never set this option. */
+  focus?: FocusRenderOptions | null;
+};
+
+export type FocusRenderOptions = {
+  layerId: string;
+  target: "pixels" | "mask";
+  context: "off" | "ghost" | "full";
 };
 
 export const INTERACTIVE_PERFORMANCE_TARGETS = {
@@ -330,6 +338,9 @@ function viewportCacheKey(frame: RenderFrame, options: RenderOptions) {
     frame.outputHeight,
     options.proofing ?? true,
     options.channelView ?? "rgb",
+    options.focus?.layerId ?? "project",
+    options.focus?.target ?? "pixels",
+    options.focus?.context ?? "full",
   ].join(":");
 }
 
@@ -401,11 +412,114 @@ function renderCompositeRegion(
   const composite = s.a.getContext("2d")!;
   clearContext(composite, frame.outputWidth, frame.outputHeight);
 
-  renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
+  const focus = options.focus;
+  const focusedLayer = focus ? doc.layers.find((layer) => layer.id === focus.layerId) : null;
+  if (!focus || !focusedLayer || focus.context === "full") {
+    renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
+    if (focus?.target === "mask" && focusedLayer?.mask) {
+      drawMaskOverlay(composite, s, focusedLayer, frame, false);
+    }
+  } else if (focus.target === "mask" && focusedLayer.mask) {
+    if (focus.context === "ghost") {
+      renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
+      muteComposite(composite, s, frame);
+      drawMaskOverlay(composite, s, focusedLayer, frame, true);
+    } else {
+      drawMaskSolo(composite, s, focusedLayer, frame);
+    }
+  } else {
+    const included = focusLayerSet(doc, focusedLayer.id);
+    if (focus.context === "ghost") {
+      renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
+      muteComposite(composite, s, frame);
+      const focusedCanvas = groupBuffer(s, 31, frame.outputWidth, frame.outputHeight);
+      renderLayerSequence(focusedCanvas.getContext("2d")!, s, doc, frame, preparedLayers, undefined, 0, included);
+      composite.drawImage(focusedCanvas, 0, 0);
+    } else {
+      renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0, included);
+    }
+  }
 
   if (options.proofing ?? true) applySoftProof(composite, doc, frame.outputWidth, frame.outputHeight);
   applyChannelView(composite, frame.outputWidth, frame.outputHeight, options.channelView ?? "rgb");
   return s.a;
+}
+
+function focusLayerSet(doc: Document, layerId: string) {
+  const byId = new Map(doc.layers.map((layer) => [layer.id, layer]));
+  const included = new Set<string>();
+  const target = byId.get(layerId);
+  if (!target) return included;
+  included.add(target.id);
+  if (target.kind === "group") {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const layer of doc.layers) {
+        if (!layer.parentId || !included.has(layer.parentId) || included.has(layer.id)) continue;
+        included.add(layer.id);
+        changed = true;
+      }
+    }
+  }
+  const seen = new Set<string>();
+  let parentId = target.parentId;
+  while (parentId && !seen.has(parentId)) {
+    seen.add(parentId);
+    included.add(parentId);
+    parentId = byId.get(parentId)?.parentId;
+  }
+  return included;
+}
+
+function muteComposite(composite: CanvasRenderingContext2D, s: Scratch, frame: RenderFrame) {
+  const snapshot = s.b.getContext("2d")!;
+  clearContext(snapshot, frame.outputWidth, frame.outputHeight);
+  snapshot.drawImage(composite.canvas, 0, 0);
+  clearContext(composite, frame.outputWidth, frame.outputHeight);
+  composite.save();
+  composite.globalAlpha = 0.34;
+  composite.filter = "grayscale(72%) saturate(55%)";
+  composite.drawImage(snapshot.canvas, 0, 0);
+  composite.restore();
+}
+
+function drawMaskSource(target: CanvasRenderingContext2D, layer: Layer, frame: RenderFrame) {
+  if (!layer.mask) return;
+  drawProjectedCanvas(target, layer.mask, frame);
+  target.save();
+  target.globalCompositeOperation = "source-in";
+  target.fillStyle = "white";
+  target.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
+  target.restore();
+}
+
+function drawMaskSolo(composite: CanvasRenderingContext2D, s: Scratch, layer: Layer, frame: RenderFrame) {
+  composite.save();
+  composite.fillStyle = "#24262c";
+  composite.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
+  composite.restore();
+  const maskCanvas = groupBuffer(s, 30, frame.outputWidth, frame.outputHeight);
+  drawMaskSource(maskCanvas.getContext("2d")!, layer, frame);
+  composite.drawImage(maskCanvas, 0, 0);
+}
+
+function drawMaskOverlay(
+  composite: CanvasRenderingContext2D,
+  s: Scratch,
+  layer: Layer,
+  frame: RenderFrame,
+  prominent: boolean,
+) {
+  const maskCanvas = groupBuffer(s, 30, frame.outputWidth, frame.outputHeight);
+  const maskContext = maskCanvas.getContext("2d")!;
+  drawMaskSource(maskContext, layer, frame);
+  maskContext.save();
+  maskContext.globalCompositeOperation = "source-in";
+  maskContext.fillStyle = prominent ? "rgba(105,87,245,.58)" : "rgba(105,87,245,.34)";
+  maskContext.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
+  maskContext.restore();
+  composite.drawImage(maskCanvas, 0, 0);
 }
 
 function applyChannelView(
@@ -435,18 +549,20 @@ function renderLayerSequence(
   preparedLayers: PreparedLayers,
   parentId: string | undefined,
   groupDepth: number,
+  included?: ReadonlySet<string>,
 ) {
   const siblings = preparedLayers.get(parentId) ?? [];
   for (let i = siblings.length - 1; i >= 0; i--) {
     const layer = siblings[i];
+    if (included && !included.has(layer.id)) continue;
     if (!layer.visible || layer.opacity <= 0) continue;
     if (layer.kind === "group") {
       if (groupIsPassThrough(layer)) {
-        renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth);
+        renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth, included);
       } else {
         const groupCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const groupContext = groupCanvas.getContext("2d")!;
-        renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1);
+        renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1, included);
         if (layer.mask) {
           groupContext.globalCompositeOperation = "destination-in";
           drawProjectedCanvas(groupContext, layer.mask, frame);
