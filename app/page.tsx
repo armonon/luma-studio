@@ -435,8 +435,8 @@ export default function MarketingHome() {
           <h2>A lightweight studio<br /><span>with a serious engine.</span></h2>
           <p>
             Dirty-region rendering updates only what changed. Sparse tiles keep
-            memory bounded. Float masters preserve working precision, while the
-            native desktop compositor handles demanding layer stacks in the background.
+            memory bounded. Float masters preserve working precision, and on the
+            desktop, exports flatten through a multi-threaded native compositor.
           </p>
           <a href="/studio">Feel it in the live studio <span>→</span></a>
         </div>

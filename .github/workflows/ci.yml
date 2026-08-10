@@ -54,3 +54,30 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --manifest-path crates/luma-core/Cargo.toml -- -D warnings
+
+  desktop-bridge:
+    name: Desktop bridge (src-tauri)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # Tauri links against the system webview even for `cargo test`.
+      - name: Install Linux webview deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libsoup-3.0-dev
+
+      # Covers the binary IPC protocol and the atomic-save path, including the
+      # round trip against tests/fixtures/native-tile.bin produced by the
+      # TypeScript encoder. Previously CI ran only crates/luma-core, so the
+      # entire browser<->Rust bridge was unverified.
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml

@@ -73,3 +73,44 @@ test("every advertised neural action is a real engine operation", () => {
     );
   }
 });
+
+// ---------------------------------------------------------------------------
+// Prose claims about the native compositor.
+//
+// The page previously said the native compositor "handles demanding layer
+// stacks in the background". It runs only at export, only in sRGB, and
+// `Studio.flattenNative` explicitly *refuses* demanding stacks — groups,
+// clipping, filters, effects, non-neutral Blend If, or any non-identity
+// transform all fall back to the portable renderer. Counting tests did not
+// catch that, so the scope words are pinned here too.
+// ---------------------------------------------------------------------------
+
+const NATIVE_CLAIM_BANNED = [
+  /native[^.]{0,60}\bin the background\b/i,
+  /native[^.]{0,60}\breal[- ]time\b/i,
+  /native[^.]{0,60}\blive (?:preview|canvas|viewport)\b/i,
+  /native[^.]{0,60}\bdemanding layer stacks\b/i,
+];
+
+test("the page does not claim the native compositor runs outside export", () => {
+  for (const pattern of NATIVE_CLAIM_BANNED) {
+    const hit = pattern.exec(page);
+    assert.equal(
+      hit,
+      null,
+      `native compositor is export-only, but the page says: "${hit?.[0]}"`,
+    );
+  }
+});
+
+test("flattenNative really is gated to export and sRGB", () => {
+  // Pins the claim to the implementation rather than to today's wording.
+  const studioSrc = readFileSync(new URL("../app/engine/studio.ts", import.meta.url), "utf8");
+  const fn = /async flattenNative\(\)[\s\S]*?\n  \}/.exec(studioSrc);
+  assert.ok(fn, "flattenNative not found — the claim above may be stale");
+  assert.match(fn[0], /colorSpace !== "srgb"/, "expected an sRGB-only guard");
+  assert.match(fn[0], /isNativeCoreAvailable\(\)/, "expected a native-availability guard");
+  // Only exportImage may call it; a viewport caller would invalidate the copy.
+  const callers = [...studioSrc.matchAll(/flattenNative\(\)/g)].length;
+  assert.ok(callers >= 2, "expected a definition plus at least one call site");
+});

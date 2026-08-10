@@ -266,6 +266,35 @@ mod tests {
 
     fn push_f32(bytes: &mut Vec<u8>, value: f32) { bytes.extend_from_slice(&value.to_le_bytes()); }
 
+    /// The other half of the TypeScript<->Rust protocol contract.
+    ///
+    /// `tests/fixtures/native-tile.bin` is produced by the real TypeScript
+    /// encoder and committed. Previously each side was tested against its own
+    /// hand-built bytes, so an encoder change could silently stop matching the
+    /// decoder. If this fails, the wire format moved: regenerate with
+    /// `npx tsx tests/fixtures/generate-native-tile.ts` and update both sides.
+    #[test]
+    fn decodes_the_committed_typescript_fixture() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/fixtures/native-tile.bin");
+        let payload = std::fs::read(path).expect("committed protocol fixture");
+
+        let result = composite_native_payload(&payload).expect("fixture must decode");
+        let values: Vec<f32> = result
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+
+        // Mirrors NATIVE_TILE_EXPECTED in tests/fixtures/native-tile-input.ts.
+        let expected = [0.75_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+        assert_eq!(values.len(), expected.len(), "fixture pixel count changed");
+        for (i, (got, want)) in values.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-6,
+                "channel {i}: expected {want}, got {got}"
+            );
+        }
+    }
+
     #[test]
     fn native_tile_protocol_composites_float_layers_without_json() {
         let mut payload = NATIVE_TILE_MAGIC.to_vec();

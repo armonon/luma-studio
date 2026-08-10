@@ -1,4 +1,27 @@
-import { BLEND_MODES, type BlendMode } from "./document";
+import { type BlendMode } from "./document";
+
+/**
+ * Wire ordering for the native compositor protocol.
+ *
+ * This is a **binary contract with `crates/luma-core`**: the index of a mode in
+ * this array is what travels over IPC, and Rust resolves it through
+ * `BlendMode::ALL`. It is declared explicitly rather than derived from
+ * `BLEND_MODE_GROUPS`, which is a *presentation* structure — regrouping modes
+ * for the UI must never silently change what pixels the native exporter
+ * produces.
+ *
+ * Appending is safe. Reordering or removing is a breaking protocol change and
+ * requires the matching edit to `BlendMode::ALL`.
+ * `tests/native-wire-protocol.test.ts` pins both sides.
+ */
+export const NATIVE_WIRE_BLEND_MODES: ReadonlyArray<BlendMode> = [
+  "source-over", "dissolve",
+  "darken", "multiply", "color-burn", "linear-burn", "darker-color",
+  "lighten", "screen", "color-dodge", "linear-dodge", "lighter-color",
+  "overlay", "soft-light", "hard-light", "vivid-light", "linear-light", "pin-light", "hard-mix",
+  "difference", "exclusion", "subtract", "divide",
+  "hue", "saturation", "color", "luminosity",
+];
 
 const MAGIC = [0x4c, 0x55, 0x4d, 0x31] as const; // LUM1
 const MAX_TILE_PIXELS = 2048 * 2048;
@@ -69,7 +92,7 @@ export function encodeNativeTileRequest(request: NativeTileRequest) {
   view.setUint32(12, request.layers.length, true);
   let offset = 16;
   for (const layer of request.layers) {
-    const modeIndex = BLEND_MODES.indexOf(layer.mode);
+    const modeIndex = NATIVE_WIRE_BLEND_MODES.indexOf(layer.mode);
     if (modeIndex < 0) throw new Error(`Native compositor does not recognize blend mode ${layer.mode}`);
     view.setUint32(offset, modeIndex, true);
     view.setFloat32(offset + 4, layer.opacity, true);
