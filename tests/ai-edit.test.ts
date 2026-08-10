@@ -117,6 +117,7 @@ test("desktop AI uses the hosted endpoint while web remains same-origin", () => 
 test("AI requests carry credentials and retry short transient failures", async () => {
   let attempts = 0;
   let credentials: RequestCredentials | undefined;
+  let headers: HeadersInit | undefined;
   const results = await runAiEditVariations({
     image: new Blob(["image"]),
     operation: "fill",
@@ -125,12 +126,14 @@ test("AI requests carry credentials and retry short transient failures", async (
     fetcher: async (_input, init) => {
       attempts += 1;
       credentials = init?.credentials;
+      headers = init?.headers;
       if (attempts === 1) return Response.json({ error: "busy" }, { status: 503, headers: { "retry-after": "0" } });
       return new Response(new Blob(["result"]), { headers: { "content-type": "image/png" } });
     },
   });
   assert.equal(attempts, 2);
   assert.equal(credentials, "include");
+  assert.equal(headers, undefined, "desktop multipart requests must remain CORS-safelisted and avoid preflight");
   assert.equal(results.length, 1);
 });
 

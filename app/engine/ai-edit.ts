@@ -431,7 +431,6 @@ export async function runAiEditVariations(options: {
             body,
             signal: options.signal,
             credentials: options.credentials ?? "include",
-            cache: "no-store",
           });
         } catch (error) {
           if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
