@@ -325,6 +325,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [activeTool, setActiveTool] = useState<Tool>("brush");
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
   const [assetsOpen, setAssetsOpen] = useState(true);
+  const [dropActive, setDropActive] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
@@ -1434,6 +1435,32 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     for (const file of files) await importLayerFile(file);
   };
 
+  /**
+   * Files can arrive by drop anywhere in the studio, so route them the same way
+   * the open dialog does: project/document formats replace the document, plain
+   * images become fitted layers on the current canvas.
+   */
+  const DOCUMENT_DROP_PATTERN = new RegExp(
+    `\\.(luma|psd|psb|${RAW_EXTENSIONS.join("|")})$`,
+    "i",
+  );
+
+  const importDroppedFiles = async (files: File[]) => {
+    if (!files.length) return;
+    const documents = files.filter((file) => DOCUMENT_DROP_PATTERN.test(file.name));
+    const images = files.filter((file) => !DOCUMENT_DROP_PATTERN.test(file.name));
+    // Only one document can be open at a time; the rest would clobber it.
+    if (documents.length) {
+      if (documents.length > 1) notify(`Opening ${documents[0].name}; drop one project at a time`);
+      try {
+        await importDocumentFile(documents[0]);
+      } catch (error) {
+        notify(error instanceof Error ? error.message : `${documents[0].name} could not be opened`);
+      }
+    }
+    if (images.length) await importLayerFiles(images);
+  };
+
   const onFocusImportChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.target.files ?? [])];
     event.target.value = "";
@@ -1461,6 +1488,56 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       e.target.value = "";
     }
   };
+
+  // Drag-and-drop import, window-wide. Previously only the assets filmstrip
+  // accepted drops, so dropping onto the canvas — the obvious target — did
+  // nothing but navigate the browser away from the app.
+  useEffect(() => {
+    if (!studio) return;
+    // dragenter/dragleave fire for every child element, so track depth rather
+    // than toggling on each event or the overlay flickers while moving.
+    let depth = 0;
+    const hasFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes("Files");
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth += 1;
+      setDropActive(true);
+    };
+    const onDragOver = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      // Without preventDefault the browser opens the file and discards the app.
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    };
+    const onDragLeave = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) setDropActive(false);
+    };
+    const onDrop = (event: DragEvent) => {
+      if (!hasFiles(event)) return;
+      event.preventDefault();
+      depth = 0;
+      setDropActive(false);
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length) void importDroppedFiles(files);
+    };
+
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [studio]);
 
   const projectName = customName || filmstrip[activePreset].name || "Untitled";
 
@@ -3729,6 +3806,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
       <input ref={focusImportInput} className="visually-hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
+      {dropActive && (
+        <div className="studio-drop-overlay" aria-hidden="true">
+          <div className="studio-drop-card">
+            <strong>Drop to import</strong>
+            <span>Images become layers fitted to the canvas · PSD and .luma open as documents</span>
+          </div>
+        </div>
+      )}
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
     </main>
   );

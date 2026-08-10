@@ -3,6 +3,7 @@ import {
   BlendPass,
   BlendIf,
   AiProvenance,
+  fitImageRect,
   CapturedBrushAsset,
   Document,
   HslParams,
@@ -960,7 +961,7 @@ export class Studio {
 
   openImage(name: string, img: HTMLImageElement, source?: SourceProvenance) {
     this.installDocument(createDocument(img.naturalWidth, img.naturalHeight), name);
-    return this.addRasterFromImage(name, img, source);
+    return this.addRasterFromImage(name, img, source, { fit: false });
   }
 
   /** Install a sensor-developed DNG without quantizing its float master. */
@@ -1798,13 +1799,35 @@ export class Studio {
     return [...this.plugins.values()].map(({ plugin }) => ({ id: plugin.id, name: plugin.name, version: plugin.version }));
   }
 
-  addRasterFromImage(name: string, img: HTMLImageElement, source?: SourceProvenance) {
+  /**
+   * Add an image as a raster layer.
+   *
+   * `fit` (the default for importing into an existing document) scales the
+   * image down to fit and centres it. Without it the image is drawn at 0,0 at
+   * native size, which crops anything larger than the canvas and pins smaller
+   * images to the top-left corner. `openImage` passes `fit: false` because it
+   * has just sized the document to the image, so 1:1 is already exact.
+   */
+  addRasterFromImage(
+    name: string,
+    img: HTMLImageElement,
+    source?: SourceProvenance,
+    { fit = true }: { fit?: boolean } = {},
+  ) {
     if (this.doc.width === 0) {
       this.doc.width = img.naturalWidth;
       this.doc.height = img.naturalHeight;
     }
     const bitmap = newCanvas(this.doc.width, this.doc.height);
-    bitmap.getContext("2d")!.drawImage(img, 0, 0);
+    const context = bitmap.getContext("2d")!;
+    if (fit) {
+      const rect = fitImageRect(img.naturalWidth, img.naturalHeight, this.doc.width, this.doc.height);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(img, rect.x, rect.y, rect.width, rect.height);
+    } else {
+      context.drawImage(img, 0, 0);
+    }
     const layer = createRasterLayer(name, bitmap);
     layer.source = source ? { ...source } : undefined;
     layer.surface = this.surfaceFromCanvas(bitmap);

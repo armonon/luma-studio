@@ -10660,3 +10660,40 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
     bottom: 108px;
   }
 }
+
+/* Drag-and-drop import target. Non-interactive: the window-level listeners own
+   the drop, this only shows where it will land. */
+.studio-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(118, 86, 239, 0.14);
+  backdrop-filter: blur(2px);
+}
+
+.studio-drop-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  padding: 22px 30px;
+  border: 2px dashed rgba(118, 86, 239, 0.85);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 24px 60px rgba(50, 63, 84, 0.22);
+  text-align: center;
+}
+
+.studio-drop-card strong {
+  font-size: 16px;
+  font-weight: 650;
+  color: #2b2f3a;
+}
+
+.studio-drop-card span {
+  font-size: 12px;
+  color: #6b7280;
+}

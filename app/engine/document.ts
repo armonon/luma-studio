@@ -684,6 +684,40 @@ export function reserveId(id: string) {
   if (Number.isFinite(value)) idCounter = Math.max(idCounter, value);
 }
 
+/**
+ * Geometry for drawing a source image into a destination canvas so the whole
+ * image is visible and centred, preserving aspect ratio ("contain").
+ *
+ * Importing used to draw at 0,0 at native size, which silently cropped any
+ * image larger than the document and pinned smaller ones to the top-left
+ * corner. Exported separately so the maths is testable without a canvas.
+ *
+ * Images smaller than the canvas are NOT upscaled — enlarging on import would
+ * invent detail the file does not have. They are centred at native size.
+ */
+export function fitImageRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  destWidth: number,
+  destHeight: number,
+  { allowUpscale = false }: { allowUpscale?: boolean } = {},
+): { x: number; y: number; width: number; height: number; scale: number } {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || destWidth <= 0 || destHeight <= 0) {
+    return { x: 0, y: 0, width: 0, height: 0, scale: 1 };
+  }
+  const contain = Math.min(destWidth / sourceWidth, destHeight / sourceHeight);
+  const scale = allowUpscale ? contain : Math.min(1, contain);
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+  return {
+    x: (destWidth - width) / 2,
+    y: (destHeight - height) / 2,
+    width,
+    height,
+    scale,
+  };
+}
+
 export function newCanvas(width: number, height: number): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = width;
