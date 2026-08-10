@@ -14,7 +14,7 @@
     "windows": [
       {
         "title": "Luma Studio",
-        "url": "index.html?build=layer-focus-v23",
+        "url": "index.html?build=compact-inspector-v24",
         "width": 1440,
         "height": 900,
         "minWidth": 1160,

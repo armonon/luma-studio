@@ -2482,8 +2482,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Channels</strong><small>View only · exports stay RGB</small></header>
-              <div className="mask-segmented" style={{ paddingBottom: 9 }}>
+              <header><strong>Channels</strong><small title="Channel previews do not change RGB export">{(engineState?.channelView ?? "rgb").toUpperCase()}</small></header>
+              <div className="mask-segmented channel-switcher">
                 {(["rgb", "red", "green", "blue", "alpha"] as const).map((channel) => (
                   <button
                     key={channel}
@@ -2496,13 +2496,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}/64</small></header>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 5, padding: "8px 10px" }}>
+              <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}</small></header>
+              <div className="inspector-create-row">
                 <input value={layerCompName} maxLength={80} onChange={(event) => setLayerCompName(event.target.value)} aria-label="New layer comp name" />
                 <button onClick={() => {
                   const comp = studio?.captureLayerComp(layerCompName);
                   if (comp) notify(`Captured ${comp.name}`);
-                }}>Capture</button>
+                }} aria-label="Capture layer comp" title="Capture current layer state">＋</button>
               </div>
               {!!doc?.layerComps?.length && (
                 <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
@@ -2519,14 +2519,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Artboards</strong><small>{doc?.artboards?.length ?? 0}/128</small></header>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 5, padding: "8px 10px" }}>
+              <header><strong>Artboards</strong><small>{doc?.artboards?.length ?? 0}</small></header>
+              <div className="inspector-create-row">
                 <input value={artboardName} maxLength={80} onChange={(event) => setArtboardName(event.target.value)} aria-label="New artboard name" />
                 <button onClick={() => {
                   const bounds = doc?.selection?.bounds;
                   const artboard = studio?.createArtboard(artboardName, bounds ? { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } : undefined);
                   if (artboard) notify(`Created ${artboard.name}${bounds ? " from selection" : ""}`);
-                }}>＋ {doc?.selection ? "Selection" : "Canvas"}</button>
+                }} aria-label={`Create artboard from ${doc?.selection ? "selection" : "canvas"}`} title={`Create from ${doc?.selection ? "selection" : "canvas"}`}>＋</button>
               </div>
               {!!doc?.artboards?.length && (
                 <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
@@ -2551,20 +2551,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Plugins & assets</strong><small>{studio?.listPlugins().length ?? 0} active · {capturedBrushes.length} brushes</small></header>
+              <header><strong>Assets</strong><small>{(studio?.listPlugins().length ?? 0) + capturedBrushes.length}</small></header>
               <div style={{ display: "grid", gap: 4, padding: "8px 10px" }}>
                 {studio?.listPlugins().length ? studio.listPlugins().map((plugin) => (
                   <div key={plugin.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 5 }}>
                     <span style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>{plugin.name ?? plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</span>
                     <button onClick={() => studio.unregisterPlugin(plugin.id)} title={`Unload ${plugin.name ?? plugin.id}`}>Unload</button>
                   </div>
-                )) : <small style={{ opacity: 0.58 }}>No session plugins loaded. Captured brushes are saved with the document asset library.</small>}
+                )) : <small className="inspector-empty-state">No plug-ins or saved brushes</small>}
               </div>
             </section>
 
             <section className="glass-card mask-card">
-              <header><strong>Document</strong><small>{doc?.resolution.x ?? 72} ppi · {doc?.bitDepth ?? 8}-bit · {doc?.colorSpace ?? "sRGB"}</small></header>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 5, padding: "8px 10px" }}>
+              <header><strong>Document</strong><small>{doc?.width ?? 0} × {doc?.height ?? 0}</small></header>
+              <div className="document-size-row">
                 <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
                   <span>Width px</span>
                   <input key={`width-${doc?.width}`} ref={resizeWidthRef} type="number" min="1" max="32768" defaultValue={doc?.width ?? 1600} style={{ width: "100%" }} />
@@ -2577,7 +2577,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   const width = Number(resizeWidthRef.current?.value);
                   const height = Number(resizeHeightRef.current?.value);
                   if (studio?.resizeDocument(width, height)) notify(`Resized to ${Math.round(width)}×${Math.round(height)}`);
-                }} style={{ alignSelf: "end" }}>Resize</button>
+                }} aria-label="Apply document size" title="Resize document" style={{ alignSelf: "end" }}>✓</button>
               </div>
               <div style={{ display: "grid", gap: 7, padding: "0 10px 10px" }}>
                 <label style={{ display: "grid", gridTemplateColumns: "74px 1fr auto", alignItems: "center", gap: 6, fontSize: 10 }}>
@@ -2595,7 +2595,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <button onClick={() => {
                     const ppi = Number(resolutionRef.current?.value);
                     if (studio?.setDocumentResolution(ppi)) notify(`Resolution set to ${ppi} ppi without resampling`);
-                  }}>Set ppi</button>
+                  }} aria-label="Apply print resolution">Set</button>
                 </label>
                 <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
                   <span>Color space</span>
@@ -2625,25 +2625,23 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                         if (studio.setDocumentPrecision(depth, doc.colorSpace)) notify(`Converted to ${depth}-bit ${depth === 8 ? "integer" : "float"}`);
                       }}
                       aria-pressed={doc?.bitDepth === depth}
-                    >{depth}{depth > 8 ? "f" : ""}</button>
+                    >{depth}</button>
                   ))}
                 </div>
-                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  Linear-light tiled master · {engineState?.precisionTiles ?? 0} resident tiles · {formatBytes(engineState?.precisionBytes ?? 0)}
-                </small>
-                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  ICC matrix/TRC + classic 3D LUT engine · {engineState?.colorManagement.profiles ?? 0} registered profiles · {engineState?.colorManagement.embeddedProfiles ?? 0} embedded
-                </small>
-                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  Sparse canvas · {engineState?.virtualCanvas.levels ?? 1} mip levels · {engineState?.virtualCanvas.plannedTiles ?? 0} prioritized viewport tiles
-                  {engineState?.virtualCanvas.truncated ? " · bounded plan" : ""}
-                </small>
-                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  Dirty renderer · {engineState?.viewportPerformance.latestRenderedTiles ?? 0}/{engineState?.viewportPerformance.latestTotalTiles ?? 0} screen tiles · p95 {Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms · adaptive preview {Math.round((engineState?.adaptivePreview.scale ?? 1) * 100)}% · GPU cache {formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}
-                </small>
-                <small style={{ opacity: 0.62, lineHeight: 1.35 }}>
-                  Photoshop bridge · {engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.preserved ?? 0} preserved features · {engineState?.photoshop.warnings ?? 0} compatibility notes
-                </small>
+                <details className="document-diagnostics">
+                  <summary>
+                    <span>Engine details</span>
+                    <small>{engineState?.precisionTiles ?? 0} tiles · {formatBytes(engineState?.precisionBytes ?? 0)}</small>
+                  </summary>
+                  <div className="document-diagnostics-body">
+                    <div><span>Precision</span><b>Linear · {doc?.bitDepth ?? 8}-bit</b></div>
+                    <div><span>Color</span><b>{engineState?.colorManagement.profiles ?? 0} ICC profiles</b></div>
+                    <div><span>Canvas</span><b>{engineState?.virtualCanvas.levels ?? 1} mip · {engineState?.virtualCanvas.plannedTiles ?? 0} ready</b></div>
+                    <div><span>Renderer</span><b>{Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms p95 · {Math.round((engineState?.adaptivePreview.scale ?? 1) * 100)}%</b></div>
+                    <div><span>GPU cache</span><b>{formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}</b></div>
+                    <div><span>Photoshop</span><b>{engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.warnings ?? 0} notes</b></div>
+                  </div>
+                </details>
                 {photoshopReport && (
                   <details className="advanced-blending">
                     <summary>
@@ -3203,7 +3201,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     <span>Temperature</span><input type="range" min="-100" max="100" value={Math.round(aiTemperature * 100)} onChange={(event) => setAiTemperature(Number(event.target.value) / 100)} /><output>{Math.round(aiTemperature * 100)}</output>
                   </label>
                 )}
-                <small style={{ opacity: 0.58 }}>Selection alpha and feathering are preserved as mask guidance. Each variation is a separate image request.</small>
               </div>
               <div className="neural-quick-grid">
                 <button onClick={runNeuralSubject} disabled={!!neural}>
@@ -3232,8 +3229,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </button>
                 ))}
                 {(!studio?.actions.list().length) && (
-                  <div style={{ padding: "8px 4px", fontSize: 11, opacity: 0.6 }}>
-                    Hit ● to record a series of edits.
+                  <div className="inspector-empty-state" style={{ padding: "8px 4px" }}>
+                    No recorded actions
                   </div>
                 )}
               </div>

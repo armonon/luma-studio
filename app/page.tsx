@@ -5,61 +5,61 @@ import Image from "next/image";
 
 const showcaseModes = [
   {
-    name: "Photo",
-    eyebrow: "RAW DEVELOP",
-    title: "Every photon, still yours.",
-    copy: "Decode DNG straight off the sensor — Bayer demosaic, camera matrices and highlight recovery into a floating-point master.",
-    metric: "32-bit",
-    metricLabel: "float DNG master",
-    accent: "#f06d3b",
+    name: "Focus",
+    eyebrow: "LAYER FOCUS",
+    title: "Complex files. Clear head.",
+    copy: "Enter any layer, group or smart object and Luma rebuilds the workspace around it—while the full composition stays one step away.",
+    metric: "1 click",
+    metricLabel: "from project to working context",
+    accent: "#7656ef",
   },
   {
-    name: "Retouch",
-    eyebrow: "ON-DEVICE MATTING",
-    title: "Retouch meaning, not pixels.",
-    copy: "Subject matting runs in your browser. Point at what you want and it becomes a mask you can paint, invert and refine.",
-    metric: "0",
-    metricLabel: "uploads — matting is local",
-    accent: "#7c5ce7",
-  },
-  {
-    name: "Design",
-    eyebrow: "PIXEL + VECTOR",
-    title: "One canvas. No boundaries.",
-    copy: "Mix typography, bezier paths, shapes and high-resolution raster layers without changing applications.",
-    metric: "27",
-    metricLabel: "spec-exact blend modes",
+    name: "Blend",
+    eyebrow: "MULTI-PASS COMPOSITING",
+    title: "One layer. More than one mood.",
+    copy: "Stack independent blend modes and opacity passes on a single layer, reorder them live, then shape the result with per-channel Blend If.",
+    metric: "8×",
+    metricLabel: "blend passes on every layer",
     accent: "#2385f4",
   },
   {
-    name: "AI",
-    eyebrow: "NEURAL LAB",
-    title: "Intelligence you can edit.",
-    copy: "Every result arrives as an editable mask or layer — never a flattened answer you have to accept or discard.",
-    metric: "2",
-    metricLabel: "on-device models",
-    accent: "#9a4ce1",
+    name: "Paint",
+    eyebrow: "CAPTURE BRUSH",
+    title: "If you can see it, you can paint with it.",
+    copy: "Sample a live region from any image, tune its radius and color behavior, then paint with that image as a reusable document brush.",
+    metric: "1",
+    metricLabel: "sample becomes a living brush",
+    accent: "#f06d3b",
+  },
+  {
+    name: "Develop",
+    eyebrow: "FLOATING-POINT DNG",
+    title: "The sensor stays underneath.",
+    copy: "Develop DNG sensor data with editable exposure, white balance, highlight recovery, lens correction and local adjustments.",
+    metric: "32-bit",
+    metricLabel: "floating-point tile master",
+    accent: "#47a56b",
   },
 ] as const;
 
 const bentoFeatures = [
   {
-    className: "bento-large bento-tools",
-    kicker: "EVERY TOOL",
-    title: "Power when you reach for it.",
-    copy: "Selection, masking, retouching, full-color image capture brushes, vectors, typography and transforms—organized around how you think.",
+    className: "bento-large bento-focus",
+    kicker: "LAYER FOCUS",
+    title: "Work on what matters. Keep the whole idea.",
+    copy: "Pin a working set, move between parent groups with breadcrumbs and isolate the active layer without hiding the composition from yourself.",
   },
   {
-    className: "bento-command",
-    kicker: "⌘ K",
-    title: "Thought to action.",
-    copy: "Find any tool, filter or command before the menu can slow you down.",
+    className: "bento-blend",
+    kicker: "8 PASSES · 27 MODES",
+    title: "Compositing without duplicate layers.",
+    copy: "Mix Screen, Color, Soft Light and more on one layer, each with its own opacity and order.",
   },
   {
-    className: "bento-scene",
-    kicker: "CLICK TO SELECT",
-    title: "Point at what you mean.",
-    copy: "Click a subject and segmentation turns it into an editable mask. Shift to add, option to subtract.",
+    className: "bento-brush",
+    kicker: "CAPTURE BRUSH",
+    title: "Paint with the world in front of you.",
+    copy: "Sample texture, foliage, fabric or light from a photograph and turn it into a pressure-aware brush.",
   },
   {
     className: "bento-history",
@@ -136,10 +136,10 @@ export default function MarketingHome() {
           <strong>Luma Studio</strong>
         </a>
         <div className={`marketing-links ${mobileMenu ? "open" : ""}`}>
-          <a href="#product" onClick={() => setMobileMenu(false)}>Product</a>
+          <a href="#product" onClick={() => setMobileMenu(false)}>Why Luma</a>
+          <a href="#workflow" onClick={() => setMobileMenu(false)}>Workflows</a>
           <a href="#intelligence" onClick={() => setMobileMenu(false)}>Neural Lab</a>
           <a href="#performance" onClick={() => setMobileMenu(false)}>Performance</a>
-          <a href="#creators" onClick={() => setMobileMenu(false)}>For creators</a>
         </div>
         <div className="marketing-nav-actions">
           <a className="nav-studio-link" href="/studio">
@@ -159,11 +159,11 @@ export default function MarketingHome() {
         <div className="hero-aurora aurora-one" />
         <div className="hero-aurora aurora-two" />
         <div className="hero-copy reveal">
-          <p className="hero-eyebrow"><span>✦</span> THE CREATIVE STUDIO, REBUILT</p>
-          <h1>Make anything.<br /><em>Stay in flow.</em></h1>
+          <p className="hero-eyebrow"><span>✦</span> PROFESSIONAL IMAGE EDITING, REFOCUSED</p>
+          <h1>Complex canvas.<br /><em>Clear workspace.</em></h1>
           <p className="hero-lede">
-            The depth of a professional image editor, reimagined around speed,
-            clarity and creative intelligence.
+            Luma Studio combines precision photo editing, compositing, painting
+            and editable AI with a workspace that follows your attention.
           </p>
           <div className="hero-actions">
             <a className="primary-cta" href="/studio">
@@ -175,7 +175,13 @@ export default function MarketingHome() {
           </div>
           <div className="hero-note">
             <span className="pulse-dot" />
-            Interactive web preview · No download
+            Live web studio · Native macOS build
+          </div>
+          <div className="hero-proof-strip" aria-label="Product highlights">
+            <span><b>✦</b> Layer Focus</span>
+            <span><b>8×</b> blend passes</span>
+            <span><b>32</b>-bit tiles</span>
+            <span><b>↗</b> PSD + PSB</span>
           </div>
         </div>
 
@@ -207,20 +213,19 @@ export default function MarketingHome() {
         <div>
           {[
             "RAW",
-            "PSD",
+            "PSD + PSB",
             "Display P3",
-            "Smart Objects",
-            "Vector",
+            "Layer Focus",
+            "Multi-pass blending",
             "32-bit color",
-            "Live masks",
-            "CMYK",
-            "AI layers",
+            "Branching history",
+            "Editable AI layers",
             "Capture brushes",
-            "RAW",
-            "PSD",
-            "Display P3",
+            "DNG develop",
             "Smart Objects",
-            "Vector",
+            "Display P3",
+            "Live masks",
+            "Layer Focus",
           ].map((item, index) => (
             <span key={`${item}-${index}`}><i />{item}</span>
           ))}
@@ -229,11 +234,11 @@ export default function MarketingHome() {
 
       <section className="product-intro" id="product">
         <div className="section-heading reveal">
-          <p>DESIGNED FOR CREATIVE MOMENTUM</p>
-          <h2>Everything you expect.<br /><span>Nothing in your way.</span></h2>
+          <p>THE LUMA DIFFERENCE</p>
+          <h2>Less interface.<br /><span>More creative control.</span></h2>
           <p>
-            Luma carries the complete grammar of professional image editing, then
-            removes the friction that made it feel complicated.
+            The strongest tools are not hidden. They are reorganized around the
+            layer, object and decision you are making right now.
           </p>
         </div>
 
@@ -249,28 +254,33 @@ export default function MarketingHome() {
                 <h3>{feature.title}</h3>
                 <p>{feature.copy}</p>
               </div>
-              {feature.className.includes("tools") && (
-                <div className="tool-cloud" aria-hidden="true">
-                  {["⌖", "╱", "T", "⌗", "✣", "◩", "⌁", "↖", "⌃"].map(
-                    (tool, toolIndex) => (
-                      <i key={toolIndex}>{tool}</i>
-                    ),
-                  )}
+              {feature.className.includes("focus") && (
+                <div className="focus-demo" aria-hidden="true">
+                  <div className="focus-demo-bar"><span>FOCUS</span><b>Campaign / Product</b><i>⌄</i></div>
+                  <div className="focus-demo-canvas">
+                    <Image src="/desert.jpg" alt="" width={2200} height={1467} sizes="500px" />
+                    <span>Product hero</span>
+                  </div>
+                  <div className="focus-demo-stack">
+                    <span className="active"><i>◈</i><b>Product hero</b><small>smart object</small></span>
+                    <span><i>◐</i><b>Warm light</b><small>adjustment</small></span>
+                    <span><i>▨</i><b>Texture</b><small>paint layer</small></span>
+                  </div>
                 </div>
               )}
-              {feature.className.includes("command") && (
-                <div className="mini-command" aria-hidden="true">
-                  <div><span>⌕</span> Find any tool… <kbd>⌘K</kbd></div>
-                  <p><i>✦</i> Generative expand <b>↵</b></p>
-                  <p><i>⌘</i> Select subject <b>W</b></p>
+              {feature.className.includes("blend") && (
+                <div className="blend-demo" aria-hidden="true">
+                  <div><span>01</span><b>Soft Light</b><small>62%</small></div>
+                  <div><span>02</span><b>Color</b><small>34%</small></div>
+                  <div><span>03</span><b>Screen</b><small>18%</small></div>
+                  <p><i /> Blend If · Gray</p>
                 </div>
               )}
-              {feature.className.includes("scene") && (
-                <div className="scene-orbit" aria-hidden="true">
-                  <span className="scene-core">IMAGE</span>
-                  <i className="orbit-sky">Sky</i>
-                  <i className="orbit-light">Light</i>
-                  <i className="orbit-subject">Subject</i>
+              {feature.className.includes("brush") && (
+                <div className="brush-demo" aria-hidden="true">
+                  <Image src="/film-lake.jpg" alt="" width={1600} height={1067} sizes="360px" />
+                  <span className="brush-sample-ring"><i /></span>
+                  <div><b>Lake light</b><small>Sampled · 84 px</small></div>
                 </div>
               )}
               {feature.className.includes("history") && (
@@ -285,11 +295,11 @@ export default function MarketingHome() {
         </div>
       </section>
 
-      <section className="medium-section">
+      <section className="medium-section" id="workflow">
         <div className="medium-sticky">
           <div className="medium-heading reveal">
-            <p>ONE MEDIUM</p>
-            <h2>Pixels, vectors,<br />intelligence.</h2>
+            <p>ONE STUDIO · FOUR BREAKTHROUGHS</p>
+            <h2>Follow the idea,<br />not the interface.</h2>
           </div>
           <div className="mode-showcase reveal">
             <div className="mode-tabs" role="tablist" aria-label="Creative modes">
@@ -347,11 +357,11 @@ export default function MarketingHome() {
         <div className="neural-aura" />
         <div className="neural-mark reveal">✦</div>
         <div className="neural-title reveal">
-          <p>NEURAL LAB</p>
-          <h2>Describe the result.<br /><span>Keep every decision.</span></h2>
+          <p>NEURAL LAB · EDITABLE BY DESIGN</p>
+          <h2>Ask for the result.<br /><span>Keep control of the image.</span></h2>
           <p>
-            Creative intelligence built around the way professionals work:
-            transparent, controllable and always nondestructive.
+            Generate, remove, relight or harmonize. Every variation arrives on
+            its own layer with provenance and mask guidance—not baked into the original.
           </p>
         </div>
         <div className="neural-product reveal">
@@ -388,45 +398,45 @@ export default function MarketingHome() {
       <section className="performance-section" id="performance">
         <div className="performance-orb" />
         <div className="performance-copy reveal">
-          <p>LOCAL-FIRST IMAGE ENGINE</p>
-          <h2>Precision you can<br /><span>build upon.</span></h2>
+          <p>PRECISION UNDERNEATH · SPEED ON TOP</p>
+          <h2>A lightweight studio<br /><span>with a serious engine.</span></h2>
           <p>
-            Tiled rendering keeps viewport work bounded while 32-bit float tile
-            masters preserve edit precision. Luma Pro’s native engine is being
-            integrated for desktop-scale documents.
+            Dirty-region rendering updates only what changed. Sparse tiles keep
+            memory bounded. Float masters preserve working precision, while the
+            native desktop compositor handles demanding layer stacks in the background.
           </p>
           <a href="/studio">Feel it in the live studio <span>→</span></a>
         </div>
         <div className="performance-stats">
           <article className="reveal">
             <strong>27</strong>
-            <p>verified blend modes</p>
+            <p>Photoshop-class blend modes</p>
+          </article>
+          <article className="reveal">
+            <strong>8</strong><span>×</span>
+            <p>passes on a single layer</p>
           </article>
           <article className="reveal">
             <strong>32</strong><span>-bit</span>
-            <p>float tile masters</p>
-          </article>
-          <article className="reveal">
-            <strong>2</strong>
-            <p>on-device semantic models</p>
+            <p>floating-point tile masters</p>
           </article>
           <article className="reveal">
             <strong>80</strong>
-            <p>bounded recovery nodes</p>
+            <p>recoverable history nodes</p>
           </article>
         </div>
       </section>
 
       <section className="creator-section" id="creators">
         <div className="creator-heading reveal">
-          <p>FOR PEOPLE WHO MAKE</p>
-          <h2>One studio.<br />Every kind of imagination.</h2>
+          <p>BUILT AROUND REAL WORK</p>
+          <h2>From first frame<br />to final delivery.</h2>
         </div>
         <div className="creator-cards">
           {[
-            ["PHOTOGRAPHERS", "Develop, grade and retouch without leaving the light."],
-            ["DESIGNERS", "Compose pixels, paths and type in the same visual language."],
-            ["ARTISTS", "Paint, generate and experiment with every idea still editable."],
+            ["PHOTOGRAPHERS", "Develop DNG, soft-proof color, retouch locally and preserve the original sensor data."],
+            ["DESIGNERS", "Compose with artboards, smart objects, masks, type and PSD-aware export preflight."],
+            ["ARTISTS", "Capture brushes from images, paint with pressure and branch history without losing an idea."],
           ].map(([label, copy], index) => (
             <article className="reveal" key={label}>
               <span>0{index + 1}</span>
@@ -443,9 +453,9 @@ export default function MarketingHome() {
         <div className="reveal">
           <span className="final-mark">L</span>
           <p>LUMA STUDIO</p>
-          <h2>Your best work<br />is still ahead.</h2>
-          <a href="/studio">Open the live studio <span>→</span></a>
-          <small>Interactive preview · Built for the future of creative work</small>
+          <h2>Stay with the image.<br />Luma handles the complexity.</h2>
+          <a href="/studio">Create in Luma <span>→</span></a>
+          <small>Live web studio · Native macOS application</small>
         </div>
       </section>
 
@@ -453,7 +463,7 @@ export default function MarketingHome() {
         <a className="marketing-brand" href="#top">
           <span>L</span><strong>Luma Studio</strong>
         </a>
-        <p>Creative imaging, reimagined.</p>
+        <p>Professional imaging, focused.</p>
         <div>
           <a href="#product">Product</a>
           <a href="#intelligence">Neural Lab</a>

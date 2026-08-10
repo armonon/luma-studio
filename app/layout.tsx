@@ -13,28 +13,28 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Luma Studio — Make anything. Stay in flow.",
+  title: "Luma Studio — Complex canvas. Clear workspace.",
   description:
-    "The depth of a professional image editor, reimagined around speed, clarity and creative intelligence.",
+    "Professional image editing with Layer Focus, multi-pass blending, capture brushes, precision color, branching history and editable AI.",
   openGraph: {
-    title: "Luma Studio",
-    description: "One studio. Every kind of imagination.",
+    title: "Luma Studio — Complex canvas. Clear workspace.",
+    description: "Layer Focus, multi-pass blending and capture brushes in one precision image studio.",
     type: "website",
     url: "https://luma-studio-preview.armonon.chatgpt.site",
     images: [
       {
-        url: "https://luma-studio-preview.armonon.chatgpt.site/og.png",
-        width: 1200,
-        height: 630,
-        alt: "Luma Studio unified Edit, Select, Mask, Develop and Type workspace",
+        url: "https://luma-studio-preview.armonon.chatgpt.site/og-luma-studio.png",
+        width: 1735,
+        height: 906,
+        alt: "Luma Studio — Complex canvas. Clear workspace.",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Luma Studio",
-    description: "One studio. Every kind of imagination.",
-    images: ["https://luma-studio-preview.armonon.chatgpt.site/og.png"],
+    title: "Luma Studio — Complex canvas. Clear workspace.",
+    description: "Layer Focus, multi-pass blending and capture brushes in one precision image studio.",
+    images: ["https://luma-studio-preview.armonon.chatgpt.site/og-luma-studio.png"],
   },
   icons: {
     icon: "/favicon.svg",

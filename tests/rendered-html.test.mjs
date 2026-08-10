@@ -29,7 +29,10 @@ test("renders the finished Luma Studio marketing site", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Luma Studio/);
-  assert.match(html, /Make anything/);
+  assert.match(html, /Complex canvas/);
+  assert.match(html, /Layer Focus/);
+  assert.match(html, /multi-pass blending/i);
+  assert.match(html, /Capture brushes/);
   assert.match(html, /Open Studio/);
   assert.match(html, /Neural Lab/);
   assert.match(html, /\/studio/);
