@@ -30,6 +30,7 @@ export type FocusItem = {
 };
 
 export type LayerBounds = { x: number; y: number; width: number; height: number };
+export type LayerFocusPreferences = { version: 1; pinnedLayerIds: string[]; recentLayerIds: string[] };
 
 export const EMPTY_LAYER_FOCUS_STATE: LayerFocusState = {
   documentId: null,
@@ -37,6 +38,18 @@ export const EMPTY_LAYER_FOCUS_STATE: LayerFocusState = {
   projectView: null,
   context: "ghost",
 };
+
+export function normalizeLayerFocusPreferences(value: unknown): LayerFocusPreferences {
+  const candidate = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const ids = (input: unknown, limit: number) => Array.isArray(input)
+    ? [...new Set(input.filter((id): id is string => typeof id === "string" && id.length > 0))].slice(0, limit)
+    : [];
+  return {
+    version: 1,
+    pinnedLayerIds: ids(candidate.pinnedLayerIds, 64),
+    recentLayerIds: ids(candidate.recentLayerIds, 24),
+  };
+}
 
 const ADJUSTMENT_KINDS = new Set<Layer["kind"]>([
   "adjustment-tone",

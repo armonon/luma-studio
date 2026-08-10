@@ -2,6 +2,8 @@
 // the Studio's scripting surface, so replay is deterministic and can be used
 // as the basis for batch processing later.
 
+import type { ShapeStyle, SmartFilter, TextStyle, Transform } from "./document";
+
 export type ActionStep =
   | { op: "fill"; layerId?: "active"; color: string }
   | { op: "clear"; layerId?: "active" }
@@ -15,6 +17,16 @@ export type ActionStep =
   | { op: "selectAll" }
   | { op: "deselect" }
   | { op: "addAdjustment"; tone: Record<string, number> }
+  | { op: "addRaster"; name: string }
+  | { op: "addShape"; style: ShapeStyle }
+  | { op: "addText"; text: string; style: TextStyle; transform: Transform }
+  | { op: "addSmartFilter"; kind: SmartFilter["kind"]; params: Record<string, number> }
+  | { op: "addDropShadow" }
+  | { op: "convertSmartObject" }
+  | { op: "groupActive" }
+  | { op: "setTransform"; transform: Transform }
+  | { op: "updateShape"; shape: ShapeStyle }
+  | { op: "updateText"; text: TextStyle }
   | { op: "autoSubject" };
 
 export type Action = {

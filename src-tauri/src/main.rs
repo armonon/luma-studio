@@ -10,6 +10,9 @@
 use luma_core::{composite_layer, BlendMode, LayerOptions, Surface};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri_plugin_dialog::DialogExt;
+use tauri::Manager;
+use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const NATIVE_TILE_MAGIC: &[u8; 4] = b"LUM1";
 const MAX_NATIVE_TILE_PIXELS: usize = 2048 * 2048;
@@ -132,6 +135,35 @@ fn composite_native_tile(request: Request<'_>) -> Result<Response, String> {
 }
 
 const MAX_NATIVE_FILE_BYTES: usize = 1024 * 1024 * 1024;
+static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("Untitled.luma");
+    let counter = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{file_name}.luma-tmp-{}-{counter}", std::process::id()));
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temp)
+            .map_err(|error| format!("Unable to create temporary save: {error}"))?;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            file.set_permissions(metadata.permissions())
+                .map_err(|error| format!("Unable to preserve save permissions: {error}"))?;
+        }
+        file.write_all(data).map_err(|error| format!("Unable to write temporary save: {error}"))?;
+        file.sync_all().map_err(|error| format!("Unable to sync temporary save: {error}"))?;
+        drop(file);
+        std::fs::rename(&temp, path).map_err(|error| format!("Unable to replace save atomically: {error}"))?;
+        if let Ok(directory) = std::fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temp); }
+    result
+}
 
 #[tauri::command]
 async fn open_native_file(app: tauri::AppHandle) -> Result<Response, String> {
@@ -180,8 +212,27 @@ async fn save_native_file(app: tauri::AppHandle, request: Request<'_>) -> Result
         .blocking_save_file();
     let Some(selected) = selected else { return Ok(false); };
     let path = selected.into_path().map_err(|error| error.to_string())?;
-    std::fs::write(&path, data).map_err(|error| format!("Unable to save file: {error}"))?;
+    atomic_write(&path, data)?;
     Ok(true)
+}
+
+#[tauri::command]
+fn open_ai_sign_in(app: tauri::AppHandle) -> Result<(), String> {
+    const LABEL: &str = "luma-ai-sign-in";
+    if let Some(window) = app.get_webview_window(LABEL) {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+    let url = "https://luma-studio-preview.armonon.chatgpt.site/signin-with-chatgpt?return_to=/studio"
+        .parse().map_err(|error| format!("Invalid AI sign-in URL: {error}"))?;
+    tauri::WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::External(url))
+        .title("Sign in to Luma AI")
+        .inner_size(560.0, 760.0)
+        .min_inner_size(440.0, 600.0)
+        .build()
+        .map_err(|error| format!("Unable to open AI sign-in: {error}"))?;
+    Ok(())
 }
 
 /// Diagnostics for the native core, surfaced so the edition system can report
@@ -203,6 +254,7 @@ fn main() {
             composite_native_tile,
             open_native_file,
             save_native_file,
+            open_ai_sign_in,
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Luma Studio");
@@ -248,5 +300,22 @@ mod tests {
         payload.extend_from_slice(&1u32.to_le_bytes());
         payload.extend_from_slice(&0u32.to_le_bytes());
         assert!(composite_native_payload(&payload).is_err());
+    }
+
+    #[test]
+    fn native_file_save_atomically_replaces_contents_without_temp_leaks() {
+        let root = std::env::temp_dir().join(format!(
+            "luma-atomic-save-{}-{}",
+            std::process::id(),
+            SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("project.luma");
+        std::fs::write(&target, b"old").unwrap();
+        atomic_write(&target, b"new project").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new project");
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        std::fs::remove_file(target).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

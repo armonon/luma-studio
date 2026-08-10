@@ -26,7 +26,7 @@ export default function StudioTitlebar({
 }: {
   desktop: boolean;
   projectName: string;
-  saveState: "saved" | "saving" | "error";
+  saveState: "saved" | "unsaved" | "saving" | "error";
   zoom: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -60,7 +60,7 @@ export default function StudioTitlebar({
 
       <div className="studio-project-title">
         <strong>{projectName}</strong>
-        <span aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "error" ? "Save needs attention" : "Saved locally"}</span>
+        <span aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "error" ? "Save needs attention" : saveState === "unsaved" ? "Unsaved changes" : "Saved locally"}</span>
       </div>
 
       <div className="spatial-share-actions">

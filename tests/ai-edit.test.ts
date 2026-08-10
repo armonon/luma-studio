@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AiEditAuthenticationError,
   AiEditCancelledError,
+  AiEditConnectionError,
   buildAiEditPrompt,
   createAiEditProvenance,
   normalizeAiEditConfig,
   normalizeAiSize,
+  resolveAiEditEndpoint,
   runAiEditVariations,
   selectionAlphaToEditMask,
 } from "../app/engine/ai-edit.ts";
@@ -104,6 +107,43 @@ test("AI and local semantic work can be cancelled before expensive work starts",
     signal: controller.signal,
   }), AiEditCancelledError);
   await assert.rejects(warmNeural(undefined, controller.signal), /cancelled/);
+});
+
+test("desktop AI uses the hosted endpoint while web remains same-origin", () => {
+  assert.equal(resolveAiEditEndpoint(false), "/api/ai/edit");
+  assert.equal(resolveAiEditEndpoint(true), "https://luma-studio-preview.armonon.chatgpt.site/api/ai/edit");
+});
+
+test("AI requests carry credentials and retry short transient failures", async () => {
+  let attempts = 0;
+  let credentials: RequestCredentials | undefined;
+  const results = await runAiEditVariations({
+    image: new Blob(["image"]),
+    operation: "fill",
+    prompt: "Add light",
+    retryBaseDelayMs: 0,
+    fetcher: async (_input, init) => {
+      attempts += 1;
+      credentials = init?.credentials;
+      if (attempts === 1) return Response.json({ error: "busy" }, { status: 503, headers: { "retry-after": "0" } });
+      return new Response(new Blob(["result"]), { headers: { "content-type": "image/png" } });
+    },
+  });
+  assert.equal(attempts, 2);
+  assert.equal(credentials, "include");
+  assert.equal(results.length, 1);
+});
+
+test("AI failures distinguish authentication and connection errors", async () => {
+  const input = { image: new Blob(["image"]), operation: "fill" as const, prompt: "Change it", retryLimit: 0 };
+  await assert.rejects(runAiEditVariations({
+    ...input,
+    fetcher: async () => Response.json({ error: "Please sign in" }, { status: 401 }),
+  }), AiEditAuthenticationError);
+  await assert.rejects(runAiEditVariations({
+    ...input,
+    fetcher: async () => { throw new TypeError("offline"); },
+  }), AiEditConnectionError);
 });
 
 test("local semantic capability reporting is explicit about models and limits", () => {

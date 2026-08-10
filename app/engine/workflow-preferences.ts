@@ -40,7 +40,7 @@ export function normalizeWorkflowPreferences<Workspace extends string, Tool exte
     for (const [tool, shortcut] of Object.entries(candidate.shortcutOverrides as Record<string, unknown>)) {
       if (!validTools.has(tool as Tool) || typeof shortcut !== "string") continue;
       const normalized = normalizeShortcut(shortcut);
-      if (normalized) shortcutOverrides[tool as Tool] = normalized;
+      if (normalized && !reservedShortcutReason(normalized)) shortcutOverrides[tool as Tool] = normalized;
     }
   }
   return {
@@ -55,6 +55,13 @@ export function normalizeWorkflowPreferences<Workspace extends string, Tool exte
 export function normalizeShortcut(value: string) {
   const normalized = value.trim().toUpperCase();
   return /^[A-Z0-9]$/.test(normalized) ? normalized : null;
+}
+
+export function reservedShortcutReason(value: string) {
+  const normalized = normalizeShortcut(value);
+  if (normalized === "0") return "0 is reserved for Fit Canvas";
+  if (normalized === "1") return "1 is reserved for 100% Zoom";
+  return null;
 }
 
 export function resolveShortcut<Tool extends string>(

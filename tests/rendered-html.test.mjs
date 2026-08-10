@@ -74,3 +74,23 @@ test("protects the generative image endpoint", async () => {
   assert.equal(response.status, 401);
   assert.match(await response.text(), /Sign in with ChatGPT/);
 });
+
+test("grants credentialed AI CORS only to the desktop origin", async () => {
+  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
+  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}-cors`);
+  const { default: worker } = await import(workerUrl.href);
+  const env = { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } };
+  const context = { waitUntil() {}, passThroughOnException() {} };
+  const response = await worker.fetch(new Request("http://localhost/api/ai/edit", {
+    method: "OPTIONS",
+    headers: { origin: "tauri://localhost" },
+  }), env, context);
+  assert.equal(response.status, 204);
+  assert.equal(response.headers.get("access-control-allow-origin"), "tauri://localhost");
+  assert.equal(response.headers.get("access-control-allow-credentials"), "true");
+  const rejected = await worker.fetch(new Request("http://localhost/api/ai/edit", {
+    method: "OPTIONS",
+    headers: { origin: "https://attacker.example" },
+  }), env, context);
+  assert.equal(rejected.status, 403);
+});

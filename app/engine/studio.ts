@@ -547,6 +547,13 @@ export class Studio {
     for (const [id, entry] of this.plugins) runPluginDispose(id, entry.dispose);
     this.plugins.clear();
     this.subscribers.clear();
+    if (this.tileBacking) {
+      for (const session of this.sessions) {
+        for (const layer of session.doc.layers) {
+          void this.tileBacking.deleteSurface(this.surfaceBackingId(layer.id, session.id)).catch(() => undefined);
+        }
+      }
+    }
   }
   private emit() {
     for (const fn of this.subscribers) fn();
@@ -881,8 +888,14 @@ export class Studio {
     if (this.sessions.length <= 1) return;
     const index = this.sessions.findIndex((session) => session.id === id);
     if (index < 0) return;
+    const closing = this.sessions[index];
     const wasActive = id === this.activeSessionId;
     this.sessions.splice(index, 1);
+    if (this.tileBacking) {
+      for (const layer of closing.doc.layers) {
+        void this.tileBacking.deleteSurface(this.surfaceBackingId(layer.id, closing.id)).catch(() => undefined);
+      }
+    }
     if (wasActive) {
       const next = this.sessions[Math.min(index, this.sessions.length - 1)];
       this.activeSessionId = next.id;
@@ -1745,8 +1758,8 @@ export class Studio {
     }
   }
 
-  private surfaceBackingId(layerId: string) {
-    return `${this.activeSessionId}:${layerId}`;
+  private surfaceBackingId(layerId: string, sessionId = this.activeSessionId) {
+    return `${sessionId}:${layerId}`;
   }
 
   private checkpointLayerSurface(layer: Layer, replace = false) {
@@ -1875,6 +1888,7 @@ export class Studio {
         this.doc.colorSpace,
       );
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addRaster", name });
     this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
@@ -1890,6 +1904,7 @@ export class Studio {
       layer.parentId = group.id;
       this.doc.layers.splice(index, 0, group);
     });
+    this.actions.push({ op: "groupActive" });
     this.requestRender();
     return group;
   }
@@ -1924,6 +1939,7 @@ export class Studio {
     layer.filters = [...(layer.filters ?? []), filter];
     const after: LayerSnapshot = { layerId, filters: cloneFilters(layer.filters) };
     this.commit({ label: `Smart filter: ${kind}`, before: [before], after: [after] });
+    this.actions.push({ op: "addSmartFilter", kind, params: { ...params } });
     this.requestRender();
     return filter;
   }
@@ -2022,6 +2038,7 @@ export class Studio {
     layer.name = `${layer.name} · Smart`;
     const after = this.doc.layers.map(shallowCloneLayer);
     this.commit({ label: "Converted to Smart Object", before: [], after: [], layersBefore: before, layersAfter: after });
+    this.actions.push({ op: "convertSmartObject" });
     this.requestRender();
   }
 
@@ -2041,6 +2058,7 @@ export class Studio {
     };
     layer.effects = [...(layer.effects ?? []), effect];
     this.commit({ label: "Drop shadow", before: [before], after: [{ layerId, effects: cloneEffects(layer.effects) }] });
+    this.actions.push({ op: "addDropShadow" });
     this.requestRender();
   }
 
@@ -2067,6 +2085,7 @@ export class Studio {
     const layer = createTextLayer(text.split("\n")[0] || "Text", s);
     layer.transform = { ...transform };
     this.commitStructural(`Text added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addText", text, style: { ...s }, transform: { ...transform } });
     this.requestRender();
     return layer;
   }
@@ -2086,6 +2105,7 @@ export class Studio {
     };
     const layer = createShapeLayer(s.kind === "rect" ? "Rectangle" : "Ellipse", s);
     this.commitStructural(`Shape added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addShape", style: { ...s } });
     this.requestRender();
     return layer;
   }
@@ -2119,11 +2139,27 @@ export class Studio {
   }
 
   removeLayer(id: string) {
-    if (this.findLayer(id)?.locked) return;
+    const root = this.findLayer(id);
+    if (!root || root.locked) return;
+    const removed = new Set([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const layer of this.doc.layers) {
+        if (layer.parentId && removed.has(layer.parentId) && !removed.has(layer.id)) {
+          removed.add(layer.id);
+          changed = true;
+        }
+      }
+    }
     this.commitStructural("Layer deleted", () => {
-      this.doc.layers = this.doc.layers.filter((l) => l.id !== id);
+      this.doc.layers = this.doc.layers.filter((layer) => !removed.has(layer.id));
     });
-    if (this.tileBacking) void this.tileBacking.deleteSurface(this.surfaceBackingId(id)).catch(() => undefined);
+    if (this.tileBacking) {
+      for (const layerId of removed) {
+        void this.tileBacking.deleteSurface(this.surfaceBackingId(layerId)).catch(() => undefined);
+      }
+    }
     this.requestRender();
   }
 
@@ -2281,6 +2317,7 @@ export class Studio {
     layer.transform = { ...layer.transform, ...patch };
     const after: LayerSnapshot = { layerId: id, transform: { ...layer.transform } };
     this.commit({ label: "Transform", before: [before], after: [after] });
+    this.actions.push({ op: "setTransform", transform: { ...layer.transform } });
     this.requestRender();
   }
 
@@ -2304,6 +2341,7 @@ export class Studio {
     layer.text = { ...layer.text, ...patch };
     const after: LayerSnapshot = { layerId: id, text: { ...layer.text } };
     this.commit({ label: "Text updated", before: [before], after: [after] });
+    this.actions.push({ op: "updateText", text: { ...layer.text } });
     this.requestRender();
   }
 
@@ -2314,6 +2352,7 @@ export class Studio {
     layer.shape = { ...layer.shape, ...patch };
     const after: LayerSnapshot = { layerId: id, shape: { ...layer.shape } };
     this.commit({ label: "Shape updated", before: [before], after: [after] });
+    this.actions.push({ op: "updateShape", shape: { ...layer.shape } });
     this.requestRender();
   }
 
@@ -2996,6 +3035,7 @@ export class Studio {
     prompt: string,
     operation: AiEditOperation = "fill",
     options: {
+      endpoint?: string;
       controls?: Partial<AiOperationControls>;
       quality?: AiEditQuality;
       size?: "auto" | `${number}x${number}`;
@@ -3029,6 +3069,7 @@ export class Studio {
     const total = options.variations ?? 1;
     let completed = 0;
     const results = await runAiEditVariations({
+      endpoint: options.endpoint,
       image,
       mask: maskBlob,
       operation,
@@ -3230,9 +3271,12 @@ export class Studio {
     return a;
   }
   replay(action: Action, activeLayerId: string | null) {
-    for (const step of action.steps) this.runStep(step, activeLayerId);
+    let target = activeLayerId;
+    for (const step of action.steps) target = this.runStep(step, target);
+    return target;
   }
   private runStep(step: ActionStep, activeLayerId: string | null) {
+    let nextTarget = activeLayerId;
     switch (step.op) {
       case "fill":
         if (activeLayerId) this.fillLayer(activeLayerId, step.color);
@@ -3259,9 +3303,20 @@ export class Studio {
       case "featherSelection": this.featherSelection(step.radius); break;
       case "selectAll": this.selectAll(); break;
       case "deselect": this.deselect(); break;
-      case "addAdjustment": this.addAdjustmentLayer("Tone", step.tone as Partial<ToneParams>); break;
+      case "addAdjustment": nextTarget = this.addAdjustmentLayer("Tone", step.tone as Partial<ToneParams>).id; break;
+      case "addRaster": nextTarget = this.addBlankRaster(step.name).id; break;
+      case "addShape": nextTarget = this.addShapeLayer(step.style).id; break;
+      case "addText": nextTarget = this.addTextLayer(step.text, step.style, step.transform).id; break;
+      case "addSmartFilter": if (activeLayerId) this.addSmartFilter(activeLayerId, step.kind, step.params); break;
+      case "addDropShadow": if (activeLayerId) this.addDropShadow(activeLayerId); break;
+      case "convertSmartObject": if (activeLayerId) this.convertToSmartObject(activeLayerId); break;
+      case "groupActive": if (activeLayerId) nextTarget = this.groupLayer(activeLayerId)?.id ?? activeLayerId; break;
+      case "setTransform": if (activeLayerId) this.updateTransform(activeLayerId, step.transform); break;
+      case "updateShape": if (activeLayerId) this.updateShape(activeLayerId, step.shape); break;
+      case "updateText": if (activeLayerId) this.updateText(activeLayerId, step.text); break;
       case "autoSubject": if (activeLayerId) this.autoLumaMask(activeLayerId); break;
     }
+    return nextTarget;
   }
 
   // --- PSD ---
@@ -3280,6 +3335,20 @@ export class Studio {
   async exportProject(name = "Untitled") {
     const { encodeLumaProject } = await import("./project");
     return encodeLumaProject(this.doc, this.actions.list(), name, this.history.snapshot());
+  }
+
+  async exportRecoveryWorkspace() {
+    const { encodeLumaProject } = await import("./project");
+    this.saveActiveSession();
+    const actions = this.actions.list();
+    const updatedAt = Date.now();
+    return Promise.all(this.sessions.map(async (session) => ({
+      id: session.id,
+      name: session.name,
+      active: session.id === this.activeSessionId,
+      updatedAt,
+      blob: await encodeLumaProject(session.doc, actions, session.name, session.history.snapshot()),
+    })));
   }
 
   async importProject(blob: Blob) {

@@ -308,6 +308,26 @@ export class AiEditHttpError extends Error {
   }
 }
 
+export class AiEditAuthenticationError extends AiEditHttpError {
+  constructor(message = "Sign in with ChatGPT to use generative editing.") {
+    super(message, 401);
+    this.name = "AiEditAuthenticationError";
+  }
+}
+
+export class AiEditConnectionError extends Error {
+  constructor(message = "Luma could not reach the AI service. Check your connection and try again.") {
+    super(message);
+    this.name = "AiEditConnectionError";
+  }
+}
+
+export const DESKTOP_AI_EDIT_ENDPOINT = "https://luma-studio-preview.armonon.chatgpt.site/api/ai/edit";
+
+export function resolveAiEditEndpoint(desktop: boolean) {
+  return desktop ? DESKTOP_AI_EDIT_ENDPOINT : "/api/ai/edit";
+}
+
 export type AiEditVariation = {
   index: number;
   image: Blob;
@@ -340,6 +360,9 @@ export async function runAiEditVariations(options: {
   variations?: number;
   signal?: AbortSignal;
   fetcher?: typeof fetch;
+  credentials?: RequestCredentials;
+  retryLimit?: number;
+  retryBaseDelayMs?: number;
   onVariation?: (variation: AiEditVariation) => void;
 }) {
   const variations = options.variations ?? 1;
@@ -352,6 +375,25 @@ export async function runAiEditVariations(options: {
     options.mask ? digestBlob(options.mask) : Promise.resolve(undefined),
   ]);
   const fetcher = options.fetcher ?? fetch;
+  const retryLimit = Math.max(0, Math.min(3, options.retryLimit ?? 2));
+  const retryableStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
+  const retryDelay = async (attempt: number, response?: Response) => {
+    const retryAfter = response?.headers.get("retry-after");
+    const requestedDelay = retryAfter && /^\d+(?:\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : undefined;
+    const delay = requestedDelay ?? (options.retryBaseDelayMs ?? 350) * 2 ** attempt;
+    // A long server-side rate limit should be surfaced immediately instead of
+    // leaving a native editor looking frozen.
+    if (!Number.isFinite(delay) || delay > 5_000) return false;
+    await new Promise<void>((resolve, reject) => {
+      if (options.signal?.aborted) { reject(new AiEditCancelledError()); return; }
+      const timer = setTimeout(resolve, Math.max(0, delay));
+      options.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        reject(new AiEditCancelledError());
+      }, { once: true });
+    });
+    return true;
+  };
   const results: AiEditVariation[] = new Array(variations);
   let nextIndex = 0;
   const worker = async () => {
@@ -381,21 +423,32 @@ export async function runAiEditVariations(options: {
       body.append("variationIndex", String(config.variationIndex));
       body.append("sourceDigest", sourceDigest);
       if (maskDigest) body.append("maskDigest", maskDigest);
-      let response: Response;
-      try {
-        response = await fetcher(options.endpoint ?? "/api/ai/edit", {
-          method: "POST",
-          body,
-          signal: options.signal,
-        });
-      } catch (error) {
-        if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-          throw new AiEditCancelledError();
+      let response: Response | undefined;
+      for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
+        try {
+          response = await fetcher(options.endpoint ?? "/api/ai/edit", {
+            method: "POST",
+            body,
+            signal: options.signal,
+            credentials: options.credentials ?? "include",
+            cache: "no-store",
+          });
+        } catch (error) {
+          if (options.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+            throw new AiEditCancelledError();
+          }
+          if (attempt < retryLimit && await retryDelay(attempt)) continue;
+          throw new AiEditConnectionError();
         }
-        throw error;
+        if (!retryableStatuses.has(response.status) || attempt === retryLimit) break;
+        if (!await retryDelay(attempt, response)) break;
       }
+      if (!response) throw new AiEditConnectionError();
       if (!response.ok) {
         const payload = await response.json().catch(() => ({})) as UnknownRecord;
+        if (response.status === 401) {
+          throw new AiEditAuthenticationError(typeof payload.error === "string" ? payload.error : undefined);
+        }
         throw new AiEditHttpError(
           typeof payload.error === "string" ? payload.error : "The image edit failed",
           response.status,

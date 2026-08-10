@@ -15,6 +15,7 @@ import {
   focusItems,
   hitTestEditableLayer,
   leaveLayerFocus,
+  normalizeLayerFocusPreferences,
   reconcileLayerFocus,
 } from "../app/studio/layer-focus-model.ts";
 
@@ -93,4 +94,14 @@ test("invalid ancestry is cycle-safe", () => {
   doc.layers = [a, b, child] as Layer[];
   const focused = enterLayerFocus(EMPTY_LAYER_FOCUS_STATE, doc, "doc", child.id, { zoom: 1, panX: 0, panY: 0 });
   assert.ok((focused.scope?.path.length ?? 0) <= 3);
+});
+
+test("Focus preferences persist a bounded, deduplicated working set", () => {
+  const preferences = normalizeLayerFocusPreferences({
+    pinnedLayerIds: ["a", "a", "b", 7],
+    recentLayerIds: [...Array.from({ length: 30 }, (_, index) => `recent-${index}`), "recent-0"],
+  });
+  assert.deepEqual(preferences.pinnedLayerIds, ["a", "b"]);
+  assert.equal(preferences.recentLayerIds.length, 24);
+  assert.equal(preferences.recentLayerIds[0], "recent-0");
 });

@@ -20,27 +20,25 @@ function metricFor(modeName: string): { metric: string; label: string } {
   return { metric: block[1], label: block[2] };
 }
 
-test("the AI card's model count matches the models actually shipped", () => {
+test("the AI section does not turn implementation details into a product-count claim", () => {
   // app/engine/neural.ts loads exactly these two on-device models.
   const neural = readFileSync(new URL("../app/engine/neural.ts", import.meta.url), "utf8");
   const modelIds = [...neural.matchAll(/"(Xenova\/[^"]+)"/g)].map((m) => m[1]);
   const distinct = new Set(modelIds);
-  assert.equal(
-    metricFor("AI").metric,
-    String(distinct.size),
-    `page claims ${metricFor("AI").metric} on-device models, engine loads ${distinct.size}: ${[...distinct].join(", ")}`,
-  );
+  assert.ok(distinct.size >= 2, `expected local semantic models, found: ${[...distinct].join(", ")}`);
+  assert.doesNotMatch(page, /on-device semantic models|creative models/i);
 });
 
-test("the Design card's blend-mode count matches the engine", () => {
+test("blend-mode marketing counts match the engine", () => {
   const modes = Object.keys(BLEND_LABELS).length;
-  assert.equal(metricFor("Design").metric, String(modes));
+  assert.match(page, new RegExp(`${modes} MODES`));
+  assert.match(page, new RegExp(`<strong>${modes}</strong>[\\s\\S]*?Photoshop-class blend modes`));
 });
 
 test("no fabricated timing benchmarks in showcase metrics", () => {
   // A bare "N.Ns" metric asserts a measured latency. We have no benchmark
   // harness, so any such claim is invented.
-  for (const mode of ["Photo", "Retouch", "Design", "AI"]) {
+  for (const mode of ["Focus", "Blend", "Paint", "Develop"]) {
     const { metric } = metricFor(mode);
     assert.doesNotMatch(
       metric,
@@ -51,10 +49,10 @@ test("no fabricated timing benchmarks in showcase metrics", () => {
 });
 
 test("the performance section only advertises implementation-backed metrics", () => {
-  assert.match(page, new RegExp(`<strong>${Object.keys(BLEND_LABELS).length}</strong>[\\s\\S]*?verified blend modes`));
-  assert.match(page, /<strong>32<\/strong><span>-bit<\/span>[\s\S]*?float tile masters/);
-  assert.match(page, /<strong>2<\/strong>[\s\S]*?on-device semantic models/);
-  assert.match(page, new RegExp(`<strong>${HISTORY_LIMIT}</strong>[\\s\\S]*?bounded recovery nodes`));
+  assert.match(page, new RegExp(`<strong>${Object.keys(BLEND_LABELS).length}</strong>[\\s\\S]*?Photoshop-class blend modes`));
+  assert.match(page, /<strong>8<\/strong><span>×<\/span>[\s\S]*?passes on a single layer/);
+  assert.match(page, /<strong>32<\/strong><span>-bit<\/span>[\s\S]*?floating-point tile masters/);
+  assert.match(page, new RegExp(`<strong>${HISTORY_LIMIT}</strong>[\\s\\S]*?recoverable history nodes`));
   assert.doesNotMatch(page, /Metal-first|120<\/strong><span>fps|16K<\/strong>|blocking autosave|∞<\/strong>/);
 });
 

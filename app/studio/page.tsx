@@ -35,13 +35,18 @@ import {
 } from "@/app/engine/document";
 import { isNeutralBlendIf } from "@/app/engine/blend";
 import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
-import { readRecovery, writeRecovery } from "@/app/engine/autosave";
+import { readRecoveryWorkspace, writeRecoveryWorkspace } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
 import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
 import type { RawDevelopSettings } from "@/app/engine/raw-develop";
 import { extractAndParseEmbeddedColorProfile } from "@/app/engine/embedded-color-profile";
 import { defaultColorProfileRegistry } from "@/app/engine/color-management";
-import type { AiEditQuality, AiOperationControls } from "@/app/engine/ai-edit";
+import {
+  AiEditAuthenticationError,
+  resolveAiEditEndpoint,
+  type AiEditQuality,
+  type AiOperationControls,
+} from "@/app/engine/ai-edit";
 import type { RetouchMode } from "@/app/engine/retouch";
 import {
   snapPointToEdge,
@@ -56,6 +61,7 @@ import {
 } from "@/app/engine/viewport";
 import {
   isNativeFilesystemAvailable,
+  openNativeAiSignIn,
   openNativeFile,
   saveNativeFile,
 } from "@/app/engine/native-files";
@@ -63,6 +69,7 @@ import {
   defaultWorkflowPreferences,
   normalizeShortcut,
   normalizeWorkflowPreferences,
+  reservedShortcutReason,
   resolveShortcut,
   shortcutConflict,
   type WorkflowPreferences,
@@ -75,6 +82,7 @@ import {
   focusItems,
   hitTestEditableLayer,
   leaveLayerFocus,
+  normalizeLayerFocusPreferences,
   reconcileLayerFocus,
   supportsIsolatedFocus,
   type FocusContextMode,
@@ -245,6 +253,7 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
 const workspaceIds = workspaces.map(([id]) => id);
 const allToolIds = [...new Set(Object.values(modeTools).flat().map(([tool]) => tool))];
 const WORKFLOW_PREFERENCES_KEY = "luma.workflow-preferences.v1";
+const LAYER_FOCUS_PREFERENCES_KEY = "luma.layer-focus.v1";
 const initialWorkflowPreferences = defaultWorkflowPreferences<WorkspaceMode, Tool>(workspaceIds);
 
 const toneRows: Array<[ToneKey, string, number, number, number]> = [
@@ -322,6 +331,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
   const [recentLayerIds, setRecentLayerIds] = useState<string[]>([]);
   const [pinnedLayerIds, setPinnedLayerIds] = useState<string[]>([]);
+  const [focusPreferencesLoaded, setFocusPreferencesLoaded] = useState(false);
   const [focusState, setFocusState] = useState<LayerFocusState>(EMPTY_LAYER_FOCUS_STATE);
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
@@ -411,7 +421,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const batchInput = useRef<HTMLInputElement>(null);
   const [selectedActionIdx, setSelectedActionIdx] = useState<number | null>(null);
   const [useGL, setUseGL] = useState(false);
-  const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
@@ -489,10 +499,44 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   }, [workflowPreferences, workflowPreferencesLoaded]);
 
   useEffect(() => {
+    const hydration = window.setTimeout(() => {
+      try {
+        const stored = window.localStorage.getItem(LAYER_FOCUS_PREFERENCES_KEY);
+        const preferences = normalizeLayerFocusPreferences(stored ? JSON.parse(stored) : null);
+        setPinnedLayerIds(preferences.pinnedLayerIds);
+        setRecentLayerIds(preferences.recentLayerIds);
+      } catch {
+        setPinnedLayerIds([]);
+        setRecentLayerIds([]);
+      }
+      setFocusPreferencesLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(hydration);
+  }, []);
+
+  useEffect(() => {
+    if (!focusPreferencesLoaded) return;
+    try {
+      window.localStorage.setItem(LAYER_FOCUS_PREFERENCES_KEY, JSON.stringify({
+        version: 1,
+        pinnedLayerIds,
+        recentLayerIds,
+      }));
+    } catch {
+      // Focus remains available when device storage is blocked.
+    }
+  }, [focusPreferencesLoaded, pinnedLayerIds, recentLayerIds]);
+
+  useEffect(() => {
     if (!canvasRef.current) return;
     const target = canvasRef.current;
     const s = new Studio(1600, 1067, target);
-    const unsub = s.subscribe(forceUpdate);
+    const unsub = s.subscribe(() => {
+      forceUpdate();
+      const selected = activeLayerIdRef.current;
+      if (!selected || !s.findLayer(selected)) setActiveLayerId(s.doc.layers[0]?.id ?? null);
+      setActiveAdjustmentId((current) => current && !s.findLayer(current) ? null : current);
+    });
     const api: LumaAPI = {
       version: LUMA_API_VERSION,
       studio: s,
@@ -522,12 +566,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setStudio(s);
     (async () => {
       try {
-        const recovery = await readRecovery();
-        if (recovery) {
-          const project = await s.importProject(recovery);
+        const recovery = await readRecoveryWorkspace();
+        if (recovery.length) {
+          const ordered = [...recovery.filter((entry) => !entry.active), ...recovery.filter((entry) => entry.active)];
+          let project: Awaited<ReturnType<Studio["importProject"]>> | null = null;
+          for (const entry of ordered) project = await s.importProject(entry.blob);
+          if (!project) throw new Error("Recovery workspace was empty");
           setActiveLayerId(project.doc.layers[0]?.id ?? null);
           setCustomName(project.name);
-          notify(`Recovered ${project.name}`);
+          notify(recovery.length === 1 ? `Recovered ${project.name}` : `Recovered ${recovery.length} open documents`);
         } else {
           const img = await loadImage(filmstrip[0].src);
           const layer = s.openImage(filmstrip[0].name, img);
@@ -1255,7 +1302,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       setActiveLayerId(project.doc.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
       setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
-      await writeRecovery(await studio.exportProject(project.name));
+      await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
       setSaveState("saved");
       const restoredOperations = project.history?.summary().operations ?? 0;
       notify(`${project.name} opened · ${restoredOperations} versions restored`);
@@ -1434,8 +1481,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     try {
       const blob = await studio.exportProject(projectName);
       const saved = await downloadOrSave(blob, `${projectName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`);
-      if (!saved) { setSaveState("saved"); return; }
-      await writeRecovery(blob);
+      if (!saved) { setSaveState("unsaved"); return; }
+      await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
       setSaveState("saved");
       notify("Project + version history saved");
     } catch {
@@ -1458,23 +1505,37 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   useEffect(() => {
     if (!studio) return;
     let timer = 0;
-    const queue = new CoalescedSaveQueue<Blob>({
-      produce: () => studio.exportProject(projectName),
-      commit: (blob) => writeRecovery(blob),
+    let active = true;
+    const queue = new CoalescedSaveQueue<Awaited<ReturnType<Studio["exportRecoveryWorkspace"]>>>({
+      produce: () => studio.exportRecoveryWorkspace(),
+      commit: (workspace) => writeRecoveryWorkspace(workspace),
       onState: (state) => {
+        if (!active) return;
         if (state === "producing" || state === "committing") setSaveState("saving");
         else if (state === "idle") setSaveState("saved");
         else if (state === "error") setSaveState("error");
       },
     });
+    const flush = () => {
+      window.clearTimeout(timer);
+      timer = 0;
+      queue.request();
+    };
     const unsubscribe = studio.subscribe(() => {
       window.clearTimeout(timer);
-      timer = window.setTimeout(() => queue.request(), 1600);
+      setSaveState("unsaved");
+      timer = window.setTimeout(flush, 1600);
     });
+    const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.clearTimeout(timer);
-      queue.cancel();
       unsubscribe();
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (timer) flush();
+      active = false;
+      void queue.waitForIdle();
     };
   }, [studio, projectName]);
 
@@ -1585,6 +1646,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setNeural({ msg: `GPT Image 2 · ${aiOperation} · starting`, pct: 8 });
     try {
       const layers = await studio.generativeEditVariations(activeLayer.id, aiPrompt.trim(), aiOperation, {
+        endpoint: resolveAiEditEndpoint(desktop),
         controls: currentAiControls(),
         quality: aiQuality,
         variations: aiVariations,
@@ -1599,7 +1661,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       notify(`AI ${aiOperation} added ${layers.length} variation${layers.length === 1 ? "" : "s"} as layers`);
     } catch (error) {
       setNeural(null);
-      notify(error instanceof Error ? error.message : "Generative edit failed");
+      if (desktop && error instanceof AiEditAuthenticationError) {
+        try {
+          await openNativeAiSignIn();
+          notify("Sign in with ChatGPT in the new window, then run the edit again");
+        } catch {
+          notify("Could not open ChatGPT sign-in. Check your connection and try again");
+        }
+      } else {
+        notify(error instanceof Error ? error.message : "Generative edit failed");
+      }
     } finally {
       aiAbort.current = null;
       setAiRunning(false);
@@ -1628,11 +1699,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const action = selectedActionIdx != null ? studio.actions.get(selectedActionIdx) : null;
     setBatchProgress({ i: 0, total: batchFiles.length, name: "" });
     try {
-      const zip = await runBatch(studio, batchFiles, action ?? null, (i, total, name) => {
+      const result = await runBatch(batchFiles, action ?? null, (i, total, name) => {
         setBatchProgress({ i, total, name });
       });
-      const saved = await downloadOrSave(zip, `luma-batch-${Date.now()}.zip`);
-      if (saved) notify(`Batch complete · ${batchFiles.length} images`);
+      const saved = await downloadOrSave(result.archive, `luma-batch-${Date.now()}.zip`);
+      if (saved) notify(result.failed.length
+        ? `Batch complete · ${result.succeeded} exported · ${result.failed.length} failed (see report)`
+        : `Batch complete · ${result.succeeded} images`);
     } catch (err) {
       console.warn(err);
       notify("Batch failed");
@@ -1671,7 +1744,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!studio) return;
     const a = studio.actions.get(i);
     if (!a) return;
-    studio.replay(a, activeLayerId);
+    const target = studio.replay(a, activeLayerId);
+    if (target) setActiveLayerId(target);
     notify(`Played ${a.name}`);
   };
 
@@ -3119,6 +3193,30 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       <button onClick={() => activeLayer?.text && studio?.updateText(activeLayer.id, { text: textDraft })} style={{ marginTop: 4, fontSize: 11 }}>Update active text</button>
                     </>
                   )}
+                  {activeLayer?.kind === "shape" && activeLayer.shape && (
+                    <div style={{ display: "grid", gap: 7, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,.1)", fontSize: 10 }}>
+                      <label style={{ display: "grid", gridTemplateColumns: "72px 1fr", alignItems: "center", gap: 6 }}>
+                        <span>Geometry</span>
+                        <select value={activeLayer.shape.kind} onChange={(event) => studio?.updateShape(activeLayer.id, { kind: event.target.value as "rect" | "ellipse" })}>
+                          <option value="rect">Rectangle</option><option value="ellipse">Ellipse</option>
+                        </select>
+                      </label>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 }}><span>Fill</span><input type="color" value={/^#[0-9a-f]{6}$/i.test(activeLayer.shape.fill) ? activeLayer.shape.fill : "#ffffff"} onChange={(event) => studio?.updateShape(activeLayer.id, { fill: event.target.value })} /></label>
+                        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 5 }}><span>Stroke</span><input type="color" value={/^#[0-9a-f]{6}$/i.test(activeLayer.shape.stroke) ? activeLayer.shape.stroke : "#000000"} onChange={(event) => studio?.updateShape(activeLayer.id, { stroke: event.target.value })} /></label>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 6 }}>
+                        {([[
+                          "Stroke px", "strokeWidth", activeLayer.shape.strokeWidth, 0,
+                        ], ["Radius px", "radius", activeLayer.shape.radius, 0], ["Width px", "w", activeLayer.shape.w, 1], ["Height px", "h", activeLayer.shape.h, 1]] as const).map(([label, key, value, minimum]) => (
+                          <label key={key} style={{ display: "grid", gap: 3 }}><span>{label}</span><input key={`${activeLayer.id}-${key}-${value}`} type="number" min={minimum} defaultValue={Math.round(value * 100) / 100} onBlur={(event) => {
+                            const next = Math.max(minimum, Number(event.target.value));
+                            if (Number.isFinite(next)) studio?.updateShape(activeLayer.id, { [key]: next });
+                          }} /></label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
             )}
@@ -3132,6 +3230,25 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </p>
                   {(activeTool === "puppet-warp" || activeTool === "liquify") && <label style={{ display: "flex", gap: 8, alignItems: "center" }}><span>Influence</span><input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} /><output>{warpRadius}px</output></label>}
                   {pointDraft.length > 0 && <button onClick={() => setPointDraft([])}>Clear points</button>}
+                  {activeLayer && (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 6 }}>
+                        {([[
+                          "X", "tx", activeLayer.transform.tx, 1,
+                        ], ["Y", "ty", activeLayer.transform.ty, 1], ["Scale X", "sx", activeLayer.transform.sx, 0.01], ["Scale Y", "sy", activeLayer.transform.sy, 0.01]] as const).map(([label, key, value, step]) => (
+                          <label key={key} style={{ display: "grid", gap: 3 }}><span>{label}</span><input key={`${activeLayer.id}-${key}-${value}`} type="number" step={step} defaultValue={Math.round(value * 100) / 100} onBlur={(event) => {
+                            const next = Number(event.target.value);
+                            if (Number.isFinite(next)) studio?.updateTransform(activeLayer.id, { [key]: next });
+                          }} /></label>
+                        ))}
+                        <label style={{ display: "grid", gap: 3 }}><span>Rotation °</span><input key={`${activeLayer.id}-rotation-${activeLayer.transform.rotation}`} type="number" step="0.1" defaultValue={Math.round(activeLayer.transform.rotation * 180 / Math.PI * 10) / 10} onBlur={(event) => {
+                          const degrees = Number(event.target.value);
+                          if (Number.isFinite(degrees)) studio?.updateTransform(activeLayer.id, { rotation: degrees * Math.PI / 180 });
+                        }} /></label>
+                      </div>
+                      <button onClick={() => studio?.resetTransform(activeLayer.id)}>Reset transform</button>
+                    </>
+                  )}
                 </div>
               </section>
             )}
@@ -3376,6 +3493,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       onChange={(event) => {
                         const shortcut = normalizeShortcut(event.target.value);
                         if (!shortcut) return;
+                        const reserved = reservedShortcutReason(shortcut);
+                        if (reserved) { notify(reserved); return; }
                         const conflict = shortcutConflict(
                           modeTools[workspace].map(([candidate, , , defaultShortcut]) => [candidate, defaultShortcut] as const),
                           tool,

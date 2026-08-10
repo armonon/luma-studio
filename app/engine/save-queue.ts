@@ -37,6 +37,7 @@ export class CoalescedSaveQueue<T> {
   }
 
   private async drain() {
+    let latestFailed = false;
     while (!this.cancelled && this.settledRevision < this.requestedRevision) {
       const revision = this.requestedRevision;
       try {
@@ -48,11 +49,13 @@ export class CoalescedSaveQueue<T> {
         this.options.onState?.("committing");
         await this.options.commit(value, revision);
         this.settledRevision = revision;
+        latestFailed = false;
       } catch (error) {
         if (revision === this.requestedRevision) this.settledRevision = revision;
+        latestFailed = revision === this.requestedRevision;
         this.options.onState?.("error", error);
       }
     }
-    if (!this.cancelled) this.options.onState?.("idle");
+    if (!this.cancelled && !latestFailed) this.options.onState?.("idle");
   }
 }

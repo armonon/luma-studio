@@ -68,6 +68,7 @@ test("errors settle the failed revision and a later request retries", async () =
 
   queue.request();
   await queue.waitForIdle();
+  assert.equal(states.at(-1), "error");
   queue.request();
   await queue.waitForIdle();
   assert.equal(attempts, 2);

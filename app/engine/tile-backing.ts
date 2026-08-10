@@ -146,6 +146,17 @@ export class IndexedDbTileBacking {
   }
 
   async deleteSurface(surfaceId: string) {
+    const previous = this.queues.get(surfaceId) ?? Promise.resolve();
+    const task = previous.catch(() => undefined).then(() => this.deleteSurfaceNow(surfaceId));
+    this.queues.set(surfaceId, task);
+    try {
+      await task;
+    } finally {
+      if (this.queues.get(surfaceId) === task) this.queues.delete(surfaceId);
+    }
+  }
+
+  private async deleteSurfaceNow(surfaceId: string) {
     const database = await this.database();
     const read = database.transaction("tiles", "readonly");
     const records = await requestValue(read.objectStore("tiles").index("surfaceId").getAllKeys(surfaceId));

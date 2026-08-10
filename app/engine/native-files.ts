@@ -22,7 +22,9 @@ export async function openNativeFile(invoke = systemInvoke()) {
   if (nameLength === 0) return null;
   if (nameLength > bytes.byteLength - 4) throw new Error("Native open file name is truncated");
   const name = new TextDecoder().decode(bytes.subarray(4, 4 + nameLength));
-  return { name, data: bytes.slice(4 + nameLength) };
+  // Keep a view into the native response; the importer can take the one
+  // ArrayBuffer copy it needs instead of duplicating a large PSD twice.
+  return { name, data: bytes.subarray(4 + nameLength) };
 }
 
 export async function saveNativeFile(data: Blob | Uint8Array, fileName: string, invoke = systemInvoke()) {
@@ -35,4 +37,10 @@ export async function saveNativeFile(data: Blob | Uint8Array, fileName: string, 
   payload.set(name, 4);
   payload.set(file, 4 + name.length);
   return invoke<boolean>("save_native_file", payload);
+}
+
+export async function openNativeAiSignIn(invoke = systemInvoke()) {
+  if (!invoke) return false;
+  await invoke<void>("open_ai_sign_in");
+  return true;
 }

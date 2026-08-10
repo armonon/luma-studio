@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   normalizeShortcut,
   normalizeWorkflowPreferences,
+  reservedShortcutReason,
   resolveShortcut,
   shortcutConflict,
 } from "../app/engine/workflow-preferences.ts";
@@ -30,4 +31,12 @@ test("shortcut resolution normalizes keys and detects workspace collisions", () 
   assert.equal(resolveShortcut("brush", "B", preferences), "Q");
   assert.equal(shortcutConflict([["brush", "B"], ["move", "V"]], "move", "q", preferences), "brush");
   assert.equal(shortcutConflict([["brush", "B"], ["move", "V"]], "move", "x", preferences), null);
+  assert.equal(reservedShortcutReason("0"), "0 is reserved for Fit Canvas");
+  assert.equal(reservedShortcutReason("1"), "1 is reserved for 100% Zoom");
+  assert.equal(reservedShortcutReason("7"), null);
+});
+
+test("stored preferences discard shortcuts reserved by global view commands", () => {
+  const preferences = normalizeWorkflowPreferences({ shortcutOverrides: { brush: "0", move: "1", wand: "7" } }, workspaces, tools);
+  assert.deepEqual(preferences.shortcutOverrides, { wand: "7" });
 });
