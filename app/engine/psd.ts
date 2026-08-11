@@ -1517,13 +1517,14 @@ export function photoshopCompatibilityReport(
   }
   // Photoshop has no live backdrop effect at all — there you duplicate, merge
   // and blur by hand — so there is nothing to write and it must be said.
+  const backdropKinds: ReadonlyArray<LayerEffect["kind"]> = ["backdrop-blur", "refraction"];
   const backdropLayers = doc.layers.filter((layer) =>
-    layer.effects?.some((effect) => effect.kind === "backdrop-blur" && effect.enabled));
+    layer.effects?.some((effect) => effect.enabled && backdropKinds.includes(effect.kind)));
   if (backdropLayers.length) {
     issues.push({
       code: "BACKDROP_EFFECT_NOT_EXPORTED",
       severity: "warning",
-      message: `Backdrop Blur reads the layers underneath and has no Photoshop layer style equivalent, so it is not written to the file (${backdropLayers.length} layer${backdropLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+      message: `Backdrop Blur and Refraction read the layers underneath and have no Photoshop layer style equivalent, so they are not written to the file (${backdropLayers.length} layer${backdropLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
     });
   }
   // Knockout has no ag-psd layer field at all, and channelBlendingRestrictions

@@ -524,7 +524,8 @@ export type LayerEffectKind =
   | "backdrop-blur"
   | "bloom"
   | "relief"
-  | "long-shadow";
+  | "long-shadow"
+  | "refraction";
 
 /** Effects painted beneath the layer content; the rest paint over it. */
 export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow", "long-shadow"];
@@ -631,6 +632,8 @@ export type LayerEffect = {
   threshold?: number;
   /** long-shadow only — how many stamps make up the trail. Defaults to 32. */
   steps?: number;
+  /** refraction only — how far the backdrop is displaced, in pixels. Defaults to 12. */
+  strength?: number;
 };
 
 export function isEffectBelowContent(kind: LayerEffectKind) {
@@ -653,6 +656,7 @@ export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
   "drop-shadow",
   "long-shadow",
   "backdrop-blur",
+  "refraction",
 ];
 
 export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
@@ -670,6 +674,7 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
   bloom: "Bloom",
   relief: "Relief",
   "long-shadow": "Long Shadow",
+  refraction: "Refraction",
 };
 
 /** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
@@ -682,7 +687,7 @@ export type EffectField =
   | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "altitude" | "bevelColors"
   | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
-  | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps";
+  | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps" | "strength";
 
 /** Falloff shaping applies wherever an effect has a soft edge to shape. */
 const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
@@ -712,6 +717,7 @@ export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> 
   bloom: ["blendMode", "blur", "threshold"],
   relief: ["blendMode", "depth", "angle", "globalLight"],
   "long-shadow": ["offset", "globalLight", "steps"],
+  refraction: ["blendMode", "strength", "blur"],
 };
 
 /**
@@ -765,6 +771,7 @@ export const EFFECT_BLEND_DEFAULTS: Record<LayerEffectKind, BlendMode> = {
   bloom: "screen",
   relief: "hard-light",
   "long-shadow": "source-over",
+  refraction: "source-over",
 };
 
 export function resolvedEffectBlendMode(effect: LayerEffect): BlendMode {

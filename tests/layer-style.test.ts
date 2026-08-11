@@ -174,7 +174,7 @@ function baseEffect(kind: LayerEffectKind): LayerEffect {
     stops: [{ offset: 0, color: "#ff0000" }, { offset: 1, color: "#0000ff" }],
     gradientAngle: 90, gradientStyle: "linear",
     pattern: "checker", patternScale: 8,
-    saturation: 1.6, tint: 0, threshold: 0.6, steps: 24,
+    saturation: 1.6, tint: 0, threshold: 0.6, steps: 24, strength: 10,
   };
 }
 
@@ -205,6 +205,7 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   tint: { tint: 1 },
   threshold: { threshold: 0.05 },
   steps: { steps: 3 },
+  strength: { strength: 40 },
 };
 
 const ALL_FIELDS = Object.keys(FIELD_CHANGES) as EffectField[];
@@ -550,6 +551,57 @@ test("backdrop blur averages what is behind the layer, not the layer itself", ()
   // there, but an unclipped blur would have greyed it from the black half.
   const outside = pixelAt(target, SIZE / 2 + 3, 4);
   assert.ok(outside.r > 230, `the blur escaped the layer silhouette, got r=${outside.r}`);
+});
+
+test("refraction displaces the backdrop where the layer's alpha has a slope", () => {
+  // Comparing against the same document with strength 0 keeps the assertion
+  // about the effect rather than about my guess at which pixel moves: the
+  // displacement is bounded and edge-driven, so picking a sample point by hand
+  // is easy to get wrong in a way that hides a broken implementation.
+  const render = (strength: number) => {
+    const backdrop = newCanvas(SIZE, SIZE);
+    const backdropCtx = backdrop.getContext("2d")!;
+    backdropCtx.fillStyle = "#000000";
+    backdropCtx.fillRect(0, 0, 24, SIZE);
+    backdropCtx.fillStyle = "#ffffff";
+    backdropCtx.fillRect(24, 0, SIZE - 24, SIZE);
+
+    const panel = newCanvas(SIZE, SIZE);
+    const panelCtx = panel.getContext("2d")!;
+    panelCtx.fillStyle = "#00ff00";
+    panelCtx.fillRect(10, 10, SIZE - 20, SIZE - 20);
+
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [
+      {
+        ...createRasterLayer("glass", panel),
+        effects: [{ ...baseEffect("refraction"), id: "rf", strength, blur: 5, opacity: 1 }],
+      },
+      createRasterLayer("backdrop", backdrop),
+    ];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    const { data } = target.getContext("2d")!.getImageData(0, 0, SIZE, SIZE);
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("base64");
+  };
+
+  assert.notEqual(render(16), render(0), "strength should change the composite");
+});
+
+test("refraction is a no-op with nothing behind the layer", () => {
+  const panel = newCanvas(SIZE, SIZE);
+  const panelCtx = panel.getContext("2d")!;
+  panelCtx.fillStyle = "#00ff00";
+  panelCtx.fillRect(10, 10, 30, 30);
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [{
+    ...createRasterLayer("glass", panel),
+    effects: [{ ...baseEffect("refraction"), id: "rf", strength: 16, blur: 5, opacity: 1 }],
+  }];
+  const target = testCanvas(SIZE, SIZE);
+  assert.doesNotThrow(() => renderClean(doc, target));
+  const inside = pixelAt(target, 25, 25);
+  assert.ok(inside.g > 200, "the layer should be untouched with no backdrop");
 });
 
 test("backdrop blur is a no-op when nothing is behind the layer", () => {

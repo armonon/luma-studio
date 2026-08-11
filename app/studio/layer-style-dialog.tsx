@@ -314,6 +314,9 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
           <Slider label="Scale" value={effect.patternScale ?? 16} min={2} max={128} suffix="px" onChange={(patternScale) => patch({ patternScale })} />
         </>
       )}
+      {effectUses(effect.kind, "strength") && (
+        <Slider label="Strength" value={effect.strength ?? 12} min={0} max={80} suffix="px" onChange={(strength) => patch({ strength })} />
+      )}
       {effectUses(effect.kind, "threshold") && (
         <Slider label="Threshold" value={(effect.threshold ?? 0.7) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ threshold: v / 100 })} />
       )}
@@ -329,6 +332,12 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
       {effect.kind === "backdrop-blur" && (
         <p className="layer-style-hint">
           Blurs the layers behind this one, live. Nothing underneath means nothing to blur.
+        </p>
+      )}
+      {effect.kind === "refraction" && (
+        <p className="layer-style-hint">
+          Bends the layers behind this one along its own edges, like glass. Displacement is capped
+          by Strength, which is what keeps it correct as the canvas is tiled.
         </p>
       )}
       {effect.kind === "bloom" && (

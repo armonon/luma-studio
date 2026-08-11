@@ -96,6 +96,9 @@ export function layerEffectReach(effect: LayerEffect) {
     case "backdrop-blur":
       // Sampling reach, not painting reach.
       return effect.blur * 2;
+    case "refraction":
+      // Bounded displacement, which is exactly why this one tiles correctly.
+      return (effect.strength ?? 12) + effect.blur;
     // Clipped to the layer, so they never reach outside it.
     case "color-overlay":
     case "gradient-overlay":
@@ -602,6 +605,65 @@ function drawLayerEffect(
       }
       ctx.putImageData(out, 0, 0);
       // putImageData ignores globalAlpha, so the opacity is reapplied by mask.
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.globalAlpha = effect.opacity;
+      ctx.drawImage(contentBuf, 0, 0);
+      break;
+    }
+
+    case "refraction": {
+      // Glass: bend the backdrop by the slope of the layer's own alpha, so the
+      // edges of the shape distort what is behind them and the middle stays
+      // clear. Displacement is bounded by `strength`, which is what keeps this
+      // correct across tiles — a reflection would need the whole backdrop.
+      if (!backdrop) break;
+      const strength = Math.max(0, (effect.strength ?? 12) * uniformScale);
+      if (strength <= 0) break;
+
+      const sctx = scratchBuf.getContext("2d")!;
+      clearContext(sctx, size.width, size.height);
+      if (blur > 0) sctx.filter = `blur(${blur}px)`;
+      sctx.drawImage(contentBuf, 0, 0);
+      sctx.filter = "none";
+      const shape = sctx.getImageData(0, 0, size.width, size.height).data;
+      const source = ctx.createImageData(size.width, size.height);
+      const bctx = backdrop.getContext("2d")!;
+      const behind = bctx.getImageData(0, 0, size.width, size.height).data;
+      const dst = source.data;
+
+      const alphaAt = (x: number, y: number) => {
+        const cx = Math.max(0, Math.min(size.width - 1, x));
+        const cy = Math.max(0, Math.min(size.height - 1, y));
+        return shape[(cy * size.width + cx) * 4 + 3] / 255;
+      };
+
+      for (let y = 0; y < size.height; y += 1) {
+        for (let x = 0; x < size.width; x += 1) {
+          const index = (y * size.width + x) * 4;
+          if (shape[index + 3] === 0) continue;
+          // The alpha gradient is the surface normal of the glass. Take the
+          // direction from it and the magnitude from `strength`, rather than
+          // multiplying the raw gradient: a one-pixel difference across a
+          // softened edge is ~0.1, so a raw product would displace by a pixel
+          // or two however high the control was set.
+          const gx = alphaAt(x - 1, y) - alphaAt(x + 1, y);
+          const gy = alphaAt(x, y - 1) - alphaAt(x, y + 1);
+          const magnitude = Math.hypot(gx, gy);
+          if (magnitude < 1e-4) continue;
+          // Steeper edges bend more, saturating at the full strength.
+          const bend = strength * Math.min(1, magnitude * 8);
+          const dx = (gx / magnitude) * bend;
+          const dy = (gy / magnitude) * bend;
+          const sx = Math.max(0, Math.min(size.width - 1, Math.round(x + dx)));
+          const sy = Math.max(0, Math.min(size.height - 1, Math.round(y + dy)));
+          const from = (sy * size.width + sx) * 4;
+          dst[index] = behind[from];
+          dst[index + 1] = behind[from + 1];
+          dst[index + 2] = behind[from + 2];
+          dst[index + 3] = behind[from + 3];
+        }
+      }
+      ctx.putImageData(source, 0, 0);
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = effect.opacity;
       ctx.drawImage(contentBuf, 0, 0);

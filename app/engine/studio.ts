@@ -2140,6 +2140,11 @@ export class Studio {
           enabled: true, opacity: 0.5, color: "rgba(0,0,0,0.9)", blur: 0, offsetX: 90, offsetY: 90,
           steps: 48,
         };
+      case "refraction":
+        return {
+          enabled: true, opacity: 1, color: "#ffffff", blur: 6, offsetX: 0, offsetY: 0,
+          strength: 18,
+        };
     }
   }
 
