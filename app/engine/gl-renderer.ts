@@ -9,6 +9,7 @@ import {
   newCanvas,
   resolvedBlendIf,
   resolvedBlendPasses,
+  resolvedEffectBlendMode,
   resolvedFillOpacity,
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
@@ -544,6 +545,11 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
     return enabled.length !== 1 || enabled[0].mode !== "source-over" || enabled[0].opacity !== 1
       || !isNeutralBlendIf(resolvedBlendIf(layer));
   })) return false;
+  // Layers are rasterized independently here, so there is no backdrop for a
+  // blended effect to composite against. Decline and let the CPU renderer take
+  // it rather than exporting a quietly different image.
+  if (doc.layers.some((layer) => layer.effects?.some((effect) =>
+    effect.enabled && resolvedEffectBlendMode(effect) !== "source-over"))) return false;
   const c = ensureCache(doc.width, doc.height);
   if (!c) return false;
   const { gl } = c;

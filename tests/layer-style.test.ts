@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { pixelAt, testCanvas } from "./canvas-harness.ts";
 import {
   BLEND_IF_HANDLES,
@@ -111,14 +112,27 @@ test("handles never end up out of order, whichever one moved", () => {
 
 const SIZE = 60;
 
+/**
+ * A red square over an opaque grey backdrop.
+ *
+ * The backdrop matters: a blend mode cannot do anything where there is nothing
+ * beneath it, so on a transparent document every mode would look identical for
+ * a drop shadow or an outside stroke and the table would appear to lie.
+ */
 function docWith(effect: LayerEffect): Document {
   const bitmap = newCanvas(SIZE, SIZE);
   const ctx = bitmap.getContext("2d")!;
   ctx.fillStyle = "#ff0000";
   ctx.fillRect(20, 20, 20, 20);
   const layer: Layer = { ...createRasterLayer("box", bitmap), effects: [effect] };
+
+  const backdrop = newCanvas(SIZE, SIZE);
+  const backdropCtx = backdrop.getContext("2d")!;
+  backdropCtx.fillStyle = "#808080";
+  backdropCtx.fillRect(0, 0, SIZE, SIZE);
+
   const doc = createDocument(SIZE, SIZE);
-  doc.layers = [layer];
+  doc.layers = [layer, createRasterLayer("backdrop", backdrop)];
   return doc;
 }
 
@@ -138,10 +152,10 @@ function renderDigest(effect: LayerEffect) {
  */
 function baseEffect(kind: LayerEffectKind): LayerEffect {
   return {
-    id: "e1", kind, enabled: true, opacity: 1, color: "#00ff00",
-    blur: 0, offsetX: 8, offsetY: 0,
+    id: "e1", kind, enabled: true, opacity: 1, color: "#4080c0",
+    blur: 6, offsetX: 8, offsetY: 0,
     width: 4, position: "outside",
-    depth: 4, angle: 135, highlightColor: "#ffffff", shadowColor: "#000000",
+    depth: 4, angle: 135, altitude: 30, highlightColor: "#ffffff", shadowColor: "#000000",
     glowSource: "edge", invert: false,
     stops: [{ offset: 0, color: "#ff0000" }, { offset: 1, color: "#0000ff" }],
     gradientAngle: 90, gradientStyle: "linear",
@@ -158,7 +172,12 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   depth: { depth: 9 },
   angle: { angle: 315 },
   bevelColors: { highlightColor: "#00ff00", shadowColor: "#0000ff" },
+  altitude: { altitude: 85 },
   globalLight: { useGlobalLight: true },
+  blendMode: { blendMode: "difference" },
+  spread: { spread: 0.9 },
+  noise: { noise: 0.8 },
+  contour: { contour: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }] },
   glowSource: { glowSource: "center" },
   invert: { invert: true },
   gradientStops: { stops: [{ offset: 0, color: "#00ff00" }, { offset: 1, color: "#ffff00" }] },
@@ -263,6 +282,52 @@ test("editing an effect is undoable", () => {
   studio.undo();
   assert.equal(studio.doc.layers[0].effects![0].blur, originalBlur, "undo did not restore the effect");
   studio.dispose();
+});
+
+// --- effect blend modes against the backdrop -------------------------------
+
+test("a multiplied drop shadow darkens the backdrop instead of painting over it", () => {
+  // The whole point of the plumbing: effects land where the layer's own buffer
+  // is still empty, so without the backdrop a blend mode there is a no-op.
+  const shadow = (blendMode?: "multiply"): LayerEffect => ({
+    ...baseEffect("drop-shadow"),
+    color: "#ffffff",
+    blendMode,
+    blur: 4,
+    offsetX: 14,
+    offsetY: 0,
+  });
+
+  const normal = testCanvas(SIZE, SIZE);
+  renderClean(docWith(shadow(undefined)), normal);
+  const multiplied = testCanvas(SIZE, SIZE);
+  renderClean(docWith(shadow("multiply")), multiplied);
+
+  // Sample beside the square, where only the shadow and the grey backdrop are.
+  const at = { x: 46, y: 30 };
+  const plain = pixelAt(normal, at.x, at.y);
+  const blended = pixelAt(multiplied, at.x, at.y);
+  // A white shadow lightens the grey backdrop normally, but multiplying white
+  // leaves the backdrop untouched.
+  assert.ok(plain.r > 140, `expected a lightened backdrop, got ${plain.r}`);
+  assert.ok(
+    blended.r < plain.r - 8,
+    `multiply should not lighten: normal r=${plain.r} vs multiply r=${blended.r}`,
+  );
+});
+
+test("the GPU path declines rather than ignoring an effect blend mode", () => {
+  // rasterizeLayer builds each layer independently and has no backdrop, so a
+  // blended effect cannot be right there. Declining sends it to the CPU
+  // renderer instead of silently exporting a different image.
+  const source = readFileSync(new URL("../app/engine/gl-renderer.ts", import.meta.url), "utf8");
+  // Match the guard itself, not the import — the identifier alone survives
+  // deleting the check, which is exactly how this test first passed hollow.
+  assert.match(
+    source,
+    /resolvedEffectBlendMode\(effect\) !== "source-over"\)\)\) return false;/,
+    "gl-renderer must decline documents whose effect blend modes it cannot honour",
+  );
 });
 
 // --- global light ----------------------------------------------------------

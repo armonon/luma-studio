@@ -7,13 +7,19 @@
  * other five, so turning on GPU export changed the exported image.
  */
 
+import { compositeBlendStack } from "./blend";
 import {
   DEFAULT_GLOBAL_LIGHT,
+  NEUTRAL_BLEND_IF,
+  bevelLightStrength,
   bevelOffset,
+  curveToLut,
+  effectUses,
   effectsInPaintOrder,
   isEffectBelowContent,
   layerCorners,
   newCanvas,
+  resolvedEffectBlendMode,
   resolvedEffectOffset,
   resolvedFillOpacity,
   resolvedGradientStops,
@@ -175,6 +181,69 @@ function drawPattern(
 }
 
 /**
+ * Deterministic value noise.
+ *
+ * Math.random would resample every frame and make the effect crawl while the
+ * user pans, and would differ between the preview and the export. Hashing the
+ * document-space position with the effect id keeps it nailed to the artwork.
+ */
+function hashNoise(x: number, y: number, seed: number) {
+  let h = (x * 374761393 + y * 668265263 + seed * 2246822519) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177;
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+}
+
+function seedFrom(id: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < id.length; i += 1) hash = Math.imul(hash ^ id.charCodeAt(i), 16777619);
+  return hash >>> 0;
+}
+
+/**
+ * Shape an effect's falloff after it has been drawn: contour, then noise.
+ *
+ * Both act on alpha alone, so they are one pass over the buffer and only run
+ * when the effect actually asks for them.
+ */
+function shapeFalloff(
+  ctx: CanvasRenderingContext2D,
+  effect: LayerEffect,
+  frame: EffectFrame,
+) {
+  // EFFECT_FIELDS is the source of truth, not just a description of it: a
+  // bevel has no Noise control in Photoshop, so it must not respond to one.
+  const noise = effectUses(effect.kind, "noise") ? Math.max(0, Math.min(1, effect.noise ?? 0)) : 0;
+  const hasContour = effectUses(effect.kind, "contour") && !!effect.contour?.length;
+  if (!hasContour && noise <= 0) return;
+
+  const { width, height } = { width: frame.outputWidth, height: frame.outputHeight };
+  if (width <= 0 || height <= 0) return;
+  const image = ctx.getImageData(0, 0, width, height);
+  const data = image.data;
+  const lut = hasContour ? curveToLut(effect.contour!) : null;
+  const seed = seedFrom(effect.id);
+  // Sample the noise in document space so it does not crawl when panning.
+  const stepX = frame.width / Math.max(1, width);
+  const stepY = frame.height / Math.max(1, height);
+
+  for (let y = 0; y < height; y += 1) {
+    const docY = Math.round(frame.y + y * stepY);
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4 + 3;
+      let alpha = data[index];
+      if (alpha === 0) continue;
+      if (lut) alpha = lut[alpha];
+      if (noise > 0) {
+        const docX = Math.round(frame.x + x * stepX);
+        alpha *= 1 - noise * hashNoise(docX, docY, seed);
+      }
+      data[index] = alpha;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
+/**
  * Draw ONLY the shadow of `src`, never `src` itself.
  *
  * `drawImage` with a shadow set paints the image *and* its shadow. Every
@@ -200,6 +269,29 @@ function stampSilhouette(
   ctx.shadowBlur = 0;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
+}
+
+/**
+ * Split `blur` into a hard expansion and a soft remainder.
+ *
+ * Photoshop's Spread (outward) and Choke (inward) do not add size — they trade
+ * softness for hardness at a fixed size, which is how you get a crisp shadow
+ * without also making it bigger. At spread 1 the edge is hard; at 0 it is all
+ * falloff. Returns the silhouette source to stamp and the blur left to apply.
+ */
+function applySpread(
+  effect: LayerEffect,
+  contentBuf: HTMLCanvasElement,
+  scratchBuf: HTMLCanvasElement,
+  blur: number,
+  size: { width: number; height: number },
+) {
+  const spread = effectUses(effect.kind, "spread") ? Math.max(0, Math.min(1, effect.spread ?? 0)) : 0;
+  if (spread <= 0 || blur <= 0) return { source: contentBuf, blur };
+  const sctx = scratchBuf.getContext("2d")!;
+  clearContext(sctx, size.width, size.height);
+  stampDilated(sctx, contentBuf, "#000000", blur * spread);
+  return { source: scratchBuf, blur: blur * (1 - spread) };
 }
 
 /** Grow the silhouette of `src` by `reach`, painted in `color`. */
@@ -254,7 +346,8 @@ function drawLayerEffect(
       // A glow is a shadow with no offset, so they share one path.
       const offsetX = effect.kind === "outer-glow" ? 0 : offset.x * scale.x;
       const offsetY = effect.kind === "outer-glow" ? 0 : offset.y * scale.y;
-      stampSilhouette(ctx, contentBuf, effect.color, blur, offsetX, offsetY);
+      const spread = applySpread(effect, contentBuf, scratchBuf, blur, size);
+      stampSilhouette(ctx, spread.source, effect.color, spread.blur, offsetX, offsetY);
       // Keep only the halo; the layer draws its own pixels separately.
       ctx.globalCompositeOperation = "destination-out";
       ctx.globalAlpha = 1;
@@ -278,7 +371,8 @@ function drawLayerEffect(
       ctx.fillRect(0, 0, size.width, size.height);
       ctx.globalCompositeOperation = "destination-out";
       ctx.globalAlpha = 1;
-      stampSilhouette(ctx, contentBuf, "#000000", blur, offset.x * scale.x, offset.y * scale.y);
+      const choke = applySpread(effect, contentBuf, scratchBuf, blur, size);
+      stampSilhouette(ctx, choke.source, "#000000", choke.blur, offset.x * scale.x, offset.y * scale.y);
       ctx.globalCompositeOperation = "destination-in";
       ctx.drawImage(contentBuf, 0, 0);
       break;
@@ -319,10 +413,11 @@ function drawLayerEffect(
     }
 
     case "inner-glow": {
+      const glow = applySpread(effect, contentBuf, scratchBuf, blur, size);
       if ((effect.glowSource ?? "edge") === "center") {
         // A centre glow is the blurred silhouette kept inside itself: solid
         // through the middle, falling away as it approaches the edge.
-        stampSilhouette(ctx, contentBuf, effect.color, blur, 0, 0);
+        stampSilhouette(ctx, glow.source, effect.color, glow.blur, 0, 0);
       } else {
         // An edge glow is the complement: colour everywhere the blurred
         // silhouette does not reach, leaving a rim inside the outline.
@@ -330,7 +425,7 @@ function drawLayerEffect(
         ctx.fillRect(0, 0, size.width, size.height);
         ctx.globalCompositeOperation = "destination-out";
         ctx.globalAlpha = 1;
-        stampSilhouette(ctx, contentBuf, "#000000", blur, 0, 0);
+        stampSilhouette(ctx, glow.source, "#000000", glow.blur, 0, 0);
       }
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = 1;
@@ -387,6 +482,8 @@ function drawLayerEffect(
     case "bevel-emboss": {
       // Light one edge and shade the opposite one, both confined to the layer.
       const { dx, dy } = bevelOffset(effect, light);
+      // A light overhead rakes across nothing, so the relief flattens out.
+      ctx.globalAlpha = effect.opacity * bevelLightStrength(effect, light);
       stampSilhouette(ctx, contentBuf, effect.highlightColor ?? "#ffffff", blur, dx * scale.x, dy * scale.y);
       stampSilhouette(ctx, contentBuf, effect.shadowColor ?? "#000000", blur, -dx * scale.x, -dy * scale.y);
       ctx.globalCompositeOperation = "destination-in";
@@ -397,6 +494,58 @@ function drawLayerEffect(
   }
 
   ctx.restore();
+  shapeFalloff(ctx, effect, frame);
+}
+
+/**
+ * Composite one finished effect buffer with the effect's own blend mode.
+ *
+ * A blend mode needs something to blend *with*. Effects accumulate into the
+ * layer's own buffer, and a drop shadow, an outer glow or an outside stroke
+ * all land where that buffer is still empty — so blending them there is a
+ * no-op and the control would silently do nothing on three of the ten effects.
+ *
+ * What is actually beneath an effect is the backdrop plus whatever the layer
+ * has drawn so far. We assemble exactly that, blend the effect onto it, then
+ * keep only where the effect has coverage and hand that back as an ordinary
+ * source-over stamp — so the layer's mask, clipping and opacity still apply to
+ * the result, which they would not if effects wrote to the backdrop directly.
+ *
+ * Routed through the layer blend stack so all 27 modes work, including the
+ * eleven with no native canvas operator.
+ */
+function stampEffect(
+  out: CanvasRenderingContext2D,
+  effectBuf: HTMLCanvasElement,
+  blendBuf: HTMLCanvasElement,
+  backdrop: HTMLCanvasElement | null,
+  effect: LayerEffect,
+  size: { width: number; height: number },
+) {
+  const mode = resolvedEffectBlendMode(effect);
+  if (mode === "source-over") {
+    out.drawImage(effectBuf, 0, 0);
+    return;
+  }
+
+  const bctx = blendBuf.getContext("2d")!;
+  clearContext(bctx, size.width, size.height);
+  if (backdrop) bctx.drawImage(backdrop, 0, 0);
+  bctx.drawImage(out.canvas, 0, 0);
+
+  compositeBlendStack(
+    bctx,
+    effectBuf,
+    [{ id: effect.id, mode, opacity: 1, enabled: true }],
+    1,
+    NEUTRAL_BLEND_IF,
+  );
+  // Keep only where the effect covers; the rest is backdrop we must not claim.
+  bctx.globalCompositeOperation = "destination-in";
+  bctx.drawImage(effectBuf, 0, 0);
+  bctx.globalCompositeOperation = "source-over";
+
+  out.drawImage(blendBuf, 0, 0);
 }
 
 /**
@@ -416,6 +565,10 @@ export function composeLayerWithEffects(
   frame: EffectFrame,
   scale: { x: number; y: number },
   light: GlobalLight = DEFAULT_GLOBAL_LIGHT,
+  /** Everything already composited beneath this layer, for blended effects. */
+  backdrop: HTMLCanvasElement | null = null,
+  /** Working buffer for blended effects; required once a mode is not normal. */
+  blendBuf: HTMLCanvasElement | null = null,
 ) {
   const effects = effectsInPaintOrder(
     (layer.effects ?? []).filter((effect) => effect.enabled && effect.opacity > 0),
@@ -428,12 +581,14 @@ export function composeLayerWithEffects(
   }
   const uniformScale = Math.sqrt(scale.x * scale.y);
   const bounds = layerBounds(layer, frame);
+  const size = { width: frame.outputWidth, height: frame.outputHeight };
+  const blend = blendBuf ?? newCanvas(size.width, size.height);
 
   // Shadows and glows sit under the layer's own pixels.
   for (const effect of effects) {
     if (!isEffectBelowContent(effect.kind)) continue;
     drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds);
-    out.drawImage(effectBuf, 0, 0);
+    stampEffect(out, effectBuf, blend, backdrop, effect, size);
   }
 
   out.globalAlpha = resolvedFillOpacity(layer);
@@ -446,6 +601,6 @@ export function composeLayerWithEffects(
   for (const effect of effects) {
     if (isEffectBelowContent(effect.kind)) continue;
     drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds);
-    out.drawImage(effectBuf, 0, 0);
+    stampEffect(out, effectBuf, blend, backdrop, effect, size);
   }
 }

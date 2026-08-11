@@ -12,10 +12,12 @@ import {
   resolvedBlendIf,
   resolvedBlendPasses,
   resolvedFillOpacity,
+  resolvedEffectBlendMode,
   resolvedGlobalLight,
   type BlendIf,
   type BlendIfRange,
   type BlendMode,
+  type CurvePoints,
   type GlobalLight,
   type GlowSource,
   type GradientStop,
@@ -95,6 +97,28 @@ function Slider({ label, value, min, max, step = 1, suffix = "", onChange }: {
   );
 }
 
+/**
+ * Contour presets: the falloff curve an effect's alpha is remapped through.
+ *
+ * Photoshop ships a curve editor plus a preset well. These are the presets
+ * that account for nearly all real use; the underlying field takes any curve.
+ */
+const CONTOUR_PRESETS: Record<string, CurvePoints | undefined> = {
+  Linear: undefined,
+  "Cone": [{ x: 0, y: 1 }, { x: 1, y: 0 }],
+  "Ring": [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }],
+  "Double ring": [{ x: 0, y: 0 }, { x: 0.25, y: 1 }, { x: 0.5, y: 0 }, { x: 0.75, y: 1 }, { x: 1, y: 0 }],
+  "Rolling": [{ x: 0, y: 0 }, { x: 0.35, y: 0.85 }, { x: 0.7, y: 0.4 }, { x: 1, y: 1 }],
+  "Half round": [{ x: 0, y: 0 }, { x: 0.5, y: 0.92 }, { x: 1, y: 1 }],
+};
+
+function contourNameOf(contour: CurvePoints | undefined) {
+  if (!contour?.length) return "Linear";
+  const key = JSON.stringify(contour);
+  return Object.keys(CONTOUR_PRESETS).find((name) =>
+    JSON.stringify(CONTOUR_PRESETS[name]) === key) ?? "Linear";
+}
+
 /** Gradient stops, editable in place: colour and position, add and remove. */
 function GradientStopsEditor({ stops, onChange }: {
   stops: GradientStop[];
@@ -146,6 +170,20 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
     studio.updateLayerEffect(layerId, effect.id, next);
   return (
     <div className="layer-style-effect">
+      <label className="layer-style-select">
+        <span>Blend mode</span>
+        <select
+          value={resolvedEffectBlendMode(effect)}
+          onChange={(event) => patch({ blendMode: event.target.value as BlendMode })}
+          aria-label="Effect blend mode"
+        >
+          {BLEND_MODE_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.modes.map((mode) => <option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>)}
+            </optgroup>
+          ))}
+        </select>
+      </label>
       <Slider label="Opacity" value={effect.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ opacity: v / 100 })} />
       {effect.kind !== "bevel-emboss" && effect.kind !== "gradient-overlay" && (
         <ColorField label="Color" value={effect.color} onChange={(color) => patch({ color })} />
@@ -158,6 +196,34 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
           <Slider label="Offset X" value={effect.offsetX} min={-200} max={200} onChange={(offsetX) => patch({ offsetX })} />
           <Slider label="Offset Y" value={effect.offsetY} min={-200} max={200} onChange={(offsetY) => patch({ offsetY })} />
         </>
+      )}
+      {effectUses(effect.kind, "spread") && (
+        <Slider
+          label={effect.kind === "inner-shadow" || effect.kind === "inner-glow" ? "Choke" : "Spread"}
+          value={(effect.spread ?? 0) * 100}
+          min={0}
+          max={100}
+          suffix="%"
+          onChange={(v) => patch({ spread: v / 100 })}
+        />
+      )}
+      {effectUses(effect.kind, "noise") && (
+        <Slider label="Noise" value={(effect.noise ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ noise: v / 100 })} />
+      )}
+      {effectUses(effect.kind, "altitude") && (
+        <Slider label="Altitude" value={effect.altitude ?? 30} min={0} max={90} suffix="°" onChange={(altitude) => patch({ altitude })} />
+      )}
+      {effectUses(effect.kind, "contour") && (
+        <label className="layer-style-select">
+          <span>Contour</span>
+          <select
+            value={contourNameOf(effect.contour)}
+            onChange={(event) => patch({ contour: CONTOUR_PRESETS[event.target.value] })}
+            aria-label="Contour"
+          >
+            {Object.keys(CONTOUR_PRESETS).map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
       )}
       {effectUses(effect.kind, "width") && (
         <Slider label="Size" value={effect.width ?? 3} min={1} max={100} suffix="px" onChange={(width) => patch({ width })} />

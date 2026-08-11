@@ -563,6 +563,25 @@ export type LayerEffect = {
   /** Take the direction from the document's global light instead of this
    *  effect's own angle, keeping the offset's distance. Shadows, satin, bevel. */
   useGlobalLight?: boolean;
+  /** How this effect composites where it lands. Defaults per kind — see
+   *  EFFECT_BLEND_DEFAULTS. Any of the 27 modes is allowed. */
+  blendMode?: BlendMode;
+  /** bevel-emboss only — light elevation in degrees. Defaults to 30. */
+  altitude?: number;
+  /**
+   * Shadows and glows — how much of `blur` hardens the edge instead of
+   * softening it, 0..1. Photoshop calls this Spread outward and Choke inward.
+   * At 0 the falloff is pure blur; at 1 the edge is hard. Defaults to 0.
+   */
+  spread?: number;
+  /** Shadows and glows — dither the falloff, 0..1. Defaults to 0. */
+  noise?: number;
+  /**
+   * Remaps the effect's falloff profile: input alpha in, output alpha out.
+   * A dip in the middle gives a glow a ring, which is what contours are for.
+   * Defaults to linear (no change).
+   */
+  contour?: CurvePoints;
   /** stroke only — thickness in document pixels. Defaults to 3. */
   width?: number;
   /** stroke only — defaults to "outside". */
@@ -633,22 +652,25 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
  * table stopped proving anything about the angle.
  */
 export type EffectField =
-  | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "bevelColors"
-  | "globalLight" | "glowSource" | "invert"
+  | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "altitude" | "bevelColors"
+  | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
   | "pattern" | "patternScale";
 
+/** Falloff shaping applies wherever an effect has a soft edge to shape. */
+const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
+
 export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> = {
-  "drop-shadow": ["offset", "blur", "globalLight"],
-  "inner-shadow": ["offset", "blur", "globalLight"],
-  "outer-glow": ["blur"],
-  "inner-glow": ["blur", "glowSource"],
-  satin: ["offset", "blur", "invert", "globalLight"],
-  "color-overlay": [],
-  "gradient-overlay": ["gradientStops", "gradientAngle", "gradientStyle", "gradientReverse"],
-  "pattern-overlay": ["pattern", "patternScale"],
-  stroke: ["width", "position"],
-  "bevel-emboss": ["depth", "angle", "blur", "bevelColors", "globalLight"],
+  "drop-shadow": ["blendMode", "offset", "blur", "globalLight", ...FALLOFF],
+  "inner-shadow": ["blendMode", "offset", "blur", "globalLight", ...FALLOFF],
+  "outer-glow": ["blendMode", "blur", ...FALLOFF],
+  "inner-glow": ["blendMode", "blur", "glowSource", ...FALLOFF],
+  satin: ["blendMode", "offset", "blur", "invert", "globalLight", "contour"],
+  "color-overlay": ["blendMode"],
+  "gradient-overlay": ["blendMode", "gradientStops", "gradientAngle", "gradientStyle", "gradientReverse"],
+  "pattern-overlay": ["blendMode", "pattern", "patternScale"],
+  stroke: ["blendMode", "width", "position"],
+  "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour"],
 };
 
 /**
@@ -671,6 +693,52 @@ export function resolvedEffectAngle(effect: LayerEffect, light: GlobalLight = DE
 }
 
 /** Gradient stops in ascending order, with `reverse` already applied. */
+/**
+ * Photoshop's per-kind default blend mode — with one deliberate departure.
+ *
+ * Shadows multiply and glows screen *against what is behind the layer*. Our
+ * below-content effects are drawn into the layer's own buffer, where there is
+ * nothing beneath them yet, so a multiply drop shadow would composite against
+ * emptiness and vanish. Those two default to normal; everything above the
+ * content sits on the layer's own pixels and takes Photoshop's default, which
+ * is what makes an inner shadow darken the layer instead of painting over it.
+ *
+ * Any effect can still be set to any of the 27 modes.
+ */
+export const EFFECT_BLEND_DEFAULTS: Record<LayerEffectKind, BlendMode> = {
+  "drop-shadow": "source-over",
+  "outer-glow": "source-over",
+  "inner-shadow": "multiply",
+  "inner-glow": "screen",
+  satin: "multiply",
+  "color-overlay": "source-over",
+  "gradient-overlay": "source-over",
+  "pattern-overlay": "source-over",
+  stroke: "source-over",
+  "bevel-emboss": "source-over",
+};
+
+export function resolvedEffectBlendMode(effect: LayerEffect): BlendMode {
+  return effect.blendMode ?? EFFECT_BLEND_DEFAULTS[effect.kind];
+}
+
+/** The bevel light elevation in degrees, after global light. */
+export function resolvedEffectAltitude(effect: LayerEffect, light: GlobalLight = DEFAULT_GLOBAL_LIGHT) {
+  return effect.useGlobalLight ? light.altitude : (effect.altitude ?? DEFAULT_GLOBAL_LIGHT.altitude);
+}
+
+/**
+ * How hard the light rakes across the surface, 0..1.
+ *
+ * A light directly overhead (90°) throws no directional shading, so the bevel
+ * flattens out; a grazing light (0°) throws the most. Altitude was stored and
+ * never read until this existed — a control that did nothing.
+ */
+export function bevelLightStrength(effect: LayerEffect, light: GlobalLight = DEFAULT_GLOBAL_LIGHT) {
+  const altitude = Math.max(0, Math.min(90, resolvedEffectAltitude(effect, light)));
+  return Math.cos((altitude * Math.PI) / 180);
+}
+
 export function resolvedGradientStops(effect: LayerEffect): GradientStop[] {
   const stops = (effect.stops?.length ? effect.stops : DEFAULT_GRADIENT_STOPS)
     .map((stop) => ({ offset: Math.max(0, Math.min(1, stop.offset)), color: stop.color }));

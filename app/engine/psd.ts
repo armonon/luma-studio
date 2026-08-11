@@ -23,6 +23,7 @@ import {
   Layer,
   LayerEffect,
   NEUTRAL_TONE,
+  type CurvePoints,
   TextStyle,
   createAdjustmentLayer,
   createCurvesLayer,
@@ -36,6 +37,7 @@ import {
   newCanvas,
   resolvedBlendIf,
   resolvedFillOpacity,
+  resolvedEffectBlendMode,
   resolvedGradientStops,
   resolvedBlendPasses,
 } from "./document";
@@ -193,6 +195,27 @@ function applyImportedLayerMetadata(target: Layer, source: PsdLayer, parentId?: 
   if (effects.length) target.effects = effects;
 }
 
+/** Photoshop's Choke/Spread is in pixels; ours is a fraction of the size. */
+function chokeToSpread(choke: { value: number } | undefined, size: { value: number } | undefined) {
+  const total = size?.value ?? 0;
+  if (!choke?.value || total <= 0) return undefined;
+  return Math.max(0, Math.min(1, choke.value / total));
+}
+
+function contourFromPsd(contour: { curve: Array<{ x: number; y: number }> } | undefined) {
+  if (!contour?.curve?.length) return undefined;
+  return contour.curve.map((point) => ({ x: point.x, y: point.y }));
+}
+
+/**
+ * Spread rather than assign: ag-psd walks its own keys, so `contour: undefined`
+ * is a hole it tries to serialize, not an absent field.
+ */
+function contourToPsd(contour: CurvePoints | undefined) {
+  if (!contour?.length) return {};
+  return { contour: { name: "Luma contour", curve: contour.map((point) => ({ x: point.x, y: point.y })) } };
+}
+
 /** Photoshop stores a shadow as angle + distance; we store a pixel offset. */
 function shadowOffset(effect: { angle?: number; distance?: { value: number } }) {
   const angle = (effect.angle ?? 45) * Math.PI / 180;
@@ -211,25 +234,34 @@ function shadowOffset(effect: { angle?: number; distance?: { value: number } }) 
 function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffect[] {
   if (!source) return [];
   const effects: LayerEffect[] = [];
-  const base = (kind: LayerEffect["kind"], index: number, enabled?: boolean, opacity?: number) => ({
+  const base = (
+    kind: LayerEffect["kind"],
+    index: number,
+    source: { enabled?: boolean; opacity?: number; blendMode?: string; contour?: { curve: Array<{ x: number; y: number }> } },
+  ) => ({
     id: `${layerId}-psd-${kind}-${index}`,
     kind,
-    enabled: enabled !== false,
-    opacity: opacity ?? 0.75,
+    enabled: source.enabled !== false,
+    opacity: source.opacity ?? 0.75,
     blur: 0,
     offsetX: 0,
     offsetY: 0,
+    // Photoshop stores the effect's own blend mode; we used to invent one on
+    // export and drop the file's on import.
+    blendMode: source.blendMode ? PSD_TO_BLEND[source.blendMode.toLowerCase()] : undefined,
+    contour: contourFromPsd(source.contour),
   });
 
   source.dropShadow?.forEach((effect, index) => effects.push({
-    ...base("drop-shadow", index, effect.enabled, effect.opacity),
+    ...base("drop-shadow", index, effect),
     color: psdColorToCss(effect.color),
     blur: effect.size?.value ?? 12,
+    spread: chokeToSpread(effect.choke, effect.size),
     ...shadowOffset(effect),
   }));
 
   source.innerShadow?.forEach((effect, index) => effects.push({
-    ...base("inner-shadow", index, effect.enabled, effect.opacity),
+    ...base("inner-shadow", index, effect),
     color: psdColorToCss(effect.color),
     blur: effect.size?.value ?? 12,
     ...shadowOffset(effect),
@@ -237,19 +269,19 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
 
   if (source.outerGlow) {
     effects.push({
-      ...base("outer-glow", 0, source.outerGlow.enabled, source.outerGlow.opacity),
+      ...base("outer-glow", 0, source.outerGlow),
       color: psdColorToCss(source.outerGlow.color),
       blur: source.outerGlow.size?.value ?? 12,
     });
   }
 
   source.solidFill?.forEach((effect, index) => effects.push({
-    ...base("color-overlay", index, effect.enabled, effect.opacity ?? 1),
+    ...base("color-overlay", index, { ...effect, opacity: effect.opacity ?? 1 }),
     color: psdColorToCss(effect.color),
   }));
 
   source.stroke?.forEach((effect, index) => effects.push({
-    ...base("stroke", index, effect.enabled, effect.opacity ?? 1),
+    ...base("stroke", index, { ...effect, opacity: effect.opacity ?? 1 }),
     color: psdColorToCss(effect.color),
     width: effect.size?.value ?? 3,
     position: effect.position ?? "outside",
@@ -257,7 +289,7 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
 
   if (source.innerGlow) {
     effects.push({
-      ...base("inner-glow", 0, source.innerGlow.enabled, source.innerGlow.opacity),
+      ...base("inner-glow", 0, source.innerGlow),
       color: psdColorToCss(source.innerGlow.color),
       blur: source.innerGlow.size?.value ?? 12,
       glowSource: source.innerGlow.source === "center" ? "center" : "edge",
@@ -266,7 +298,7 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
 
   if (source.satin) {
     effects.push({
-      ...base("satin", 0, source.satin.enabled, source.satin.opacity),
+      ...base("satin", 0, source.satin),
       color: psdColorToCss(source.satin.color),
       blur: source.satin.size?.value ?? 12,
       invert: !!source.satin.invert,
@@ -283,7 +315,7 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
       }))
       : undefined;
     effects.push({
-      ...base("gradient-overlay", index, effect.enabled, effect.opacity ?? 1),
+      ...base("gradient-overlay", index, { ...effect, opacity: effect.opacity ?? 1 }),
       color: stops?.[0]?.color ?? "#000000",
       stops: stops?.length ? stops : undefined,
       gradientAngle: effect.angle ?? 90,
@@ -294,7 +326,7 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
 
   if (source.bevel) {
     effects.push({
-      ...base("bevel-emboss", 0, source.bevel.enabled, source.bevel.highlightOpacity),
+      ...base("bevel-emboss", 0, { ...source.bevel, opacity: source.bevel.highlightOpacity }),
       color: psdColorToCss(source.bevel.shadowColor),
       blur: source.bevel.soften?.value ?? 0,
       depth: source.bevel.size?.value ?? 3,
@@ -308,6 +340,11 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
 }
 
 /** Inverse of effectsFromPsd, for the kinds we own. */
+/** Our blend mode in Photoshop's vocabulary, falling back to normal. */
+function psdBlendMode(effect: LayerEffect) {
+  return BLEND_TO_PSD[resolvedEffectBlendMode(effect)] ?? "normal";
+}
+
 function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
   const of = (kind: LayerEffect["kind"]) => (layer.effects ?? []).filter((effect) => effect.kind === kind);
   const px = (value: number) => ({ units: "Pixels" as const, value });
@@ -319,9 +356,11 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
     angle: Math.atan2(effect.offsetY, effect.offsetX) * 180 / Math.PI,
     distance: px(Math.hypot(effect.offsetX, effect.offsetY)),
     color: cssColorToPsd(effect.color),
-    blendMode: "multiply" as const,
+    blendMode: psdBlendMode(effect),
     opacity: effect.opacity,
-    useGlobalLight: false,
+    useGlobalLight: !!effect.useGlobalLight,
+    choke: px((effect.spread ?? 0) * effect.blur),
+    ...contourToPsd(effect.contour),
   });
 
   const glow = of("outer-glow")[0];
@@ -337,8 +376,11 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       enabled: innerGlow.enabled,
       size: px(innerGlow.blur),
       color: cssColorToPsd(innerGlow.color),
-      blendMode: "screen" as const,
+      blendMode: psdBlendMode(innerGlow),
       opacity: innerGlow.opacity,
+      choke: px((innerGlow.spread ?? 0) * innerGlow.blur),
+      noise: innerGlow.noise ?? 0,
+      ...contourToPsd(innerGlow.contour),
       source: (innerGlow.glowSource ?? "edge") === "center" ? "center" as const : "edge" as const,
     },
     satin: satin && {
@@ -347,8 +389,9 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       enabled: satin.enabled,
       size: px(satin.blur),
       color: cssColorToPsd(satin.color),
-      blendMode: "multiply" as const,
+      blendMode: psdBlendMode(satin),
       opacity: satin.opacity,
+      ...contourToPsd(satin.contour),
       invert: !!satin.invert,
       angle: Math.atan2(satin.offsetY, satin.offsetX) * 180 / Math.PI,
       distance: px(Math.hypot(satin.offsetX, satin.offsetY)),
@@ -384,14 +427,17 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       enabled: glow.enabled,
       size: px(glow.blur),
       color: cssColorToPsd(glow.color),
-      blendMode: "screen" as const,
+      blendMode: psdBlendMode(glow),
       opacity: glow.opacity,
+      choke: px((glow.spread ?? 0) * glow.blur),
+      noise: glow.noise ?? 0,
+      ...contourToPsd(glow.contour),
     },
     solidFill: list(of("color-overlay").map((effect) => ({
       present: true,
       showInDialog: true,
       enabled: effect.enabled,
-      blendMode: "normal" as const,
+      blendMode: psdBlendMode(effect),
       color: cssColorToPsd(effect.color),
       opacity: effect.opacity,
     }))),
@@ -402,7 +448,7 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       size: px(effect.width ?? 3),
       position: effect.position ?? "outside",
       fillType: "color" as const,
-      blendMode: "normal" as const,
+      blendMode: psdBlendMode(effect),
       color: cssColorToPsd(effect.color),
       opacity: effect.opacity,
     }))),
@@ -413,12 +459,14 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       size: px(bevel.depth ?? 3),
       soften: px(bevel.blur),
       angle: bevel.angle ?? 135,
+      altitude: bevel.altitude ?? 30,
       style: "inner bevel" as const,
+      ...contourToPsd(bevel.contour),
       highlightColor: cssColorToPsd(bevel.highlightColor ?? "#ffffff"),
       shadowColor: cssColorToPsd(bevel.shadowColor ?? "#000000"),
       highlightOpacity: bevel.opacity,
       shadowOpacity: bevel.opacity,
-      useGlobalLight: false,
+      useGlobalLight: !!bevel.useGlobalLight,
     },
   };
 }

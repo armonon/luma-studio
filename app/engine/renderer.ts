@@ -33,6 +33,8 @@ type Scratch = {
   contentBuf: HTMLCanvasElement;
   effectBuf: HTMLCanvasElement;
   clipBuf: HTMLCanvasElement;
+  /** Assembling what sits beneath an effect, for non-normal effect blend modes. */
+  blendBuf: HTMLCanvasElement;
   /** Reused by nesting depth; sibling groups never need distinct buffers. */
   groupBufs: HTMLCanvasElement[];
 };
@@ -97,9 +99,10 @@ function scratch(width: number, height: number): Scratch {
     contentBuf: newCanvas(width, height),
     effectBuf: newCanvas(width, height),
     clipBuf: newCanvas(width, height),
+    blendBuf: newCanvas(width, height),
     groupBufs: [],
   };
-  const bytes = width * height * 4 * 6;
+  const bytes = width * height * 4 * 7;
   scratchCache.set(key, { buffers, bytes, used: ++scratchCacheClock });
   scratchCacheBytes += bytes;
   trimScratchCache(key);
@@ -803,7 +806,7 @@ function drawContentLayer(
   layer: Layer,
   frame: RenderFrame,
 ) {
-  const { layerBuf, contentBuf, effectBuf, clipBuf } = scratchBuffers;
+  const { layerBuf, contentBuf, effectBuf, clipBuf, blendBuf } = scratchBuffers;
   const bctx = layerBuf.getContext("2d")!;
   const contentCtx = contentBuf.getContext("2d")!;
   clearContext(bctx, frame.outputWidth, frame.outputHeight);
@@ -813,7 +816,13 @@ function drawContentLayer(
   const scale = frameScale(frame);
   applySmartFilters(contentBuf, layer.filters, Math.sqrt(scale.x * scale.y));
 
-  composeLayerWithEffects(bctx, contentBuf, effectBuf, clipBuf, layer, frame, scale, doc.globalLight);
+  // `composite` is a different canvas from layerBuf, so it is a stable view of
+  // everything already drawn beneath this layer — exactly what a blended
+  // effect has to composite against.
+  composeLayerWithEffects(
+    bctx, contentBuf, effectBuf, clipBuf, layer, frame, scale, doc.globalLight,
+    composite.canvas, blendBuf,
+  );
 
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
