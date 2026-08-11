@@ -604,9 +604,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
   const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
-  // Layer styles do not apply to groups, so the dialog closes itself if the
-  // layer it was opened for is deleted or grouped away.
-  const styleLayer = layers.find((layer) => layer.id === styleLayerId && layer.kind !== "group") ?? null;
+  // The dialog closes itself if the layer it was opened for is deleted.
+  const styleLayer = layers.find((layer) => layer.id === styleLayerId) ?? null;
   const focusedLayer = resolvedFocusState.scope
     ? layers.find((layer) => layer.id === resolvedFocusState.scope?.layerId) ?? null
     : null;
@@ -2556,7 +2555,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     }}
                     onDoubleClick={() => {
                       // Photoshop's split: the row opens Layer Style, the name renames.
-                      if (layer.kind === "group") return;
                       setActiveLayerId(layer.id);
                       setStyleLayerId(layer.id);
                     }}
@@ -2613,7 +2611,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       </button>
                     )}
                   </div>
-                  {activeLayer.kind !== "group" && (
+                  {(
                     <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
                       {activeLayer.kind === "raster" && (
                         <button onClick={() => studio?.convertToSmartObject(activeLayer.id)} style={{ flex: 1 }}>

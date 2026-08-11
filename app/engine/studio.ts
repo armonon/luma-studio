@@ -2120,10 +2120,10 @@ export class Studio {
     }
   }
 
-  /** Add a layer style effect. Groups and locked layers are refused. */
+  /** Add a layer style effect. Locked layers are refused; groups are allowed. */
   addLayerEffect(layerId: string, kind: LayerEffectKind) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind === "group" || layer.locked) return null;
+    if (!layer || layer.locked) return null;
     const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects ?? []) };
     const effect: LayerEffect = { id: nextId("effect"), kind, ...Studio.effectPreset(kind) };
     layer.effects = [...(layer.effects ?? []), effect];
@@ -2225,7 +2225,7 @@ export class Studio {
   pasteLayerStyle(layerId: string) {
     const style = this.styleClipboard;
     const layer = this.findLayer(layerId);
-    if (!style || !layer || layer.kind === "group" || layer.locked) return false;
+    if (!style || !layer || layer.locked) return false;
     const before: LayerSnapshot = {
       layerId,
       effects: cloneEffects(layer.effects ?? []),

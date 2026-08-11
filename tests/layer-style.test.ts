@@ -8,6 +8,7 @@ import {
   EFFECT_LABELS,
   LAYER_EFFECT_KINDS,
   createDocument,
+  createGroupLayer,
   createRasterLayer,
   effectUses,
   newCanvas,
@@ -328,6 +329,70 @@ test("the GPU path declines rather than ignoring an effect blend mode", () => {
     /resolvedEffectBlendMode\(effect\) !== "source-over"\)\)\) return false;/,
     "gl-renderer must decline documents whose effect blend modes it cannot honour",
   );
+});
+
+// --- layer styles on groups ------------------------------------------------
+
+/** Two separate squares inside one group, with a gap between them. */
+function groupedSquares() {
+  const square = (x: number) => {
+    const canvas = newCanvas(SIZE, SIZE);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#ff0000";
+    ctx.fillRect(x, 20, 12, 12);
+    return canvas;
+  };
+  const group = createGroupLayer("Group");
+  const a = createRasterLayer("a", square(10));
+  const b = createRasterLayer("b", square(38));
+  a.parentId = group.id;
+  b.parentId = group.id;
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [group, a, b];
+  return { doc, group };
+}
+
+test("a group takes a layer style and it sees the whole group", () => {
+  const { doc, group } = groupedSquares();
+
+  const before = testCanvas(SIZE, SIZE);
+  renderClean(doc, before);
+  assert.equal(pixelAt(before, 30, 26).a, 0, "expected a gap between the two squares");
+
+  group.effects = [{
+    ...baseEffect("outer-glow"),
+    id: "g1",
+    color: "#00ff00",
+    blur: 16,
+    opacity: 1,
+  }];
+
+  const after = testCanvas(SIZE, SIZE);
+  renderClean(doc, after);
+  // The gap fills from both squares at once, which only happens if the style
+  // saw the composited group rather than being applied per child.
+  assert.ok(pixelAt(after, 30, 26).a > 10, "the group style did not render");
+});
+
+test("Studio accepts a layer style on a group", () => {
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+  const group = createGroupLayer("Group");
+  studio.doc.layers = [group];
+  const effect = studio.addLayerEffect(group.id, "outer-glow");
+  assert.ok(effect, "groups used to be refused outright");
+  assert.equal(studio.doc.layers[0].effects?.length, 1);
+  studio.dispose();
+});
+
+test("a group style is not applied twice when the group also has children styles", () => {
+  // A styled group must not be flattened into its parent, or the group's own
+  // effects would never get a buffer to act on.
+  const { doc, group } = groupedSquares();
+  group.effects = [{ ...baseEffect("color-overlay"), id: "g1", color: "#0000ff", opacity: 1 }];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+  const inside = pixelAt(target, 16, 26);
+  assert.ok(inside.b > 200 && inside.r < 60, `expected the group overlay, got rgb(${inside.r},${inside.g},${inside.b})`);
 });
 
 // --- global light ----------------------------------------------------------

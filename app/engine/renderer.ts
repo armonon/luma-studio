@@ -572,13 +572,29 @@ function renderLayerSequence(
           drawProjectedCanvas(groupContext, layer.mask, frame);
           groupContext.globalCompositeOperation = "source-over";
         }
-        compositeBlendStack(
-          composite,
-          groupCanvas,
-          resolvedBlendPasses(layer),
-          layer.opacity * resolvedFillOpacity(layer),
-          resolvedBlendIf(layer),
-        );
+        // A group takes a layer style like any other layer — Photoshop styles
+        // whole compositions this way. groupIsPassThrough already refuses to
+        // flatten a styled group, so reaching here with effects is expected.
+        if (layer.effects?.some((effect) => effect.enabled)) {
+          const styled = s.layerBuf;
+          const styledContext = styled.getContext("2d")!;
+          clearContext(styledContext, frame.outputWidth, frame.outputHeight);
+          composeLayerWithEffects(
+            styledContext, groupCanvas, s.effectBuf, s.clipBuf, layer, frame, frameScale(frame),
+            doc.globalLight, composite.canvas, s.blendBuf,
+          );
+          // Fill opacity is already applied to the contents inside compose, and
+          // must not touch the effects, so only master opacity is passed on.
+          compositeBlendStack(composite, styled, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
+        } else {
+          compositeBlendStack(
+            composite,
+            groupCanvas,
+            resolvedBlendPasses(layer),
+            layer.opacity * resolvedFillOpacity(layer),
+            resolvedBlendIf(layer),
+          );
+        }
       }
       continue;
     }
