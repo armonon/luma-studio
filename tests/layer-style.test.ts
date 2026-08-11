@@ -346,6 +346,70 @@ test("the GPU path declines rather than ignoring an effect blend mode", () => {
   );
 });
 
+// --- subject-restricted effects --------------------------------------------
+
+test("an effect can be confined to the layer's subject matte", () => {
+  // The matte is synthetic here: the point is the intersection, not the model.
+  // On-device inference needs a model download, so the render path is tested
+  // with a mask the same shape the model would produce.
+  const bitmap = newCanvas(SIZE, SIZE);
+  const ctx = bitmap.getContext("2d")!;
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(10, 20, 40, 20);
+
+  // "Subject" is the left half of the bar.
+  const subjectMask = newCanvas(SIZE, SIZE);
+  const maskCtx = subjectMask.getContext("2d")!;
+  maskCtx.fillStyle = "#ffffff";
+  maskCtx.fillRect(0, 0, 30, SIZE);
+
+  const glow = (restrictToSubject: boolean): LayerEffect => ({
+    ...baseEffect("outer-glow"),
+    id: "g1",
+    color: "#00ff00",
+    blur: 8,
+    opacity: 1,
+    restrictToSubject,
+  });
+
+  const render = (restrict: boolean) => {
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [{ ...createRasterLayer("bar", bitmap), subjectMask, effects: [glow(restrict)] }];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return target;
+  };
+
+  const everywhere = render(false);
+  const subjectOnly = render(true);
+
+  // Below the left half, inside the matte: the glow survives either way.
+  assert.ok(pixelAt(everywhere, 15, 44).a > 20, "expected a glow under the left end");
+  assert.ok(pixelAt(subjectOnly, 15, 44).a > 20, "the matte should keep the left end");
+
+  // Below the right half, outside the matte: only the unrestricted one glows.
+  assert.ok(pixelAt(everywhere, 45, 44).a > 20, "expected a glow under the right end");
+  assert.equal(pixelAt(subjectOnly, 45, 44).a, 0, "the matte should have cut the right end");
+});
+
+test("an effect awaiting its matte renders unrestricted rather than vanishing", () => {
+  // Inference is async and rendering is not. A layer that has not been through
+  // the model yet must not lose its effects while it waits.
+  const bitmap = newCanvas(SIZE, SIZE);
+  const ctx = bitmap.getContext("2d")!;
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(20, 20, 20, 20);
+
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [{
+    ...createRasterLayer("bar", bitmap),
+    effects: [{ ...baseEffect("outer-glow"), id: "g1", color: "#00ff00", blur: 8, opacity: 1, restrictToSubject: true }],
+  }];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+  assert.ok(pixelAt(target, 30, 16).a > 20, "the effect should still render with no matte");
+});
+
 // --- advanced blending options ---------------------------------------------
 
 /** An opaque red backdrop under a blue square, both full-frame layers. */

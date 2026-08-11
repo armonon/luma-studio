@@ -689,6 +689,32 @@ function drawLayerEffect(
 }
 
 /**
+ * Confine an effect to the layer's cached subject matte.
+ *
+ * No editor I know of lets a layer style apply to just the subject of a photo.
+ * The matte comes from the same on-device model the selection tools use; it is
+ * computed asynchronously and cached on the layer, so an effect that asks for
+ * one before it exists renders unrestricted rather than stalling the frame.
+ */
+function restrictToSubject(
+  effectBuf: HTMLCanvasElement,
+  effect: LayerEffect,
+  layer: Layer,
+  frame: EffectFrame,
+) {
+  if (!effect.restrictToSubject || !layer.subjectMask) return;
+  const ctx = effectBuf.getContext("2d")!;
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-in";
+  ctx.setTransform(
+    frame.outputWidth / frame.width, 0, 0, frame.outputHeight / frame.height,
+    -frame.x * (frame.outputWidth / frame.width), -frame.y * (frame.outputHeight / frame.height),
+  );
+  ctx.drawImage(layer.subjectMask, 0, 0);
+  ctx.restore();
+}
+
+/**
  * Composite one finished effect buffer with the effect's own blend mode,
  * against whatever the layer has already drawn beneath it.
  *
@@ -763,6 +789,7 @@ export function composeLayerWithEffects(
   for (const effect of effects) {
     if (!isEffectBelowContent(effect.kind)) continue;
     drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
+    restrictToSubject(effectBuf, effect, layer, frame);
     stampEffect(out, effectBuf, effect);
   }
 
@@ -776,6 +803,7 @@ export function composeLayerWithEffects(
   for (const effect of effects) {
     if (isEffectBelowContent(effect.kind)) continue;
     drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
+    restrictToSubject(effectBuf, effect, layer, frame);
     stampEffect(out, effectBuf, effect);
   }
 }

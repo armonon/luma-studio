@@ -634,6 +634,14 @@ export type LayerEffect = {
   steps?: number;
   /** refraction only — how far the backdrop is displaced, in pixels. Defaults to 12. */
   strength?: number;
+  /**
+   * Confine this effect to the layer's subject matte.
+   *
+   * The matte is computed on demand and cached on the layer, because inference
+   * is async and rendering is not. An effect asking for a matte the layer does
+   * not have yet simply renders unrestricted rather than blocking the frame.
+   */
+  restrictToSubject?: boolean;
 };
 
 export function isEffectBelowContent(kind: LayerEffectKind) {
@@ -856,6 +864,8 @@ export type Layer = {
   /** Stable source-layer slot used to restore preservation metadata from an embedded PSD/PSB. */
   photoshop?: { sourceIndex: number };
   effects?: LayerEffect[];
+  /** Cached subject matte for effects with `restrictToSubject`. */
+  subjectMask?: HTMLCanvasElement;
   /**
    * Advanced blending, matching Photoshop's pane.
    *

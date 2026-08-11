@@ -165,7 +165,12 @@ function GradientStopsEditor({ stops, onChange }: {
 }
 
 /** Controls for one effect instance, showing only the fields its kind reads. */
-function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; layerId: string; studio: Studio }) {
+function EffectControls({ effect, layerId, studio, layerHasMatte }: {
+  effect: LayerEffect;
+  layerId: string;
+  studio: Studio;
+  layerHasMatte: boolean;
+}) {
   const patch = (next: Partial<Omit<LayerEffect, "id" | "kind">>) =>
     studio.updateLayerEffect(layerId, effect.id, next);
   return (
@@ -360,6 +365,20 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
             onChange={(event) => patch({ useGlobalLight: event.target.checked })}
           />
         </label>
+      )}
+      <label className="layer-style-check">
+        <span>Subject only</span>
+        <input
+          type="checkbox"
+          checked={!!effect.restrictToSubject}
+          onChange={(event) => {
+            patch({ restrictToSubject: event.target.checked });
+            if (event.target.checked && !layerHasMatte) void studio.computeSubjectMask(layerId);
+          }}
+        />
+      </label>
+      {effect.restrictToSubject && !layerHasMatte && (
+        <p className="layer-style-hint">Computing the subject matte on device…</p>
       )}
       <div className="layer-style-effect-actions">
         <button type="button" onClick={() => patch({ enabled: !effect.enabled })}>
@@ -581,7 +600,7 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
               ? <BlendingOptions layer={layer} studio={studio} light={light} />
               : paneEffects.length
                 ? paneEffects.map((effect) => (
-                  <EffectControls key={effect.id} effect={effect} layerId={layer.id} studio={studio} />
+                  <EffectControls key={effect.id} effect={effect} layerId={layer.id} studio={studio} layerHasMatte={!!layer.subjectMask} />
                 ))
                 : (
                   <div className="layer-style-empty">

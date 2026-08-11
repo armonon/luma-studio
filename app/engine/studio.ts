@@ -2294,6 +2294,30 @@ export class Studio {
   }
 
   /**
+   * Compute and cache the layer's subject matte, for effects that ask to be
+   * confined to it.
+   *
+   * Inference is async and rendering is not, so the result is stored on the
+   * layer and the renderer simply uses it once it appears. Deliberately not
+   * undoable: it is derived data, like a cache, not an edit.
+   */
+  async computeSubjectMask(layerId: string, onProgress?: (message: string, pct: number) => void) {
+    const layer = this.findLayer(layerId);
+    if (!layer) return null;
+    const source = newCanvas(this.doc.width, this.doc.height);
+    const ctx = source.getContext("2d")!;
+    drawLayerContentManaged(ctx, layer);
+    const { neuralMatte } = await import("./neural");
+    const matte = await neuralMatte(source, onProgress);
+    const current = this.findLayer(layerId);
+    if (!current) return null;
+    current.subjectMask = matte;
+    this.requestRender();
+    this.emit();
+    return matte;
+  }
+
+  /**
    * Advanced blending: knockout, channel masking, mask-hides-effects.
    *
    * One setter rather than three, because they are one pane in the dialog and
