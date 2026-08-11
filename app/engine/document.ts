@@ -500,16 +500,97 @@ export type RawLayerSource = {
   };
 };
 
+/**
+ * Layer style effects.
+ *
+ * Effects split into two passes by where they sit relative to the layer's own
+ * pixels — see EFFECTS_BELOW_CONTENT. Shadows and glows draw underneath;
+ * overlays, strokes and bevels draw on top clipped to the layer's alpha.
+ *
+ * The shared fields stay required so existing callers keep working; per-kind
+ * options are optional with documented defaults.
+ */
+export type LayerEffectKind =
+  | "drop-shadow"
+  | "inner-shadow"
+  | "outer-glow"
+  | "color-overlay"
+  | "stroke"
+  | "bevel-emboss";
+
+/** Effects painted beneath the layer content; the rest paint over it. */
+export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow"];
+
+export type StrokePosition = "outside" | "inside" | "center";
+
 export type LayerEffect = {
   id: string;
-  kind: "drop-shadow";
+  kind: LayerEffectKind;
   enabled: boolean;
   opacity: number;
   color: string;
   blur: number;
   offsetX: number;
   offsetY: number;
+  /** stroke only — thickness in document pixels. Defaults to 3. */
+  width?: number;
+  /** stroke only — defaults to "outside". */
+  position?: StrokePosition;
+  /** bevel-emboss only — offset in px between highlight and shadow. Defaults to 3. */
+  depth?: number;
+  /** bevel-emboss only — light direction in degrees. Defaults to 135 (top-left). */
+  angle?: number;
+  /** bevel-emboss only. Defaults to white. */
+  highlightColor?: string;
+  /** bevel-emboss only. Defaults to black. */
+  shadowColor?: string;
 };
+
+export function isEffectBelowContent(kind: LayerEffectKind) {
+  return EFFECTS_BELOW_CONTENT.includes(kind);
+}
+
+/** Dialog order, matching Photoshop's Layer Style list (top of the shape outwards). */
+export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
+  "bevel-emboss",
+  "stroke",
+  "inner-shadow",
+  "color-overlay",
+  "outer-glow",
+  "drop-shadow",
+];
+
+export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
+  "bevel-emboss": "Bevel & Emboss",
+  stroke: "Stroke",
+  "inner-shadow": "Inner Shadow",
+  "color-overlay": "Color Overlay",
+  "outer-glow": "Outer Glow",
+  "drop-shadow": "Drop Shadow",
+};
+
+/** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
+export type EffectField = "offset" | "blur" | "width" | "position" | "depth" | "angle" | "bevelColors";
+
+export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> = {
+  "drop-shadow": ["offset", "blur"],
+  "inner-shadow": ["offset", "blur"],
+  "outer-glow": ["blur"],
+  "color-overlay": [],
+  stroke: ["width", "position"],
+  "bevel-emboss": ["depth", "angle", "blur", "bevelColors"],
+};
+
+export function effectUses(kind: LayerEffectKind, field: EffectField) {
+  return EFFECT_FIELDS[kind].includes(field);
+}
+
+/** Light direction resolved to a pixel offset for bevel/emboss. */
+export function bevelOffset(effect: LayerEffect) {
+  const depth = effect.depth ?? 3;
+  const radians = ((effect.angle ?? 135) * Math.PI) / 180;
+  return { dx: Math.cos(radians) * depth, dy: -Math.sin(radians) * depth };
+}
 
 export type Layer = {
   id: string;
@@ -568,6 +649,31 @@ function normalizedBlendIfRange(range?: Partial<BlendIfRange>): BlendIfRange {
   const whiteFeather = Math.max(blackFeather, clamp(range?.whiteFeather, 1));
   const white = Math.max(whiteFeather, clamp(range?.white, 1));
   return { black, blackFeather, whiteFeather, white };
+}
+
+/** The four Blend If handles, in the order they must stay in. */
+export const BLEND_IF_HANDLES = ["black", "blackFeather", "whiteFeather", "white"] as const;
+
+/**
+ * Reorder a range after one handle moved, pushing the others out of its way.
+ *
+ * `normalizedBlendIfRange` only ever raises a handle to satisfy the ordering,
+ * so pulling an outer handle inwards would be silently undone — dragging
+ * "White hide" left would do nothing at all. Handles push each other instead,
+ * which is also what Photoshop's split sliders do.
+ */
+export function orderBlendIfHandles(range: BlendIfRange, moved: keyof BlendIfRange): BlendIfRange {
+  const index = BLEND_IF_HANDLES.indexOf(moved);
+  if (index < 0) return range;
+  const next = { ...range };
+  const pivot = next[moved];
+  for (let i = index - 1; i >= 0; i -= 1) {
+    next[BLEND_IF_HANDLES[i]] = Math.min(next[BLEND_IF_HANDLES[i]], pivot);
+  }
+  for (let i = index + 1; i < BLEND_IF_HANDLES.length; i += 1) {
+    next[BLEND_IF_HANDLES[i]] = Math.max(next[BLEND_IF_HANDLES[i]], pivot);
+  }
+  return next;
 }
 
 export function resolvedBlendIf(layer: Pick<Layer, "blendIf">): BlendIf {

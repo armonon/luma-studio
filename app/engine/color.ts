@@ -40,6 +40,67 @@ function multiply(matrix: Matrix3, [r, g, b]: Rgb): [number, number, number] {
   ];
 }
 
+/**
+ * A CSS colour split into the two things a picker UI can edit: an opaque
+ * `#rrggbb` swatch and a separate alpha. `<input type="color">` cannot show or
+ * return alpha, so effect colours round-trip through this pair.
+ */
+export type CssColorParts = { hex: string; alpha: number };
+
+const HEX_COLOR = /^#([0-9a-f]{3,8})$/i;
+const RGB_FUNCTION = /^rgba?\(([^)]*)\)$/i;
+
+function clamp255(value: number) {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function toHexPair(value: number) {
+  return clamp255(value).toString(16).padStart(2, "0");
+}
+
+/**
+ * Parse the colour forms this app actually stores: `#rgb`, `#rgba`, `#rrggbb`,
+ * `#rrggbbaa`, `rgb()` and `rgba()`. Anything else falls back to opaque black,
+ * which is a visible-but-harmless default rather than a crash mid-render.
+ */
+export function parseCssColor(value: string): CssColorParts {
+  const text = value.trim();
+  const hex = HEX_COLOR.exec(text);
+  if (hex) {
+    const digits = hex[1];
+    if (digits.length === 3 || digits.length === 4) {
+      const [r, g, b, a] = digits.split("");
+      return {
+        hex: `#${r}${r}${g}${g}${b}${b}`.toLowerCase(),
+        alpha: a === undefined ? 1 : parseInt(a + a, 16) / 255,
+      };
+    }
+    if (digits.length === 6) return { hex: `#${digits.toLowerCase()}`, alpha: 1 };
+    if (digits.length === 8) {
+      return { hex: `#${digits.slice(0, 6).toLowerCase()}`, alpha: parseInt(digits.slice(6), 16) / 255 };
+    }
+    return { hex: "#000000", alpha: 1 };
+  }
+  const fn = RGB_FUNCTION.exec(text);
+  if (fn) {
+    const parts = fn[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+    if (parts.length >= 3 && parts.slice(0, 3).every(Number.isFinite)) {
+      const alpha = parts.length > 3 && Number.isFinite(parts[3]) ? Math.max(0, Math.min(1, parts[3])) : 1;
+      return { hex: `#${toHexPair(parts[0])}${toHexPair(parts[1])}${toHexPair(parts[2])}`, alpha };
+    }
+  }
+  return { hex: "#000000", alpha: 1 };
+}
+
+/** Inverse of parseCssColor: keeps hex when fully opaque so values stay readable. */
+export function formatCssColor(hex: string, alpha: number): string {
+  const parsed = parseCssColor(hex);
+  const a = Math.max(0, Math.min(1, alpha));
+  if (a >= 1) return parsed.hex;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(parsed.hex.slice(i, i + 2), 16));
+  return `rgba(${r},${g},${b},${Math.round(a * 1000) / 1000})`;
+}
+
 /** IEC 61966-2-1 transfer function. Values above one remain unclipped for HDR. */
 export function decodeSrgb(value: number) {
   const sign = value < 0 ? -1 : 1;

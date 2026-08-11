@@ -17,6 +17,7 @@ import {
   CapturedBrushAsset,
   Layer,
   NEUTRAL_CURVES,
+  EFFECT_LABELS,
   NEUTRAL_HSL,
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
@@ -98,6 +99,7 @@ const StudioTitlebar = lazy(() => import("./studio-titlebar"));
 const ContextToolbar = lazy(() => import("./context-toolbar"));
 const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
 const BlendStackEditor = lazy(() => import("./blend-stack-editor"));
+const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
 const SmartFilterEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.SmartFilterEditor })));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
@@ -336,6 +338,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [focusState, setFocusState] = useState<LayerFocusState>(EMPTY_LAYER_FOCUS_STATE);
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
+  const [styleLayerId, setStyleLayerId] = useState<string | null>(null);
   const activeLayerIdRef = useRef<string | null>(null);
   const setActiveLayerId = useCallback((id: string | null) => {
     activeLayerIdRef.current = id;
@@ -601,6 +604,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
   const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  // Layer styles do not apply to groups, so the dialog closes itself if the
+  // layer it was opened for is deleted or grouped away.
+  const styleLayer = layers.find((layer) => layer.id === styleLayerId && layer.kind !== "group") ?? null;
   const focusedLayer = resolvedFocusState.scope
     ? layers.find((layer) => layer.id === resolvedFocusState.scope?.layerId) ?? null
     : null;
@@ -2549,8 +2555,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       }
                     }}
                     onDoubleClick={() => {
-                      const name = window.prompt("Layer name", layer.name)?.trim();
-                      if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
+                      // Photoshop's split: the row opens Layer Style, the name renames.
+                      if (layer.kind === "group") return;
+                      setActiveLayerId(layer.id);
+                      setStyleLayerId(layer.id);
                     }}
                   >
                     <span className={`spatial-layer-thumb kind-${layer.kind}`}>
@@ -2565,7 +2573,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                        layer.kind === "path" ? "✎" : "▨"}
                     </span>
                     <span className="layer-name">
-                      <strong>{layer.name}</strong>
+                      <strong
+                        title="Double-click to rename"
+                        onDoubleClick={(event) => {
+                          event.stopPropagation();
+                          const name = window.prompt("Layer name", layer.name)?.trim();
+                          if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
+                        }}
+                      >{layer.name}</strong>
                       <small>{layer.kind}{layer.source?.mode === "embedded-raw-preview" ? ` · ${layer.source.format} proxy` : layer.source?.mode === "dng-cfa-developed" ? " · DNG sensor · editable" : ""}{layer.source?.colorProfile ? ` · ICC ${layer.source.colorProfile.name}${layer.source.colorProfile.canTransform ? "" : " (metadata)"}` : ""}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
                     </span>
                     <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
@@ -2605,8 +2620,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                           ◇ Smart object
                         </button>
                       )}
-                      <button onClick={() => studio?.addDropShadow(activeLayer.id)} style={{ flex: 1 }}>
-                        fx Drop shadow
+                      <button onClick={() => setStyleLayerId(activeLayer.id)} style={{ flex: 1 }} title="Blending options, Blend If and layer effects">
+                        fx Layer style…
                       </button>
                     </div>
                   )}
@@ -2622,9 +2637,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   {!!activeLayer.effects?.length && (
                     <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
                       {activeLayer.effects.map((effect) => (
-                        <button key={effect.id} onClick={() => studio?.removeLayerEffect(activeLayer.id, effect.id)} title="Remove layer effect" style={{ display: "flex", justifyContent: "space-between" }}>
-                          <span>fx · drop shadow</span><span>×</span>
-                        </button>
+                        <div key={effect.id} className="layer-effect-row">
+                          <button onClick={() => setStyleLayerId(activeLayer.id)} title="Edit in Layer Style">
+                            <i aria-hidden="true">{effect.enabled ? "◉" : "○"}</i>
+                            <span>fx · {EFFECT_LABELS[effect.kind]}</span>
+                          </button>
+                          <button onClick={() => studio?.removeLayerEffect(activeLayer.id, effect.id)} aria-label={`Remove ${EFFECT_LABELS[effect.kind]}`} title="Remove layer effect">×</button>
+                        </div>
                       ))}
                     </div>
                   )}
@@ -3604,6 +3623,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </div>
           </section>
         </div>
+      )}
+
+      {styleLayer && studio && (
+        <Suspense fallback={null}>
+          <LayerStyleDialog layer={styleLayer} studio={studio} onClose={() => setStyleLayerId(null)} />
+        </Suspense>
       )}
 
       {showHistory && (

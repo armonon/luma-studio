@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 import type { Studio } from "@/app/engine/studio";
+import BlendIfRangeEditor from "./blend-if-range-editor";
 import {
   BLEND_LABELS,
   BLEND_MODE_GROUPS,
@@ -15,44 +16,6 @@ import {
   type Layer,
 } from "@/app/engine/document";
 import { isNeutralBlendIf } from "@/app/engine/blend";
-
-function BlendIfRangeEditor({ label, range, onChange }: {
-  label: string;
-  range: BlendIfRange;
-  onChange: (range: BlendIfRange) => void;
-}) {
-  const fields: ReadonlyArray<readonly [keyof BlendIfRange, string]> = [
-    ["black", "Black hide"],
-    ["blackFeather", "Black fade"],
-    ["whiteFeather", "White fade"],
-    ["white", "White hide"],
-  ];
-  const update = (key: keyof BlendIfRange, value: number) => onChange({ ...range, [key]: value / 255 });
-  return (
-    <div className="blend-if-range">
-      <div className="blend-if-range-heading">
-        <strong>{label}</strong>
-        <span>{Math.round(range.black * 255)} · {Math.round(range.blackFeather * 255)} / {Math.round(range.whiteFeather * 255)} · {Math.round(range.white * 255)}</span>
-      </div>
-      <div
-        className="blend-if-preview"
-        style={{
-          "--black": `${range.black * 100}%`,
-          "--black-feather": `${range.blackFeather * 100}%`,
-          "--white-feather": `${range.whiteFeather * 100}%`,
-          "--white": `${range.white * 100}%`,
-        } as CSSProperties}
-      />
-      {fields.map(([key, name]) => (
-        <label key={key}>
-          <span>{name}</span>
-          <input type="range" min="0" max="255" value={Math.round(range[key] * 255)} onChange={(event) => update(key, Number(event.target.value))} aria-label={`${label} ${name}`} />
-          <output>{Math.round(range[key] * 255)}</output>
-        </label>
-      ))}
-    </div>
-  );
-}
 
 export default function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   const passes = resolvedBlendPasses(layer);

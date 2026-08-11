@@ -16,6 +16,7 @@ import {
   MAX_LAYER_COMPS,
   LayerKind,
   LayerEffect,
+  LayerEffectKind,
   MAX_LAYER_BLEND_PASSES,
   LevelsParams,
   NEUTRAL_CURVES,
@@ -2062,6 +2063,58 @@ export class Studio {
     const after = this.doc.layers.map(shallowCloneLayer);
     this.commit({ label: "Converted to Smart Object", before: [], after: [], layersBefore: before, layersAfter: after });
     this.actions.push({ op: "convertSmartObject" });
+    this.requestRender();
+  }
+
+  /** Sensible starting values per effect, matching Photoshop's defaults closely. */
+  private static effectPreset(kind: LayerEffectKind): Omit<LayerEffect, "id" | "kind"> {
+    switch (kind) {
+      case "drop-shadow":
+        return { enabled: true, opacity: 0.45, color: "rgba(0,0,0,0.9)", blur: 24, offsetX: 12, offsetY: 16 };
+      case "inner-shadow":
+        return { enabled: true, opacity: 0.5, color: "rgba(0,0,0,0.9)", blur: 18, offsetX: 6, offsetY: 8 };
+      case "outer-glow":
+        return { enabled: true, opacity: 0.6, color: "rgba(255,238,170,1)", blur: 26, offsetX: 0, offsetY: 0 };
+      case "color-overlay":
+        return { enabled: true, opacity: 1, color: "#7656ef", blur: 0, offsetX: 0, offsetY: 0 };
+      case "stroke":
+        return { enabled: true, opacity: 1, color: "#101014", blur: 0, offsetX: 0, offsetY: 0, width: 4, position: "outside" };
+      case "bevel-emboss":
+        return {
+          enabled: true, opacity: 0.75, color: "rgba(0,0,0,0.9)", blur: 6, offsetX: 0, offsetY: 0,
+          depth: 4, angle: 135, highlightColor: "#ffffff", shadowColor: "#000000",
+        };
+    }
+  }
+
+  /** Add a layer style effect. Groups and locked layers are refused. */
+  addLayerEffect(layerId: string, kind: LayerEffectKind) {
+    const layer = this.findLayer(layerId);
+    if (!layer || layer.kind === "group" || layer.locked) return null;
+    const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects ?? []) };
+    const effect: LayerEffect = { id: nextId("effect"), kind, ...Studio.effectPreset(kind) };
+    layer.effects = [...(layer.effects ?? []), effect];
+    this.commit({
+      label: `${kind.replace(/-/g, " ")} added`,
+      before: [before],
+      after: [{ layerId, effects: cloneEffects(layer.effects) }],
+    });
+    this.requestRender();
+    return effect;
+  }
+
+  /** Patch one effect in place. */
+  updateLayerEffect(layerId: string, effectId: string, patch: Partial<Omit<LayerEffect, "id" | "kind">>) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.effects?.some((effect) => effect.id === effectId)) return;
+    const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects) };
+    layer.effects = layer.effects.map((effect) =>
+      effect.id === effectId ? { ...effect, ...patch } : effect);
+    this.commit({
+      label: "Layer effect changed",
+      before: [before],
+      after: [{ layerId, effects: cloneEffects(layer.effects) }],
+    });
     this.requestRender();
   }
 
