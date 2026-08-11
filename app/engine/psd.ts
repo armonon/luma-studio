@@ -1521,6 +1521,17 @@ export function photoshopCompatibilityReport(
       message: `Backdrop Blur reads the layers underneath and has no Photoshop layer style equivalent, so it is not written to the file (${backdropLayers.length} layer${backdropLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
     });
   }
+  // Bloom, Relief and Long Shadow are ours; Photoshop has no slot for them.
+  const luminanceKinds: ReadonlyArray<LayerEffect["kind"]> = ["bloom", "relief", "long-shadow"];
+  const luminanceLayers = doc.layers.filter((layer) =>
+    layer.effects?.some((effect) => effect.enabled && luminanceKinds.includes(effect.kind)));
+  if (luminanceLayers.length) {
+    issues.push({
+      code: "LUMA_ONLY_EFFECT_NOT_EXPORTED",
+      severity: "warning",
+      message: `Bloom, Relief and Long Shadow have no Photoshop layer style equivalent, so they are not written to the file (${luminanceLayers.length} layer${luminanceLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+    });
+  }
   if (container === "psd" && (doc.width > 30000 || doc.height > 30000)) {
     issues.push({ code: "PSD_DIMENSION_LIMIT", severity: "error", message: "PSD is limited to 30,000 pixels per side; export as PSB." });
   }

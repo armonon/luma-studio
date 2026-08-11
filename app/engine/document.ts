@@ -521,10 +521,13 @@ export type LayerEffectKind =
   | "pattern-overlay"
   | "stroke"
   | "bevel-emboss"
-  | "backdrop-blur";
+  | "backdrop-blur"
+  | "bloom"
+  | "relief"
+  | "long-shadow";
 
 /** Effects painted beneath the layer content; the rest paint over it. */
-export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow"];
+export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow", "long-shadow"];
 
 export type StrokePosition = "outside" | "inside" | "center";
 /** Edge glows hug the inside of the silhouette; centre glows radiate outwards. */
@@ -620,6 +623,14 @@ export type LayerEffect = {
   saturation?: number;
   /** backdrop-blur only — how strongly `color` tints the result, 0..1. */
   tint?: number;
+  /**
+   * bloom only — the luminance a pixel must exceed to bloom, 0..1.
+   * This is what separates bloom from a glow: a glow spreads the silhouette,
+   * bloom spreads only the parts of the image that are actually bright.
+   */
+  threshold?: number;
+  /** long-shadow only — how many stamps make up the trail. Defaults to 32. */
+  steps?: number;
 };
 
 export function isEffectBelowContent(kind: LayerEffectKind) {
@@ -636,8 +647,11 @@ export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
   "color-overlay",
   "gradient-overlay",
   "pattern-overlay",
+  "bloom",
+  "relief",
   "outer-glow",
   "drop-shadow",
+  "long-shadow",
   "backdrop-blur",
 ];
 
@@ -653,6 +667,9 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
   "outer-glow": "Outer Glow",
   "drop-shadow": "Drop Shadow",
   "backdrop-blur": "Backdrop Blur",
+  bloom: "Bloom",
+  relief: "Relief",
+  "long-shadow": "Long Shadow",
 };
 
 /** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
@@ -665,15 +682,25 @@ export type EffectField =
   | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "altitude" | "bevelColors"
   | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
-  | "pattern" | "patternScale" | "saturation" | "tint";
+  | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps";
 
 /** Falloff shaping applies wherever an effect has a soft edge to shape. */
 const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
 
+/**
+ * Note which kinds do *not* list "blendMode".
+ *
+ * Effects accumulate into the layer's own buffer, and the below-content ones
+ * land where that buffer is still empty — there is nothing there to blend
+ * with, so the control would be dead. Photoshop does expose a blend mode on a
+ * drop shadow, because its effects composite against the backdrop; matching
+ * that means re-deriving the layer's mask and clipping afterwards, so until
+ * then these deliberately have no mode rather than an inert one.
+ */
 export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> = {
-  "drop-shadow": ["blendMode", "offset", "blur", "globalLight", ...FALLOFF],
+  "drop-shadow": ["offset", "blur", "globalLight", ...FALLOFF],
   "inner-shadow": ["blendMode", "offset", "blur", "globalLight", ...FALLOFF],
-  "outer-glow": ["blendMode", "blur", ...FALLOFF],
+  "outer-glow": ["blur", ...FALLOFF],
   "inner-glow": ["blendMode", "blur", "glowSource", ...FALLOFF],
   satin: ["blendMode", "offset", "blur", "invert", "globalLight", "contour"],
   "color-overlay": ["blendMode"],
@@ -682,6 +709,9 @@ export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> 
   stroke: ["blendMode", "width", "position"],
   "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour"],
   "backdrop-blur": ["blendMode", "blur", "saturation", "tint"],
+  bloom: ["blendMode", "blur", "threshold"],
+  relief: ["blendMode", "depth", "angle", "globalLight"],
+  "long-shadow": ["offset", "globalLight", "steps"],
 };
 
 /**
@@ -728,6 +758,13 @@ export const EFFECT_BLEND_DEFAULTS: Record<LayerEffectKind, BlendMode> = {
   stroke: "source-over",
   "bevel-emboss": "source-over",
   "backdrop-blur": "source-over",
+  // Bloom adds light. Relief must key off the *source* grey, not the base, so
+  // hard-light rather than overlay: with overlay a white area stays white
+  // whatever the emboss says, and the relief disappears exactly where the
+  // image is brightest.
+  bloom: "screen",
+  relief: "hard-light",
+  "long-shadow": "source-over",
 };
 
 export function resolvedEffectBlendMode(effect: LayerEffect): BlendMode {

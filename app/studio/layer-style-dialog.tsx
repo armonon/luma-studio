@@ -314,6 +314,12 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
           <Slider label="Scale" value={effect.patternScale ?? 16} min={2} max={128} suffix="px" onChange={(patternScale) => patch({ patternScale })} />
         </>
       )}
+      {effectUses(effect.kind, "threshold") && (
+        <Slider label="Threshold" value={(effect.threshold ?? 0.7) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ threshold: v / 100 })} />
+      )}
+      {effectUses(effect.kind, "steps") && (
+        <Slider label="Steps" value={effect.steps ?? 32} min={2} max={128} onChange={(steps) => patch({ steps })} />
+      )}
       {effectUses(effect.kind, "saturation") && (
         <Slider label="Saturation" value={(effect.saturation ?? 1.6) * 100} min={0} max={300} suffix="%" onChange={(v) => patch({ saturation: v / 100 })} />
       )}
@@ -323,6 +329,17 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
       {effect.kind === "backdrop-blur" && (
         <p className="layer-style-hint">
           Blurs the layers behind this one, live. Nothing underneath means nothing to blur.
+        </p>
+      )}
+      {effect.kind === "bloom" && (
+        <p className="layer-style-hint">
+          Spills light from pixels brighter than the threshold — unlike a glow, which spreads the
+          whole silhouette regardless of what is in it.
+        </p>
+      )}
+      {effect.kind === "relief" && (
+        <p className="layer-style-hint">
+          Embosses the image content rather than its outline, so a photograph gains real surface.
         </p>
       )}
       {effectUses(effect.kind, "globalLight") && (

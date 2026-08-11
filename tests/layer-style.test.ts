@@ -114,17 +114,25 @@ test("handles never end up out of order, whichever one moved", () => {
 const SIZE = 60;
 
 /**
- * A red square over an opaque grey backdrop.
+ * A red square with a bright patch, over a striped coloured backdrop.
  *
- * The backdrop matters: a blend mode cannot do anything where there is nothing
- * beneath it, so on a transparent document every mode would look identical for
- * a drop shadow or an outside stroke and the table would appear to lie.
+ * Every part of this fixture earns its place: the bright patch gives Bloom
+ * something above threshold and Relief a luminance edge to emboss, and the
+ * striped backdrop gives Backdrop Blur detail to smear and colour to
+ * desaturate. A flat fixture would make all three look like they ignored
+ * their controls.
  */
 function docWith(effect: LayerEffect): Document {
   const bitmap = newCanvas(SIZE, SIZE);
   const ctx = bitmap.getContext("2d")!;
   ctx.fillStyle = "#ff0000";
   ctx.fillRect(20, 20, 20, 20);
+  // A bright patch inside the shape. Bloom and Relief read pixel values rather
+  // than the silhouette, and a uniformly-coloured box gives them nothing to
+  // work with — bloom would find nothing above threshold and relief would
+  // emboss a flat surface, so both would look like they ignored their controls.
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(24, 24, 9, 9);
   const layer: Layer = { ...createRasterLayer("box", bitmap), effects: [effect] };
 
   // Striped and coloured, not flat: blurring a uniform backdrop returns the
@@ -160,13 +168,13 @@ function baseEffect(kind: LayerEffectKind): LayerEffect {
   return {
     id: "e1", kind, enabled: true, opacity: 1, color: "#4080c0",
     blur: 6, offsetX: 8, offsetY: 0,
-    width: 4, position: "outside",
+    width: 4, position: "center",
     depth: 4, angle: 135, altitude: 30, highlightColor: "#ffffff", shadowColor: "#000000",
     glowSource: "edge", invert: false,
     stops: [{ offset: 0, color: "#ff0000" }, { offset: 1, color: "#0000ff" }],
     gradientAngle: 90, gradientStyle: "linear",
     pattern: "checker", patternScale: 8,
-    saturation: 1.6, tint: 0,
+    saturation: 1.6, tint: 0, threshold: 0.6, steps: 24,
   };
 }
 
@@ -195,6 +203,8 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   patternScale: { patternScale: 20 },
   saturation: { saturation: 0 },
   tint: { tint: 1 },
+  threshold: { threshold: 0.05 },
+  steps: { steps: 3 },
 };
 
 const ALL_FIELDS = Object.keys(FIELD_CHANGES) as EffectField[];
@@ -295,33 +305,29 @@ test("editing an effect is undoable", () => {
 
 // --- effect blend modes against the backdrop -------------------------------
 
-test("a multiplied drop shadow darkens the backdrop instead of painting over it", () => {
-  // The whole point of the plumbing: effects land where the layer's own buffer
-  // is still empty, so without the backdrop a blend mode there is a no-op.
-  const shadow = (blendMode?: "multiply"): LayerEffect => ({
-    ...baseEffect("drop-shadow"),
-    color: "#ffffff",
+test("an effect blend mode acts on the layer's own pixels", () => {
+  // Inner shadow lands on the content, so its mode has something to blend
+  // with. Multiply darkens the red square; screen lightens it.
+  const shade = (blendMode: "multiply" | "screen"): LayerEffect => ({
+    ...baseEffect("inner-shadow"),
+    color: "#808080",
     blendMode,
-    blur: 4,
-    offsetX: 14,
-    offsetY: 0,
+    blur: 3,
+    offsetX: 6,
+    offsetY: 6,
   });
 
-  const normal = testCanvas(SIZE, SIZE);
-  renderClean(docWith(shadow(undefined)), normal);
-  const multiplied = testCanvas(SIZE, SIZE);
-  renderClean(docWith(shadow("multiply")), multiplied);
+  const darkened = testCanvas(SIZE, SIZE);
+  renderClean(docWith(shade("multiply")), darkened);
+  const lightened = testCanvas(SIZE, SIZE);
+  renderClean(docWith(shade("screen")), lightened);
 
-  // Sample beside the square, where only the shadow and the grey backdrop are.
-  const at = { x: 46, y: 30 };
-  const plain = pixelAt(normal, at.x, at.y);
-  const blended = pixelAt(multiplied, at.x, at.y);
-  // A white shadow lightens the grey backdrop normally, but multiplying white
-  // leaves the backdrop untouched.
-  assert.ok(plain.r > 140, `expected a lightened backdrop, got ${plain.r}`);
+  const at = { x: 23, y: 23 };
+  const multiplied = pixelAt(darkened, at.x, at.y);
+  const screened = pixelAt(lightened, at.x, at.y);
   assert.ok(
-    blended.r < plain.r - 8,
-    `multiply should not lighten: normal r=${plain.r} vs multiply r=${blended.r}`,
+    multiplied.r < screened.r - 20,
+    `multiply should be darker than screen: ${multiplied.r} vs ${screened.r}`,
   );
 });
 
@@ -337,6 +343,84 @@ test("the GPU path declines rather than ignoring an effect blend mode", () => {
     /resolvedEffectBlendMode\(effect\) !== "source-over"\)\)\) return false;/,
     "gl-renderer must decline documents whose effect blend modes it cannot honour",
   );
+});
+
+// --- luminance-driven effects ----------------------------------------------
+
+/** A dim square with one bright corner: enough contrast to bloom or emboss. */
+function contrastyDoc(effect: LayerEffect) {
+  const bitmap = newCanvas(SIZE, SIZE);
+  const ctx = bitmap.getContext("2d")!;
+  ctx.fillStyle = "#202020";
+  ctx.fillRect(15, 15, 30, 30);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(15, 15, 10, 10);
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [{ ...createRasterLayer("box", bitmap), effects: [effect] }];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+  return target;
+}
+
+test("bloom spreads light from bright pixels, not from the silhouette", () => {
+  // The distinction from Outer Glow: a glow would spill from every edge of the
+  // square, because it only knows the alpha. Bloom must spill from the white
+  // corner and leave the dark edges alone.
+  const target = contrastyDoc({
+    ...baseEffect("bloom"),
+    id: "b1",
+    blur: 10,
+    threshold: 0.6,
+    opacity: 1,
+  });
+
+  const nearBright = pixelAt(target, 12, 20);
+  const nearDark = pixelAt(target, 12, 42);
+  assert.ok(nearBright.a > 20, `expected bloom beside the bright corner, got alpha ${nearBright.a}`);
+  assert.ok(
+    nearBright.a > nearDark.a + 20,
+    `bloom should favour the bright corner: bright a=${nearBright.a} vs dark a=${nearDark.a}`,
+  );
+});
+
+test("raising the bloom threshold above the brightest pixel yields nothing", () => {
+  const target = contrastyDoc({ ...baseEffect("bloom"), id: "b1", blur: 10, threshold: 1, opacity: 1 });
+  assert.equal(pixelAt(target, 12, 20).a, 0, "nothing is brighter than white");
+});
+
+test("relief embosses the image content, not its outline", () => {
+  // The interior boundary between the white corner and the dark body has to
+  // pick up light and shade; a bevel could only have lit the outer edge.
+  const target = contrastyDoc({
+    ...baseEffect("relief"),
+    id: "r1",
+    depth: 3,
+    angle: 135,
+    opacity: 1,
+  });
+  const above = pixelAt(target, 20, 23);
+  const below = pixelAt(target, 20, 27);
+  assert.notEqual(
+    above.r + above.g + above.b,
+    below.r + below.g + below.b,
+    "expected relief across the interior luminance edge",
+  );
+});
+
+test("a long shadow trails away from the shape and fades", () => {
+  const target = contrastyDoc({
+    ...baseEffect("long-shadow"),
+    id: "l1",
+    color: "#000000",
+    offsetX: 18,
+    offsetY: 18,
+    steps: 40,
+    opacity: 1,
+  });
+  const near = pixelAt(target, 47, 47);
+  const far = pixelAt(target, 58, 58);
+  assert.ok(near.a > 40, `expected a trail past the shape, got alpha ${near.a}`);
+  assert.ok(far.a < near.a, `the trail should fade: near ${near.a} vs far ${far.a}`);
 });
 
 // --- backdrop blur ---------------------------------------------------------

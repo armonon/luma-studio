@@ -2122,6 +2122,21 @@ export class Studio {
           enabled: true, opacity: 1, color: "#ffffff", blur: 24, offsetX: 0, offsetY: 0,
           saturation: 1.8, tint: 0.12,
         };
+      case "bloom":
+        return {
+          enabled: true, opacity: 0.8, color: "#ffffff", blur: 28, offsetX: 0, offsetY: 0,
+          threshold: 0.72,
+        };
+      case "relief":
+        return {
+          enabled: true, opacity: 0.7, color: "#808080", blur: 0, offsetX: 0, offsetY: 0,
+          depth: 2, angle: 135,
+        };
+      case "long-shadow":
+        return {
+          enabled: true, opacity: 0.5, color: "rgba(0,0,0,0.9)", blur: 0, offsetX: 90, offsetY: 90,
+          steps: 48,
+        };
     }
   }
 
