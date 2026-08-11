@@ -849,6 +849,25 @@ export type Layer = {
   /** Stable source-layer slot used to restore preservation metadata from an embedded PSD/PSB. */
   photoshop?: { sourceIndex: number };
   effects?: LayerEffect[];
+  /**
+   * Advanced blending, matching Photoshop's pane.
+   *
+   * Knockout uses the layer's own alpha to punch through what is beneath —
+   * "shallow" stops at the enclosing group, "deep" goes to the bottom of the
+   * document. Combined with a fill opacity of 0 it is how you cut a shape
+   * clean through a stack.
+   */
+  knockout?: "none" | "shallow" | "deep";
+  /** Channels this layer is allowed to affect. Omitted means all three. */
+  blendChannels?: { r: boolean; g: boolean; b: boolean };
+  /**
+   * Whether the layer mask also hides the layer's effects.
+   *
+   * Photoshop defaults this off: the mask shapes the pixels, and a drop shadow
+   * still falls outside it. We applied the mask to the finished layer buffer,
+   * which is the "on" behaviour, with no way to turn it off.
+   */
+  maskHidesEffects?: boolean;
   bitmap?: HTMLCanvasElement;
   /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
   surface?: PrecisionTileSurface;

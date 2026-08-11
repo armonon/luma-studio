@@ -186,6 +186,11 @@ function applyImportedLayerMetadata(target: Layer, source: PsdLayer, parentId?: 
   target.opacity = Math.max(0, Math.min(1, source.opacity ?? 1));
   if (source.fillOpacity !== undefined) target.fillOpacity = source.fillOpacity;
   target.blendIf = blendIfFromPsd(source);
+  // Photoshop lists the channels a layer may NOT affect; we store the ones it may.
+  const restricted = new Set(source.channelBlendingRestrictions ?? []);
+  if (restricted.size) {
+    target.blendChannels = { r: !restricted.has(0), g: !restricted.has(1), b: !restricted.has(2) };
+  }
   target.visible = !source.hidden;
   target.clipping = source.clipping;
   target.locked = !!source.protected?.composite;
@@ -1519,6 +1524,18 @@ export function photoshopCompatibilityReport(
       code: "BACKDROP_EFFECT_NOT_EXPORTED",
       severity: "warning",
       message: `Backdrop Blur reads the layers underneath and has no Photoshop layer style equivalent, so it is not written to the file (${backdropLayers.length} layer${backdropLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+    });
+  }
+  // Knockout has no ag-psd layer field at all, and channelBlendingRestrictions
+  // exists in its types but does not survive its writer — a round trip returns
+  // an empty array. Both are read on import; neither can be written back.
+  const advancedLayers = doc.layers.filter((layer) =>
+    (layer.knockout ?? "none") !== "none" || layer.blendChannels || layer.maskHidesEffects);
+  if (advancedLayers.length) {
+    issues.push({
+      code: "ADVANCED_BLENDING_NOT_EXPORTED",
+      severity: "warning",
+      message: `Knockout, channel restrictions and mask-hides-effects are set on ${advancedLayers.length} layer${advancedLayers.length === 1 ? "" : "s"} and cannot be written to PSD. The flattened composite is unaffected; the editable settings are lost.`,
     });
   }
   // Bloom, Relief and Long Shadow are ours; Photoshop has no slot for them.

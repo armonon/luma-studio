@@ -413,6 +413,51 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
           <option value="gray">Gray</option><option value="red">Red</option><option value="green">Green</option><option value="blue">Blue</option>
         </select>
       </div>
+      <div className="blend-if-heading">
+        <span><strong>Advanced</strong><small>Knockout · channels · mask</small></span>
+      </div>
+      <label className="layer-style-select">
+        <span>Knockout</span>
+        <select
+          value={layer.knockout ?? "none"}
+          onChange={(event) => studio.setLayerBlendingOption(layer.id, "knockout", event.target.value as Layer["knockout"])}
+          aria-label="Knockout"
+        >
+          <option value="none">None</option>
+          <option value="shallow">Shallow</option>
+          <option value="deep">Deep</option>
+        </select>
+      </label>
+      <div className="layer-style-color">
+        <span>Channels</span>
+        {(["r", "g", "b"] as const).map((channelKey) => {
+          const enabled = layer.blendChannels?.[channelKey] ?? true;
+          return (
+            <label key={channelKey} className="channel-toggle">
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(event) => studio.setLayerBlendingOption(layer.id, "blendChannels", {
+                  r: layer.blendChannels?.r ?? true,
+                  g: layer.blendChannels?.g ?? true,
+                  b: layer.blendChannels?.b ?? true,
+                  [channelKey]: event.target.checked,
+                })}
+                aria-label={`Blend ${channelKey.toUpperCase()} channel`}
+              />
+              <span>{channelKey.toUpperCase()}</span>
+            </label>
+          );
+        })}
+      </div>
+      <label className="layer-style-check">
+        <span>Mask hides effects</span>
+        <input
+          type="checkbox"
+          checked={!!layer.maskHidesEffects}
+          onChange={(event) => studio.setLayerBlendingOption(layer.id, "maskHidesEffects", event.target.checked)}
+        />
+      </label>
       <BlendIfRangeEditor label="This layer" range={channel.source} onChange={(range) => setRange("source", range)} />
       <BlendIfRangeEditor label="Underlying" range={channel.underlying} onChange={(range) => setRange("underlying", range)} />
       <button type="button" className="blend-if-reset" onClick={() => studio.resetLayerBlendIf(layer.id)} disabled={!layer.blendIf}>

@@ -205,6 +205,9 @@ export type LayerSnapshot = {
   ai?: AiProvenance;
   raw?: RawLayerSource;
   effects?: LayerEffect[];
+  knockout?: Layer["knockout"] | null;
+  blendChannels?: Layer["blendChannels"] | null;
+  maskHidesEffects?: boolean | null;
 };
 
 /** A layer style on the clipboard: effects plus the blending options. */
@@ -2283,6 +2286,29 @@ export class Studio {
     this.commit({ label: "Layer style cleared", before: [before], after: [{ layerId, effects: [] }] });
     this.requestRender();
     return true;
+  }
+
+  /**
+   * Advanced blending: knockout, channel masking, mask-hides-effects.
+   *
+   * One setter rather than three, because they are one pane in the dialog and
+   * share a history label.
+   */
+  setLayerBlendingOption<K extends "knockout" | "blendChannels" | "maskHidesEffects">(
+    layerId: string,
+    key: K,
+    value: Layer[K],
+  ) {
+    const layer = this.findLayer(layerId);
+    if (!layer || layer.locked) return;
+    const before = { layerId, [key]: layer[key] ?? null } as LayerSnapshot;
+    (layer as Record<string, unknown>)[key] = value;
+    this.commit({
+      label: "Advanced blending",
+      before: [before],
+      after: [{ layerId, [key]: value ?? null } as LayerSnapshot],
+    });
+    this.requestRender();
   }
 
   /**

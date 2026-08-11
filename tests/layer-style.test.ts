@@ -345,6 +345,82 @@ test("the GPU path declines rather than ignoring an effect blend mode", () => {
   );
 });
 
+// --- advanced blending options ---------------------------------------------
+
+/** An opaque red backdrop under a blue square, both full-frame layers. */
+function stackedDoc(patch: Partial<Layer>) {
+  const square = newCanvas(SIZE, SIZE);
+  const squareCtx = square.getContext("2d")!;
+  squareCtx.fillStyle = "#0000ff";
+  squareCtx.fillRect(20, 20, 20, 20);
+
+  const backdrop = newCanvas(SIZE, SIZE);
+  const backdropCtx = backdrop.getContext("2d")!;
+  backdropCtx.fillStyle = "#ff0000";
+  backdropCtx.fillRect(0, 0, SIZE, SIZE);
+
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [
+    { ...createRasterLayer("top", square), ...patch },
+    createRasterLayer("backdrop", backdrop),
+  ];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+  return target;
+}
+
+test("knockout punches the layer's shape through what is beneath it", () => {
+  // With fill opacity at zero the layer contributes no colour, so all that is
+  // left is the hole — which is the whole point of knockout.
+  const plain = stackedDoc({ fillOpacity: 0 });
+  assert.ok(pixelAt(plain, 30, 30).r > 200, "without knockout the backdrop shows through");
+
+  const knocked = stackedDoc({ fillOpacity: 0, knockout: "deep" });
+  assert.equal(pixelAt(knocked, 30, 30).a, 0, "knockout should have cut through to nothing");
+  assert.ok(pixelAt(knocked, 5, 5).r > 200, "outside the shape the backdrop is untouched");
+});
+
+test("a layer restricted to one channel leaves the others alone", () => {
+  const all = stackedDoc({});
+  assert.ok(pixelAt(all, 30, 30).b > 200 && pixelAt(all, 30, 30).r < 60, "blue over red");
+
+  // Allow only the blue channel: red must survive from the backdrop.
+  const blueOnly = stackedDoc({ blendChannels: { r: false, g: true, b: true } });
+  const px = pixelAt(blueOnly, 30, 30);
+  assert.ok(px.r > 200, `the red channel should be preserved, got r=${px.r}`);
+  assert.ok(px.b > 200, `the blue channel should still be written, got b=${px.b}`);
+});
+
+test("a layer mask shapes the pixels but not the effects, unless asked", () => {
+  // Photoshop's default: the shadow still falls outside the mask.
+  const mask = newCanvas(SIZE, SIZE);
+  const maskCtx = mask.getContext("2d")!;
+  maskCtx.fillStyle = "#ffffff";
+  maskCtx.fillRect(0, 0, SIZE / 2, SIZE);
+
+  const glow: LayerEffect = {
+    ...baseEffect("outer-glow"),
+    id: "g1",
+    color: "#00ff00",
+    blur: 10,
+    opacity: 1,
+  };
+  const outside = { x: 32, y: 30 };
+
+  const shows = stackedDoc({ mask, effects: [glow] });
+  assert.ok(
+    pixelAt(shows, outside.x, outside.y).g > 30,
+    `by default the effect should reach past the mask, got g=${pixelAt(shows, outside.x, outside.y).g}`,
+  );
+
+  const hides = stackedDoc({ mask, effects: [glow], maskHidesEffects: true });
+  assert.equal(
+    pixelAt(hides, outside.x, outside.y).g,
+    0,
+    "with the option on the mask should cut the effect off entirely",
+  );
+});
+
 // --- luminance-driven effects ----------------------------------------------
 
 /** A dim square with one bright corner: enough contrast to bloom or emboss. */

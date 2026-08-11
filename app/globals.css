@@ -11049,3 +11049,17 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
   justify-self: start;
   padding: 0 10px;
 }
+
+.channel-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #5d636c;
+  font-size: 7.5px;
+}
+
+.channel-toggle input {
+  width: 12px;
+  height: 12px;
+  accent-color: #7656ef;
+}

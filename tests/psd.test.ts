@@ -643,6 +643,21 @@ test("pattern overlay is reported as unexportable rather than dropped in silence
   assert.ok(report.canExport, "the rest of the document should still export");
 });
 
+test("advanced blending is reported as unexportable rather than dropped in silence", () => {
+  // ag-psd has no layer knockout field, and its writer drops
+  // channelBlendingRestrictions — a round trip returns an empty array — so
+  // claiming to export these would be a lie. Saying so is the honest option.
+  const doc = createDocument(16, 16);
+  const layer = createRasterLayer("Cut", newCanvas(16, 16));
+  layer.knockout = "deep";
+  layer.blendChannels = { r: false, g: true, b: true };
+  doc.layers = [layer];
+  const issue = photoshopCompatibilityReport(doc).issues
+    .find((candidate) => candidate.code === "ADVANCED_BLENDING_NOT_EXPORTED");
+  assert.ok(issue, "advanced blending must not vanish without a word");
+  assert.equal(issue.severity, "warning");
+});
+
 test("backdrop blur is reported as unexportable rather than dropped in silence", () => {
   const doc = createDocument(16, 16);
   const layer = createRasterLayer("Glass", newCanvas(16, 16));

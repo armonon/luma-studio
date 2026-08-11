@@ -50,6 +50,11 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
   if (snap.effects) layer.effects = cloneEffects(snap.effects);
   if (snap.opacity !== undefined) layer.opacity = snap.opacity;
   if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
+  if (snap.knockout !== undefined) layer.knockout = snap.knockout ?? undefined;
+  if (snap.maskHidesEffects !== undefined) layer.maskHidesEffects = snap.maskHidesEffects ?? undefined;
+  if (snap.blendChannels !== undefined) {
+    layer.blendChannels = snap.blendChannels ? { ...snap.blendChannels } : undefined;
+  }
   if (snap.blend) layer.blend = snap.blend;
   if (snap.blendStack !== undefined) {
     layer.blendStack = snap.blendStack ? cloneBlendStack(snap.blendStack) : undefined;

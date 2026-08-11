@@ -551,6 +551,8 @@ function renderLayerSequence(
   parentId: string | undefined,
   groupDepth: number,
   included?: ReadonlySet<string>,
+  /** The document-level composite, so a deep knockout can reach it. */
+  rootComposite: CanvasRenderingContext2D = composite,
 ) {
   const siblings = preparedLayers.get(parentId) ?? [];
   for (let i = siblings.length - 1; i >= 0; i--) {
@@ -559,11 +561,11 @@ function renderLayerSequence(
     if (!layer.visible || layer.opacity <= 0) continue;
     if (layer.kind === "group") {
       if (groupIsPassThrough(layer)) {
-        renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth, included);
+        renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth, included, rootComposite);
       } else {
         const groupCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const groupContext = groupCanvas.getContext("2d")!;
-        renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1, included);
+        renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1, included, rootComposite);
         if (layer.mask) {
           groupContext.globalCompositeOperation = "destination-in";
           drawProjectedCanvas(groupContext, layer.mask, frame);
@@ -604,7 +606,7 @@ function renderLayerSequence(
     } else if (layer.kind === "adjustment-hsl" && layer.hsl) {
       drawPixelAdjustment(composite, s, layer, frame, (img) => applyHslToImageData(img, layer.hsl!));
     } else {
-      drawContentLayer(composite, s, doc, layer, frame);
+      drawContentLayer(composite, s, doc, layer, frame, rootComposite);
     }
   }
 }
@@ -820,6 +822,7 @@ function drawContentLayer(
   doc: Document,
   layer: Layer,
   frame: RenderFrame,
+  rootComposite: CanvasRenderingContext2D = composite,
 ) {
   const { layerBuf, contentBuf, effectBuf, clipBuf } = scratchBuffers;
   const bctx = layerBuf.getContext("2d")!;
@@ -830,6 +833,17 @@ function drawContentLayer(
   drawLayerContentManaged(contentCtx, layer, frameTransform(frame));
   const scale = frameScale(frame);
   applySmartFilters(contentBuf, layer.filters, Math.sqrt(scale.x * scale.y));
+
+  // Photoshop's "Layer Mask Hides Effects" is off by default: the mask shapes
+  // the pixels and the shadow still falls outside it. Masking the content
+  // before the style runs gives that; masking the finished buffer afterwards
+  // gives the "on" behaviour, which is all we used to do.
+  const maskHidesEffects = layer.maskHidesEffects ?? false;
+  if (layer.mask && !maskHidesEffects) {
+    contentCtx.globalCompositeOperation = "destination-in";
+    drawProjectedCanvas(contentCtx, layer.mask, frame);
+    contentCtx.globalCompositeOperation = "source-over";
+  }
 
   // `composite` is a different canvas from layerBuf, so it is a stable view of
   // everything already drawn beneath this layer — exactly what a blended
@@ -850,13 +864,87 @@ function drawContentLayer(
       bctx.globalCompositeOperation = "source-over";
     }
   }
-  if (layer.mask) {
+  if (layer.mask && maskHidesEffects) {
     bctx.globalCompositeOperation = "destination-in";
     drawProjectedCanvas(bctx, layer.mask, frame);
     bctx.globalCompositeOperation = "source-over";
   }
 
-  compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
+  applyKnockout(composite, rootComposite, contentBuf, layer, frame);
+  withChannelMask(composite, layer, frame, () => {
+    compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
+  });
+}
+
+/**
+ * Punch the layer's silhouette through what sits beneath it.
+ *
+ * "shallow" stops at the enclosing group, which is whatever `composite` is
+ * here; "deep" goes to the bottom of the document, so it needs the root
+ * canvas — the two would otherwise be the same operation wearing two names.
+ */
+function applyKnockout(
+  composite: CanvasRenderingContext2D,
+  rootComposite: CanvasRenderingContext2D,
+  contentBuf: HTMLCanvasElement,
+  layer: Layer,
+  frame: RenderFrame,
+) {
+  const knockout = layer.knockout ?? "none";
+  if (knockout === "none") return;
+  const target = knockout === "deep" ? rootComposite : composite;
+  target.save();
+  target.globalCompositeOperation = "destination-out";
+  target.globalAlpha = layer.opacity;
+  target.drawImage(contentBuf, 0, 0);
+  target.restore();
+  if (knockout === "deep" && target !== composite) {
+    // The group buffer is composited over the root later, so the hole has to
+    // exist in both or the group would simply fill it back in.
+    composite.save();
+    composite.globalCompositeOperation = "destination-out";
+    composite.globalAlpha = layer.opacity;
+    composite.drawImage(contentBuf, 0, 0);
+    composite.restore();
+  }
+  void frame;
+}
+
+/**
+ * Restrict a layer to a subset of channels by restoring the others afterwards.
+ *
+ * Canvas has no per-channel write mask, so this snapshots what is underneath
+ * and puts the excluded channels back. Only runs when a channel is actually
+ * switched off, which is rare enough that the two reads do not matter.
+ */
+function withChannelMask(
+  composite: CanvasRenderingContext2D,
+  layer: Layer,
+  frame: RenderFrame,
+  draw: () => void,
+) {
+  const channels = layer.blendChannels;
+  const restricted = channels && (!channels.r || !channels.g || !channels.b);
+  if (!restricted) {
+    draw();
+    return;
+  }
+  const width = frame.outputWidth;
+  const height = frame.outputHeight;
+  if (width <= 0 || height <= 0) {
+    draw();
+    return;
+  }
+  const before = composite.getImageData(0, 0, width, height);
+  draw();
+  const after = composite.getImageData(0, 0, width, height);
+  const keep = [channels.r, channels.g, channels.b];
+  for (let i = 0; i < after.data.length; i += 4) {
+    for (let c = 0; c < 3; c += 1) {
+      if (!keep[c]) after.data[i + c] = before.data[i + c];
+    }
+  }
+  composite.putImageData(after, 0, 0);
 }
 
 function drawAdjustment(
