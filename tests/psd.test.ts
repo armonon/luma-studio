@@ -564,6 +564,85 @@ test("all six effect kinds survive a PSD round trip", async () => {
   assert.ok(written.dropShadow?.length, "drop shadow was dropped on export");
 });
 
+test("inner glow, satin and gradient overlay round-trip through PSD", async () => {
+  const source: Psd = {
+    width: 16,
+    height: 16,
+    children: [{
+      name: "Styled",
+      canvas: newCanvas(16, 16),
+      left: 0,
+      top: 0,
+      effects: {
+        innerGlow: { enabled: true, size: { units: "Pixels", value: 8 }, color: { r: 255, g: 200, b: 0 }, opacity: 0.5, source: "center" },
+        satin: { enabled: true, size: { units: "Pixels", value: 6 }, distance: { units: "Pixels", value: 9 }, angle: 0, color: { r: 20, g: 30, b: 40 }, opacity: 0.4, invert: true },
+        gradientOverlay: [{
+          enabled: true,
+          opacity: 1,
+          angle: 45,
+          type: "radial",
+          gradient: {
+            name: "g",
+            type: "solid",
+            colorStops: [
+              { color: { r: 255, g: 0, b: 0 }, location: 0, midpoint: 50 },
+              { color: { r: 0, g: 0, b: 255 }, location: 4096, midpoint: 50 },
+            ],
+            opacityStops: [
+              { opacity: 1, location: 0, midpoint: 50 },
+              { opacity: 1, location: 4096, midpoint: 50 },
+            ],
+          },
+        }],
+      },
+    }],
+  };
+
+  const imported = await importPsd(writePsd(source, { noBackground: true }));
+  const layer = imported.layers.find((candidate) => candidate.name === "Styled")!;
+  const byKind = new Map<LayerEffectKind, LayerEffect>((layer.effects ?? []).map((effect) => [effect.kind, effect]));
+  assert.equal(byKind.get("inner-glow")?.glowSource, "center");
+  assert.equal(byKind.get("inner-glow")?.blur, 8);
+  assert.equal(byKind.get("satin")?.invert, true);
+  assert.ok(Math.abs((byKind.get("satin")?.offsetX ?? 0) - 9) < 0.001, "satin angle/distance became the wrong offset");
+  const gradient = byKind.get("gradient-overlay")!;
+  assert.equal(gradient.gradientStyle, "radial");
+  assert.equal(gradient.gradientAngle, 45);
+  assert.deepEqual(gradient.stops?.map((stop) => stop.color), ["#ff0000", "#0000ff"]);
+
+  // Edit so the export cannot short-circuit to the preserved descriptor.
+  layer.effects = (layer.effects ?? []).map((effect) =>
+    effect.kind === "inner-glow" ? { ...effect, blur: 21 } : effect);
+
+  const restored = readPsd(exportPsd(imported), { skipLayerImageData: true, skipCompositeImageData: true });
+  const written = restored.children?.[0]?.effects;
+  assert.equal(written?.innerGlow?.size?.value, 21);
+  assert.equal(written?.innerGlow?.source, "center");
+  assert.equal(written?.satin?.invert, true);
+  assert.equal(written?.gradientOverlay?.[0].type, "radial");
+  assert.equal(written?.gradientOverlay?.[0].gradient?.type === "solid"
+    ? written.gradientOverlay[0].gradient.colorStops.length
+    : 0, 2);
+});
+
+test("pattern overlay is reported as unexportable rather than dropped in silence", () => {
+  // Photoshop patterns are library assets we cannot synthesize. Every other
+  // unmapped effect used to vanish without a word; this one says so.
+  const doc = createDocument(16, 16);
+  const layer = createRasterLayer("Patterned", newCanvas(16, 16));
+  layer.effects = [{
+    id: "p1", kind: "pattern-overlay", enabled: true, opacity: 1,
+    color: "#101014", blur: 0, offsetX: 0, offsetY: 0, pattern: "dots",
+  }];
+  doc.layers = [layer];
+
+  const report = photoshopCompatibilityReport(doc);
+  const issue = report.issues.find((candidate) => candidate.code === "PATTERN_OVERLAY_NOT_EXPORTED");
+  assert.ok(issue, "no warning for an effect Photoshop cannot receive");
+  assert.equal(issue.severity, "warning");
+  assert.ok(report.canExport, "the rest of the document should still export");
+});
+
 test("removing an effect in Luma removes it from the exported PSD", async () => {
   // mergedEffects used to only override dropShadow, so a stroke deleted in
   // Luma came back from the preserved source descriptor.

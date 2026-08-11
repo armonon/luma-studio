@@ -54,7 +54,9 @@ import {
   resolvedBlendPasses,
   resolvedBlendIf,
   resolvedFillOpacity,
+  resolvedGlobalLight,
   transformPoint,
+  type GlobalLight,
 } from "./document";
 import { isNeutralBlendIf } from "./blend";
 import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
@@ -203,6 +205,14 @@ export type LayerSnapshot = {
   ai?: AiProvenance;
   raw?: RawLayerSource;
   effects?: LayerEffect[];
+};
+
+/** A layer style on the clipboard: effects plus the blending options. */
+export type CopiedLayerStyle = {
+  effects: LayerEffect[];
+  blendStack: BlendPass[];
+  blendIf: BlendIf;
+  fillOpacity: number;
 };
 
 export type HistoryEntry = {
@@ -427,6 +437,8 @@ export class Studio {
   actions = new ActionRecorder();
   useGL = false; // GPU compositing (RGBA16F) when true and supported
   private subscribers = new Set<SubscribeFn>();
+  /** Copy/Paste Layer Style, session-scoped like Photoshop's. */
+  private styleClipboard: CopiedLayerStyle | null = null;
   private history: OperationHistory<HistoryEntry>;
   private readonly historyBudgetBytes: number;
   private renderScheduled = false;
@@ -2084,6 +2096,27 @@ export class Studio {
           enabled: true, opacity: 0.75, color: "rgba(0,0,0,0.9)", blur: 6, offsetX: 0, offsetY: 0,
           depth: 4, angle: 135, highlightColor: "#ffffff", shadowColor: "#000000",
         };
+      case "inner-glow":
+        return {
+          enabled: true, opacity: 0.55, color: "rgba(255,238,170,1)", blur: 18, offsetX: 0, offsetY: 0,
+          glowSource: "edge",
+        };
+      case "satin":
+        return {
+          enabled: true, opacity: 0.4, color: "rgba(0,0,0,0.9)", blur: 14, offsetX: 11, offsetY: 11,
+          invert: true,
+        };
+      case "gradient-overlay":
+        return {
+          enabled: true, opacity: 1, color: "#7656ef", blur: 0, offsetX: 0, offsetY: 0,
+          stops: [{ offset: 0, color: "#7656ef" }, { offset: 1, color: "#2385f4" }],
+          gradientAngle: 90, gradientStyle: "linear",
+        };
+      case "pattern-overlay":
+        return {
+          enabled: true, opacity: 0.35, color: "#101014", blur: 0, offsetX: 0, offsetY: 0,
+          pattern: "checker", patternScale: 16,
+        };
     }
   }
 
@@ -2136,6 +2169,122 @@ export class Studio {
     layer.effects = [...(layer.effects ?? []), effect];
     this.commit({ label: "Drop shadow", before: [before], after: [{ layerId, effects: cloneEffects(layer.effects) }] });
     this.actions.push({ op: "addDropShadow" });
+    this.requestRender();
+  }
+
+  /**
+   * Multiply every size-like field of a layer's effects.
+   *
+   * Photoshop's Scale Effects: a one-shot rewrite of the numbers rather than a
+   * stored multiplier, so it lands in history as a single undoable edit and
+   * nothing downstream has to know about a scale factor.
+   */
+  scaleLayerEffects(layerId: string, factor: number) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.effects?.length || layer.locked) return;
+    if (!Number.isFinite(factor) || factor <= 0) return;
+    const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects) };
+    const grow = (value: number | undefined) => value === undefined ? undefined : value * factor;
+    layer.effects = layer.effects.map((effect) => ({
+      ...effect,
+      blur: effect.blur * factor,
+      offsetX: effect.offsetX * factor,
+      offsetY: effect.offsetY * factor,
+      width: grow(effect.width),
+      depth: grow(effect.depth),
+      patternScale: grow(effect.patternScale),
+    }));
+    this.commit({
+      label: `Effects scaled ${Math.round(factor * 100)}%`,
+      before: [before],
+      after: [{ layerId, effects: cloneEffects(layer.effects) }],
+    });
+    this.requestRender();
+  }
+
+  /**
+   * Photoshop's Copy/Paste Layer Style: the effects *and* the blending
+   * options, which is what makes a pasted style actually look the same.
+   */
+  copyLayerStyle(layerId: string) {
+    const layer = this.findLayer(layerId);
+    if (!layer) return null;
+    this.styleClipboard = {
+      effects: cloneEffects(layer.effects ?? []),
+      blendStack: resolvedBlendPasses(layer).map((pass) => ({ ...pass })),
+      blendIf: cloneBlendIf(resolvedBlendIf(layer)),
+      fillOpacity: resolvedFillOpacity(layer),
+    };
+    return this.styleClipboard;
+  }
+
+  hasCopiedLayerStyle() {
+    return this.styleClipboard !== null;
+  }
+
+  pasteLayerStyle(layerId: string) {
+    const style = this.styleClipboard;
+    const layer = this.findLayer(layerId);
+    if (!style || !layer || layer.kind === "group" || layer.locked) return false;
+    const before: LayerSnapshot = {
+      layerId,
+      effects: cloneEffects(layer.effects ?? []),
+      blendStack: layer.blendStack ? layer.blendStack.map((pass) => ({ ...pass })) : null,
+      blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
+      fillOpacity: layer.fillOpacity ?? null,
+    };
+    // Fresh ids: two layers must not share effect or pass identity, or editing
+    // one would look like editing the other to every id-keyed lookup.
+    layer.effects = style.effects.map((effect) => ({ ...effect, id: nextId("effect") }));
+    layer.blendStack = style.blendStack.map((pass) => ({ ...pass, id: nextId("pass") }));
+    layer.blendIf = cloneBlendIf(style.blendIf);
+    layer.fillOpacity = style.fillOpacity;
+    this.commit({
+      label: "Layer style pasted",
+      before: [before],
+      after: [{
+        layerId,
+        effects: cloneEffects(layer.effects),
+        blendStack: layer.blendStack.map((pass) => ({ ...pass })),
+        blendIf: cloneBlendIf(layer.blendIf),
+        fillOpacity: layer.fillOpacity,
+      }],
+    });
+    this.requestRender();
+    return true;
+  }
+
+  /** Remove every effect from a layer in one undoable step. */
+  clearLayerStyle(layerId: string) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.effects?.length || layer.locked) return false;
+    const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects) };
+    layer.effects = [];
+    this.commit({ label: "Layer style cleared", before: [before], after: [{ layerId, effects: [] }] });
+    this.requestRender();
+    return true;
+  }
+
+  /**
+   * The shared light direction every opted-in effect follows.
+   *
+   * Document-level, so it snapshots the document the way guides and resize do.
+   * The layers are shared by reference through cloneDocument, so this is cheap
+   * even though it looks like a whole-document capture.
+   */
+  setGlobalLight(patch: Partial<GlobalLight>) {
+    const current = resolvedGlobalLight(this.doc);
+    const next = { ...current, ...patch };
+    if (next.angle === current.angle && next.altitude === current.altitude) return;
+    const before = cloneDocument(this.doc);
+    this.doc.globalLight = next;
+    this.commit({
+      label: "Global light",
+      before: [],
+      after: [],
+      documentBefore: before,
+      documentAfter: cloneDocument(this.doc),
+    });
     this.requestRender();
   }
 

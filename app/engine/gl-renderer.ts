@@ -316,8 +316,9 @@ function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
     newCanvas(doc.width, doc.height),
     newCanvas(doc.width, doc.height),
     layer,
-    { width: doc.width, height: doc.height },
+    { x: 0, y: 0, width: doc.width, height: doc.height, outputWidth: doc.width, outputHeight: doc.height },
     { x: 1, y: 1 },
+    doc.globalLight,
   );
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);

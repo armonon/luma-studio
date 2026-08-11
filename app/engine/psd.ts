@@ -36,6 +36,7 @@ import {
   newCanvas,
   resolvedBlendIf,
   resolvedFillOpacity,
+  resolvedGradientStops,
   resolvedBlendPasses,
 } from "./document";
 import {
@@ -254,6 +255,43 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
     position: effect.position ?? "outside",
   }));
 
+  if (source.innerGlow) {
+    effects.push({
+      ...base("inner-glow", 0, source.innerGlow.enabled, source.innerGlow.opacity),
+      color: psdColorToCss(source.innerGlow.color),
+      blur: source.innerGlow.size?.value ?? 12,
+      glowSource: source.innerGlow.source === "center" ? "center" : "edge",
+    });
+  }
+
+  if (source.satin) {
+    effects.push({
+      ...base("satin", 0, source.satin.enabled, source.satin.opacity),
+      color: psdColorToCss(source.satin.color),
+      blur: source.satin.size?.value ?? 12,
+      invert: !!source.satin.invert,
+      ...shadowOffset(source.satin),
+    });
+  }
+
+  source.gradientOverlay?.forEach((effect, index) => {
+    const gradient = effect.gradient;
+    const stops = gradient && gradient.type === "solid"
+      ? gradient.colorStops.map((stop) => ({
+        offset: Math.max(0, Math.min(1, stop.location / 4096)),
+        color: psdColorToCss(stop.color),
+      }))
+      : undefined;
+    effects.push({
+      ...base("gradient-overlay", index, effect.enabled, effect.opacity ?? 1),
+      color: stops?.[0]?.color ?? "#000000",
+      stops: stops?.length ? stops : undefined,
+      gradientAngle: effect.angle ?? 90,
+      gradientStyle: effect.type === "radial" ? "radial" : "linear",
+      reverse: !!effect.reverse,
+    });
+  });
+
   if (source.bevel) {
     effects.push({
       ...base("bevel-emboss", 0, source.bevel.enabled, source.bevel.highlightOpacity),
@@ -287,10 +325,57 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
   });
 
   const glow = of("outer-glow")[0];
+  const innerGlow = of("inner-glow")[0];
+  const satin = of("satin")[0];
   const bevel = of("bevel-emboss")[0];
   const list = <T>(items: T[]) => items.length ? items : undefined;
 
   return {
+    innerGlow: innerGlow && {
+      present: true,
+      showInDialog: true,
+      enabled: innerGlow.enabled,
+      size: px(innerGlow.blur),
+      color: cssColorToPsd(innerGlow.color),
+      blendMode: "screen" as const,
+      opacity: innerGlow.opacity,
+      source: (innerGlow.glowSource ?? "edge") === "center" ? "center" as const : "edge" as const,
+    },
+    satin: satin && {
+      present: true,
+      showInDialog: true,
+      enabled: satin.enabled,
+      size: px(satin.blur),
+      color: cssColorToPsd(satin.color),
+      blendMode: "multiply" as const,
+      opacity: satin.opacity,
+      invert: !!satin.invert,
+      angle: Math.atan2(satin.offsetY, satin.offsetX) * 180 / Math.PI,
+      distance: px(Math.hypot(satin.offsetX, satin.offsetY)),
+    },
+    gradientOverlay: list(of("gradient-overlay").map((effect) => ({
+      present: true,
+      showInDialog: true,
+      enabled: effect.enabled,
+      opacity: effect.opacity,
+      blendMode: "normal",
+      angle: effect.gradientAngle ?? 90,
+      type: (effect.gradientStyle ?? "linear") === "radial" ? "radial" as const : "linear" as const,
+      reverse: !!effect.reverse,
+      gradient: {
+        name: "Luma gradient",
+        type: "solid" as const,
+        colorStops: resolvedGradientStops(effect).map((stop) => ({
+          color: cssColorToPsd(stop.color),
+          location: Math.round(stop.offset * 4096),
+          midpoint: 50,
+        })),
+        opacityStops: [
+          { opacity: 1, location: 0, midpoint: 50 },
+          { opacity: 1, location: 4096, midpoint: 50 },
+        ],
+      },
+    }))),
     dropShadow: list(of("drop-shadow").map(shadow)),
     innerShadow: list(of("inner-shadow").map(shadow)),
     outerGlow: glow && {
@@ -990,7 +1075,10 @@ function preservedLayerFields(layer: Layer): PsdLayer {
  * render still come through from `preserved`.
  */
 /** The effect keys `effectsToPsd` is authoritative for. The rest pass through. */
-const OWNED_EFFECT_KEYS = ["dropShadow", "innerShadow", "outerGlow", "solidFill", "stroke", "bevel"] as const;
+const OWNED_EFFECT_KEYS = [
+  "dropShadow", "innerShadow", "outerGlow", "innerGlow", "satin",
+  "solidFill", "gradientOverlay", "stroke", "bevel",
+] as const;
 
 function mergedEffects(layer: Layer, generated: Partial<LayerEffectsInfo>): LayerEffectsInfo | undefined {
   const metadata = getPhotoshopLayerMetadata(layer);
@@ -1361,6 +1449,18 @@ export function photoshopCompatibilityReport(
   }
   if (doc.width <= 0 || doc.height <= 0) {
     issues.push({ code: "INVALID_DIMENSIONS", severity: "error", message: "Photoshop documents require positive dimensions." });
+  }
+  // Photoshop pattern overlays reference a pattern from its library. Ours are
+  // procedural, so there is no asset to write; say so rather than dropping the
+  // effect silently, which is what every other unmapped kind used to do.
+  const patternLayers = doc.layers.filter((layer) =>
+    layer.effects?.some((effect) => effect.kind === "pattern-overlay" && effect.enabled));
+  if (patternLayers.length) {
+    issues.push({
+      code: "PATTERN_OVERLAY_NOT_EXPORTED",
+      severity: "warning",
+      message: `Pattern Overlay is procedural in Luma and has no Photoshop pattern asset, so it is not written to the file (${patternLayers.length} layer${patternLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+    });
   }
   if (container === "psd" && (doc.width > 30000 || doc.height > 30000)) {
     issues.push({ code: "PSD_DIMENSION_LIMIT", severity: "error", message: "PSD is limited to 30,000 pixels per side; export as PSB." });

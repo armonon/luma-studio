@@ -514,7 +514,11 @@ export type LayerEffectKind =
   | "drop-shadow"
   | "inner-shadow"
   | "outer-glow"
+  | "inner-glow"
+  | "satin"
   | "color-overlay"
+  | "gradient-overlay"
+  | "pattern-overlay"
   | "stroke"
   | "bevel-emboss";
 
@@ -522,6 +526,30 @@ export type LayerEffectKind =
 export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow"];
 
 export type StrokePosition = "outside" | "inside" | "center";
+/** Edge glows hug the inside of the silhouette; centre glows radiate outwards. */
+export type GlowSource = "edge" | "center";
+export type GradientStyle = "linear" | "radial";
+export type PatternKind = "checker" | "stripes" | "dots";
+
+export type GradientStop = { offset: number; color: string };
+
+export const DEFAULT_GRADIENT_STOPS: ReadonlyArray<GradientStop> = [
+  { offset: 0, color: "#000000" },
+  { offset: 1, color: "#ffffff" },
+];
+
+/**
+ * The shared light direction, so shadows, satin and bevels agree.
+ *
+ * Photoshop's default. `altitude` is carried for PSD fidelity; the 2D
+ * compositor has no surface normals to light, so nothing reads it yet.
+ */
+export type GlobalLight = { angle: number; altitude: number };
+export const DEFAULT_GLOBAL_LIGHT: GlobalLight = { angle: 120, altitude: 30 };
+
+export function resolvedGlobalLight(doc: Pick<Document, "globalLight">): GlobalLight {
+  return doc.globalLight ?? DEFAULT_GLOBAL_LIGHT;
+}
 
 export type LayerEffect = {
   id: string;
@@ -532,6 +560,9 @@ export type LayerEffect = {
   blur: number;
   offsetX: number;
   offsetY: number;
+  /** Take the direction from the document's global light instead of this
+   *  effect's own angle, keeping the offset's distance. Shadows, satin, bevel. */
+  useGlobalLight?: boolean;
   /** stroke only — thickness in document pixels. Defaults to 3. */
   width?: number;
   /** stroke only — defaults to "outside". */
@@ -544,6 +575,24 @@ export type LayerEffect = {
   highlightColor?: string;
   /** bevel-emboss only. Defaults to black. */
   shadowColor?: string;
+  /** inner-glow only — defaults to "edge". */
+  glowSource?: GlowSource;
+  /** satin only — flips the sheen. Defaults to false. */
+  invert?: boolean;
+  /** gradient-overlay only. Defaults to DEFAULT_GRADIENT_STOPS. */
+  stops?: GradientStop[];
+  /** gradient-overlay only — degrees. Defaults to 90. */
+  gradientAngle?: number;
+  /** gradient-overlay only. Defaults to "linear". */
+  gradientStyle?: GradientStyle;
+  /** gradient-overlay only. Defaults to false. */
+  reverse?: boolean;
+  /** pattern-overlay only. Defaults to "checker". */
+  pattern?: PatternKind;
+  /** pattern-overlay only — cell size in document pixels. Defaults to 16. */
+  patternScale?: number;
+  /** pattern-overlay only — the colour behind `color`. Defaults to transparent. */
+  patternBackground?: string;
 };
 
 export function isEffectBelowContent(kind: LayerEffectKind) {
@@ -555,7 +604,11 @@ export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
   "bevel-emboss",
   "stroke",
   "inner-shadow",
+  "inner-glow",
+  "satin",
   "color-overlay",
+  "gradient-overlay",
+  "pattern-overlay",
   "outer-glow",
   "drop-shadow",
 ];
@@ -564,22 +617,68 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
   "bevel-emboss": "Bevel & Emboss",
   stroke: "Stroke",
   "inner-shadow": "Inner Shadow",
+  "inner-glow": "Inner Glow",
+  satin: "Satin",
   "color-overlay": "Color Overlay",
+  "gradient-overlay": "Gradient Overlay",
+  "pattern-overlay": "Pattern Overlay",
   "outer-glow": "Outer Glow",
   "drop-shadow": "Drop Shadow",
 };
 
 /** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
-export type EffectField = "offset" | "blur" | "width" | "position" | "depth" | "angle" | "bevelColors";
+/**
+ * One entry per control, never a group: a compound "gradient" entry let a
+ * change to the stops hide the fact that the angle was being ignored, so the
+ * table stopped proving anything about the angle.
+ */
+export type EffectField =
+  | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "bevelColors"
+  | "globalLight" | "glowSource" | "invert"
+  | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
+  | "pattern" | "patternScale";
 
 export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> = {
-  "drop-shadow": ["offset", "blur"],
-  "inner-shadow": ["offset", "blur"],
+  "drop-shadow": ["offset", "blur", "globalLight"],
+  "inner-shadow": ["offset", "blur", "globalLight"],
   "outer-glow": ["blur"],
+  "inner-glow": ["blur", "glowSource"],
+  satin: ["offset", "blur", "invert", "globalLight"],
   "color-overlay": [],
+  "gradient-overlay": ["gradientStops", "gradientAngle", "gradientStyle", "gradientReverse"],
+  "pattern-overlay": ["pattern", "patternScale"],
   stroke: ["width", "position"],
-  "bevel-emboss": ["depth", "angle", "blur", "bevelColors"],
+  "bevel-emboss": ["depth", "angle", "blur", "bevelColors", "globalLight"],
 };
+
+/**
+ * The offset an effect actually uses, after global light.
+ *
+ * Global light shares a direction, not a distance: the effect keeps how far it
+ * throws and only borrows the angle, which is what makes every shadow in a
+ * document line up while staying individually tunable.
+ */
+export function resolvedEffectOffset(effect: LayerEffect, light: GlobalLight = DEFAULT_GLOBAL_LIGHT) {
+  if (!effect.useGlobalLight) return { x: effect.offsetX, y: effect.offsetY };
+  const distance = Math.hypot(effect.offsetX, effect.offsetY);
+  const radians = (light.angle * Math.PI) / 180;
+  return { x: Math.cos(radians) * distance, y: -Math.sin(radians) * distance };
+}
+
+/** The bevel light angle in degrees, after global light. */
+export function resolvedEffectAngle(effect: LayerEffect, light: GlobalLight = DEFAULT_GLOBAL_LIGHT) {
+  return effect.useGlobalLight ? light.angle : (effect.angle ?? 135);
+}
+
+/** Gradient stops in ascending order, with `reverse` already applied. */
+export function resolvedGradientStops(effect: LayerEffect): GradientStop[] {
+  const stops = (effect.stops?.length ? effect.stops : DEFAULT_GRADIENT_STOPS)
+    .map((stop) => ({ offset: Math.max(0, Math.min(1, stop.offset)), color: stop.color }));
+  const oriented = effect.reverse
+    ? stops.map((stop) => ({ offset: 1 - stop.offset, color: stop.color }))
+    : stops;
+  return oriented.sort((a, b) => a.offset - b.offset);
+}
 
 export function effectUses(kind: LayerEffectKind, field: EffectField) {
   return EFFECT_FIELDS[kind].includes(field);
@@ -604,9 +703,9 @@ export function effectsInPaintOrder(effects: ReadonlyArray<LayerEffect>): LayerE
 }
 
 /** Light direction resolved to a pixel offset for bevel/emboss. */
-export function bevelOffset(effect: LayerEffect) {
+export function bevelOffset(effect: LayerEffect, light: GlobalLight = DEFAULT_GLOBAL_LIGHT) {
   const depth = effect.depth ?? 3;
-  const radians = ((effect.angle ?? 135) * Math.PI) / 180;
+  const radians = (resolvedEffectAngle(effect, light) * Math.PI) / 180;
   return { dx: Math.cos(radians) * depth, dy: -Math.sin(radians) * depth };
 }
 
@@ -787,6 +886,8 @@ export type Document = {
   resolution: { x: number; y: number; unit: "ppi" };
   guides: Guide[];
   proofing: ProofSettings;
+  /** Shared light direction for shadows, satin and bevels. */
+  globalLight?: GlobalLight;
   capturedBrushes?: CapturedBrushAsset[];
   layerComps?: LayerComp[];
   artboards?: Artboard[];

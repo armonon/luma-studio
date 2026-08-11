@@ -5,18 +5,25 @@ import type { Studio } from "@/app/engine/studio";
 import {
   BLEND_LABELS,
   BLEND_MODE_GROUPS,
+  DEFAULT_GRADIENT_STOPS,
   EFFECT_LABELS,
   LAYER_EFFECT_KINDS,
   effectUses,
   resolvedBlendIf,
   resolvedBlendPasses,
   resolvedFillOpacity,
+  resolvedGlobalLight,
   type BlendIf,
   type BlendIfRange,
   type BlendMode,
+  type GlobalLight,
+  type GlowSource,
+  type GradientStop,
+  type GradientStyle,
   type Layer,
   type LayerEffect,
   type LayerEffectKind,
+  type PatternKind,
   type StrokePosition,
 } from "@/app/engine/document";
 import { formatCssColor, parseCssColor } from "@/app/engine/color";
@@ -88,6 +95,51 @@ function Slider({ label, value, min, max, step = 1, suffix = "", onChange }: {
   );
 }
 
+/** Gradient stops, editable in place: colour and position, add and remove. */
+function GradientStopsEditor({ stops, onChange }: {
+  stops: GradientStop[];
+  onChange: (stops: GradientStop[]) => void;
+}) {
+  const replace = (index: number, patch: Partial<GradientStop>) =>
+    onChange(stops.map((stop, i) => i === index ? { ...stop, ...patch } : stop));
+  const preview = `linear-gradient(90deg, ${stops.map((stop) => `${stop.color} ${stop.offset * 100}%`).join(", ")})`;
+  return (
+    <div className="gradient-stops">
+      <div className="gradient-stops-preview" style={{ background: preview }} />
+      {stops.map((stop, index) => (
+        <div className="gradient-stop" key={index}>
+          <input
+            type="color"
+            value={parseCssColor(stop.color).hex}
+            onChange={(event) => replace(index, { color: event.target.value })}
+            aria-label={`Gradient stop ${index + 1} color`}
+          />
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={Math.round(stop.offset * 100)}
+            onChange={(event) => replace(index, { offset: Number(event.target.value) / 100 })}
+            aria-label={`Gradient stop ${index + 1} position`}
+          />
+          <output>{Math.round(stop.offset * 100)}%</output>
+          <button
+            type="button"
+            disabled={stops.length <= 2}
+            onClick={() => onChange(stops.filter((_, i) => i !== index))}
+            aria-label={`Remove gradient stop ${index + 1}`}
+          >×</button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="gradient-stop-add"
+        onClick={() => onChange([...stops, { offset: 0.5, color: stops[stops.length - 1]?.color ?? "#ffffff" }])}
+      >＋ Add stop</button>
+    </div>
+  );
+}
+
 /** Controls for one effect instance, showing only the fields its kind reads. */
 function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; layerId: string; studio: Studio }) {
   const patch = (next: Partial<Omit<LayerEffect, "id" | "kind">>) =>
@@ -95,7 +147,7 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
   return (
     <div className="layer-style-effect">
       <Slider label="Opacity" value={effect.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ opacity: v / 100 })} />
-      {effect.kind !== "bevel-emboss" && (
+      {effect.kind !== "bevel-emboss" && effect.kind !== "gradient-overlay" && (
         <ColorField label="Color" value={effect.color} onChange={(color) => patch({ color })} />
       )}
       {effectUses(effect.kind, "blur") && (
@@ -136,6 +188,76 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
           <ColorField label="Shadow" value={effect.shadowColor ?? "#000000"} onChange={(shadowColor) => patch({ shadowColor })} />
         </>
       )}
+      {effectUses(effect.kind, "glowSource") && (
+        <label className="layer-style-select">
+          <span>Source</span>
+          <select
+            value={effect.glowSource ?? "edge"}
+            onChange={(event) => patch({ glowSource: event.target.value as GlowSource })}
+            aria-label="Glow source"
+          >
+            <option value="edge">Edge</option>
+            <option value="center">Center</option>
+          </select>
+        </label>
+      )}
+      {effectUses(effect.kind, "invert") && (
+        <label className="layer-style-check">
+          <span>Invert</span>
+          <input type="checkbox" checked={!!effect.invert} onChange={(event) => patch({ invert: event.target.checked })} />
+        </label>
+      )}
+      {effectUses(effect.kind, "gradientStops") && (
+        <>
+          <Slider label="Angle" value={effect.gradientAngle ?? 90} min={0} max={360} suffix="°" onChange={(gradientAngle) => patch({ gradientAngle })} />
+          <label className="layer-style-select">
+            <span>Style</span>
+            <select
+              value={effect.gradientStyle ?? "linear"}
+              onChange={(event) => patch({ gradientStyle: event.target.value as GradientStyle })}
+              aria-label="Gradient style"
+            >
+              <option value="linear">Linear</option>
+              <option value="radial">Radial</option>
+            </select>
+          </label>
+          <label className="layer-style-check">
+            <span>Reverse</span>
+            <input type="checkbox" checked={!!effect.reverse} onChange={(event) => patch({ reverse: event.target.checked })} />
+          </label>
+          <GradientStopsEditor
+            stops={effect.stops?.length ? effect.stops : [...DEFAULT_GRADIENT_STOPS]}
+            onChange={(stops) => patch({ stops })}
+          />
+        </>
+      )}
+      {effectUses(effect.kind, "pattern") && (
+        <>
+          <label className="layer-style-select">
+            <span>Pattern</span>
+            <select
+              value={effect.pattern ?? "checker"}
+              onChange={(event) => patch({ pattern: event.target.value as PatternKind })}
+              aria-label="Pattern"
+            >
+              <option value="checker">Checker</option>
+              <option value="stripes">Stripes</option>
+              <option value="dots">Dots</option>
+            </select>
+          </label>
+          <Slider label="Scale" value={effect.patternScale ?? 16} min={2} max={128} suffix="px" onChange={(patternScale) => patch({ patternScale })} />
+        </>
+      )}
+      {effectUses(effect.kind, "globalLight") && (
+        <label className="layer-style-check">
+          <span>Use global light</span>
+          <input
+            type="checkbox"
+            checked={!!effect.useGlobalLight}
+            onChange={(event) => patch({ useGlobalLight: event.target.checked })}
+          />
+        </label>
+      )}
       <div className="layer-style-effect-actions">
         <button type="button" onClick={() => patch({ enabled: !effect.enabled })}>
           {effect.enabled ? "Disable" : "Enable"}
@@ -147,7 +269,7 @@ function EffectControls({ effect, layerId, studio }: { effect: LayerEffect; laye
 }
 
 /** Layer opacity, blend mode, fill opacity and Blend If — the tonal knockout sliders. */
-function BlendingOptions({ layer, studio }: { layer: Layer; studio: Studio }) {
+function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studio; light: GlobalLight }) {
   const passes = resolvedBlendPasses(layer);
   const blendIf = resolvedBlendIf(layer);
   const fillOpacity = resolvedFillOpacity(layer);
@@ -160,6 +282,13 @@ function BlendingOptions({ layer, studio }: { layer: Layer; studio: Studio }) {
   };
   return (
     <div className="layer-style-blending">
+      <div className="global-light">
+        <div className="blend-if-heading">
+          <span><strong>Global light</strong><small>Shared by every effect opted in</small></span>
+        </div>
+        <Slider label="Angle" value={light.angle} min={0} max={360} suffix="°" onChange={(angle) => studio.setGlobalLight({ angle })} />
+        <Slider label="Altitude" value={light.altitude} min={0} max={90} suffix="°" onChange={(altitude) => studio.setGlobalLight({ altitude })} />
+      </div>
       <label className="layer-style-select">
         <span>Blend mode</span>
         <select
@@ -206,6 +335,7 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
 }) {
   const [pane, setPane] = useState<Pane>("blending");
   const effects = layer.effects ?? [];
+  const light = resolvedGlobalLight(studio.doc);
   const paneEffects = pane === "blending" ? [] : effects.filter((effect) => effect.kind === pane);
 
   useEffect(() => {
@@ -247,6 +377,13 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
           <span aria-hidden="true">fx</span>
           <strong>Layer Style</strong>
           <small>{layer.name}</small>
+          <div className="layer-style-actions">
+            <button type="button" onClick={() => studio.copyLayerStyle(layer.id)} title="Copy this layer's effects and blending options">Copy</button>
+            <button type="button" onClick={() => studio.pasteLayerStyle(layer.id)} disabled={!studio.hasCopiedLayerStyle()} title="Paste the copied style onto this layer">Paste</button>
+            <button type="button" onClick={() => studio.scaleLayerEffects(layer.id, 0.5)} disabled={!effects.length} title="Halve every effect size">−50%</button>
+            <button type="button" onClick={() => studio.scaleLayerEffects(layer.id, 2)} disabled={!effects.length} title="Double every effect size">+100%</button>
+            <button type="button" onClick={() => studio.clearLayerStyle(layer.id)} disabled={!effects.length} title="Remove every effect">Clear</button>
+          </div>
           <button type="button" onClick={onClose} aria-label="Close layer style">×</button>
         </header>
         <div className="layer-style-body">
@@ -293,7 +430,7 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
           </nav>
           <div className="layer-style-pane">
             {pane === "blending"
-              ? <BlendingOptions layer={layer} studio={studio} />
+              ? <BlendingOptions layer={layer} studio={studio} light={light} />
               : paneEffects.length
                 ? paneEffects.map((effect) => (
                   <EffectControls key={effect.id} effect={effect} layerId={layer.id} studio={studio} />

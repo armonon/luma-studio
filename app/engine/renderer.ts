@@ -813,10 +813,7 @@ function drawContentLayer(
   const scale = frameScale(frame);
   applySmartFilters(contentBuf, layer.filters, Math.sqrt(scale.x * scale.y));
 
-  composeLayerWithEffects(bctx, contentBuf, effectBuf, clipBuf, layer, {
-    width: frame.outputWidth,
-    height: frame.outputHeight,
-  }, scale);
+  composeLayerWithEffects(bctx, contentBuf, effectBuf, clipBuf, layer, frame, scale, doc.globalLight);
 
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
