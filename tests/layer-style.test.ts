@@ -127,10 +127,15 @@ function docWith(effect: LayerEffect): Document {
   ctx.fillRect(20, 20, 20, 20);
   const layer: Layer = { ...createRasterLayer("box", bitmap), effects: [effect] };
 
+  // Striped and coloured, not flat: blurring a uniform backdrop returns the
+  // same uniform colour, and desaturating a grey one changes nothing, so a
+  // flat backdrop would make Backdrop Blur look like it ignored its controls.
   const backdrop = newCanvas(SIZE, SIZE);
   const backdropCtx = backdrop.getContext("2d")!;
   backdropCtx.fillStyle = "#808080";
   backdropCtx.fillRect(0, 0, SIZE, SIZE);
+  backdropCtx.fillStyle = "#c04020";
+  for (let x = 0; x < SIZE; x += 12) backdropCtx.fillRect(x, 0, 6, SIZE);
 
   const doc = createDocument(SIZE, SIZE);
   doc.layers = [layer, createRasterLayer("backdrop", backdrop)];
@@ -161,6 +166,7 @@ function baseEffect(kind: LayerEffectKind): LayerEffect {
     stops: [{ offset: 0, color: "#ff0000" }, { offset: 1, color: "#0000ff" }],
     gradientAngle: 90, gradientStyle: "linear",
     pattern: "checker", patternScale: 8,
+    saturation: 1.6, tint: 0,
   };
 }
 
@@ -187,6 +193,8 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   gradientReverse: { reverse: true },
   pattern: { pattern: "stripes" },
   patternScale: { patternScale: 20 },
+  saturation: { saturation: 0 },
+  tint: { tint: 1 },
 };
 
 const ALL_FIELDS = Object.keys(FIELD_CHANGES) as EffectField[];
@@ -329,6 +337,77 @@ test("the GPU path declines rather than ignoring an effect blend mode", () => {
     /resolvedEffectBlendMode\(effect\) !== "source-over"\)\)\) return false;/,
     "gl-renderer must decline documents whose effect blend modes it cannot honour",
   );
+});
+
+// --- backdrop blur ---------------------------------------------------------
+
+test("backdrop blur averages what is behind the layer, not the layer itself", () => {
+  // A hard black/white split behind a transparent panel. Blurring the backdrop
+  // has to smear the two into greys at the boundary; blurring the layer's own
+  // pixels could not, because the layer has none there.
+  const backdrop = newCanvas(SIZE, SIZE);
+  const backdropCtx = backdrop.getContext("2d")!;
+  backdropCtx.fillStyle = "#000000";
+  backdropCtx.fillRect(0, 0, SIZE / 2, SIZE);
+  backdropCtx.fillStyle = "#ffffff";
+  backdropCtx.fillRect(SIZE / 2, 0, SIZE / 2, SIZE);
+
+  // The panel must be opaque. The effect is clipped to the layer's alpha, so a
+  // near-transparent panel would scale the whole blur down to nothing — which
+  // is correct behaviour, and was the first version of this test being wrong.
+  // Its own colour does not matter: Backdrop Blur paints over the content.
+  const panel = newCanvas(SIZE, SIZE);
+  const panelCtx = panel.getContext("2d")!;
+  panelCtx.fillStyle = "#00ff00";
+  panelCtx.fillRect(10, 10, SIZE - 20, SIZE - 20);
+
+  const glass: Layer = {
+    ...createRasterLayer("glass", panel),
+    effects: [{
+      ...baseEffect("backdrop-blur"),
+      id: "bb",
+      blur: 12,
+      saturation: 1,
+      tint: 0,
+      opacity: 1,
+    }],
+  };
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [glass, createRasterLayer("backdrop", backdrop)];
+
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+
+  // Just left of the seam the raw backdrop is pure black; the blur must have
+  // pulled white across it.
+  const nearSeam = pixelAt(target, SIZE / 2 - 3, 30);
+  assert.ok(
+    nearSeam.r > 30,
+    `expected the white half smeared across the seam, got r=${nearSeam.r}`,
+  );
+  // Outside the panel the backdrop must be untouched. Sample just past the
+  // seam on the white side and above the panel: raw backdrop is pure white
+  // there, but an unclipped blur would have greyed it from the black half.
+  const outside = pixelAt(target, SIZE / 2 + 3, 4);
+  assert.ok(outside.r > 230, `the blur escaped the layer silhouette, got r=${outside.r}`);
+});
+
+test("backdrop blur is a no-op when nothing is behind the layer", () => {
+  const panel = newCanvas(SIZE, SIZE);
+  const panelCtx = panel.getContext("2d")!;
+  panelCtx.fillStyle = "#ff0000";
+  panelCtx.fillRect(20, 20, 20, 20);
+  const layer: Layer = {
+    ...createRasterLayer("solo", panel),
+    effects: [{ ...baseEffect("backdrop-blur"), id: "bb", blur: 12, tint: 0, saturation: 1 }],
+  };
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [layer];
+
+  const target = testCanvas(SIZE, SIZE);
+  assert.doesNotThrow(() => renderClean(doc, target));
+  const inside = pixelAt(target, 30, 30);
+  assert.ok(inside.r > 200 && inside.g < 60, "the layer should be untouched with no backdrop");
 });
 
 // --- layer styles on groups ------------------------------------------------

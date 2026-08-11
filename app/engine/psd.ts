@@ -1510,6 +1510,17 @@ export function photoshopCompatibilityReport(
       message: `Pattern Overlay is procedural in Luma and has no Photoshop pattern asset, so it is not written to the file (${patternLayers.length} layer${patternLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
     });
   }
+  // Photoshop has no live backdrop effect at all — there you duplicate, merge
+  // and blur by hand — so there is nothing to write and it must be said.
+  const backdropLayers = doc.layers.filter((layer) =>
+    layer.effects?.some((effect) => effect.kind === "backdrop-blur" && effect.enabled));
+  if (backdropLayers.length) {
+    issues.push({
+      code: "BACKDROP_EFFECT_NOT_EXPORTED",
+      severity: "warning",
+      message: `Backdrop Blur reads the layers underneath and has no Photoshop layer style equivalent, so it is not written to the file (${backdropLayers.length} layer${backdropLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+    });
+  }
   if (container === "psd" && (doc.width > 30000 || doc.height > 30000)) {
     issues.push({ code: "PSD_DIMENSION_LIMIT", severity: "error", message: "PSD is limited to 30,000 pixels per side; export as PSB." });
   }

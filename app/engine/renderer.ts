@@ -765,7 +765,9 @@ function renderOverscanPixels(doc: Document, displayScale: number) {
       if (reach > 0) extent = Math.max(extent, reach * displayScale);
     }
   }
-  return Math.max(2, Math.min(96, Math.ceil(extent)));
+  // Bounded so a runaway radius cannot make every tile enormous, but high
+  // enough for a heavy backdrop blur, whose seams are plainly visible.
+  return Math.max(2, Math.min(192, Math.ceil(extent)));
 }
 
 function applySoftProof(ctx: CanvasRenderingContext2D, doc: Document, width: number, height: number) {

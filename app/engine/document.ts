@@ -520,7 +520,8 @@ export type LayerEffectKind =
   | "gradient-overlay"
   | "pattern-overlay"
   | "stroke"
-  | "bevel-emboss";
+  | "bevel-emboss"
+  | "backdrop-blur";
 
 /** Effects painted beneath the layer content; the rest paint over it. */
 export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow"];
@@ -612,6 +613,13 @@ export type LayerEffect = {
   patternScale?: number;
   /** pattern-overlay only — the colour behind `color`. Defaults to transparent. */
   patternBackground?: string;
+  /**
+   * backdrop-blur only — saturation of the blurred backdrop, where 1 leaves it
+   * alone. Real vibrancy pushes past 1; the frosted look is mostly this.
+   */
+  saturation?: number;
+  /** backdrop-blur only — how strongly `color` tints the result, 0..1. */
+  tint?: number;
 };
 
 export function isEffectBelowContent(kind: LayerEffectKind) {
@@ -630,6 +638,7 @@ export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
   "pattern-overlay",
   "outer-glow",
   "drop-shadow",
+  "backdrop-blur",
 ];
 
 export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
@@ -643,6 +652,7 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
   "pattern-overlay": "Pattern Overlay",
   "outer-glow": "Outer Glow",
   "drop-shadow": "Drop Shadow",
+  "backdrop-blur": "Backdrop Blur",
 };
 
 /** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
@@ -655,7 +665,7 @@ export type EffectField =
   | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "altitude" | "bevelColors"
   | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
-  | "pattern" | "patternScale";
+  | "pattern" | "patternScale" | "saturation" | "tint";
 
 /** Falloff shaping applies wherever an effect has a soft edge to shape. */
 const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
@@ -671,6 +681,7 @@ export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> 
   "pattern-overlay": ["blendMode", "pattern", "patternScale"],
   stroke: ["blendMode", "width", "position"],
   "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour"],
+  "backdrop-blur": ["blendMode", "blur", "saturation", "tint"],
 };
 
 /**
@@ -716,6 +727,7 @@ export const EFFECT_BLEND_DEFAULTS: Record<LayerEffectKind, BlendMode> = {
   "pattern-overlay": "source-over",
   stroke: "source-over",
   "bevel-emboss": "source-over",
+  "backdrop-blur": "source-over",
 };
 
 export function resolvedEffectBlendMode(effect: LayerEffect): BlendMode {

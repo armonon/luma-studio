@@ -643,6 +643,21 @@ test("pattern overlay is reported as unexportable rather than dropped in silence
   assert.ok(report.canExport, "the rest of the document should still export");
 });
 
+test("backdrop blur is reported as unexportable rather than dropped in silence", () => {
+  const doc = createDocument(16, 16);
+  const layer = createRasterLayer("Glass", newCanvas(16, 16));
+  layer.effects = [{
+    id: "b1", kind: "backdrop-blur", enabled: true, opacity: 1,
+    color: "#ffffff", blur: 24, offsetX: 0, offsetY: 0,
+  }];
+  doc.layers = [layer];
+
+  const issue = photoshopCompatibilityReport(doc).issues
+    .find((candidate) => candidate.code === "BACKDROP_EFFECT_NOT_EXPORTED");
+  assert.ok(issue, "no warning for an effect Photoshop has no equivalent for");
+  assert.equal(issue.severity, "warning");
+});
+
 test("removing an effect in Luma removes it from the exported PSD", async () => {
   // mergedEffects used to only override dropShadow, so a stroke deleted in
   // Luma came back from the preserved source descriptor.

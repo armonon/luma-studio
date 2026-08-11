@@ -66,7 +66,12 @@ function clearContext(ctx: CanvasRenderingContext2D, width: number, height: numb
 }
 
 /**
- * How far outside its own silhouette an effect can paint, in document pixels.
+ * How far outside its own silhouette an effect reaches, in document pixels.
+ *
+ * This sets the tile margin, so it covers reading as well as writing. Backdrop
+ * Blur paints nothing outside the layer but *samples* far outside it, and
+ * returning 0 gave every tile only its own slice of the backdrop to blur —
+ * which showed up as a grid of seams across the frosted panel.
  *
  * Deliberately independent of the light angle — global light can rotate a
  * shadow at any time, and an overscan that shrank with the angle would clip
@@ -88,6 +93,9 @@ export function layerEffectReach(effect: LayerEffect) {
     case "gradient-overlay":
     case "pattern-overlay":
     case "inner-shadow":
+    case "backdrop-blur":
+      // Sampling reach, not painting reach.
+      return effect.blur * 2;
     case "inner-glow":
     case "satin":
       return 0;
@@ -331,6 +339,7 @@ function drawLayerEffect(
   uniformScale: number,
   light: GlobalLight,
   bounds: PixelBounds,
+  backdrop: HTMLCanvasElement | null,
 ) {
   const size = { width: frame.outputWidth, height: frame.outputHeight };
   const ctx = effectBuf.getContext("2d")!;
@@ -479,6 +488,32 @@ function drawLayerEffect(
       break;
     }
 
+    case "backdrop-blur": {
+      // Frosted glass: blur what is *behind* the layer and keep it inside the
+      // layer's own silhouette. Photoshop has no live equivalent — there you
+      // duplicate, merge, blur and clip by hand, and it goes stale the moment
+      // anything underneath changes.
+      if (!backdrop) break;
+      const saturation = effect.saturation ?? 1.6;
+      ctx.filter = `blur(${blur}px) saturate(${saturation})`;
+      // Draw 1:1. The tile is already overscanned by layerEffectReach, so the
+      // darkened border where the blur samples past the edge falls outside the
+      // visible crop. Scaling the backdrop to fake a bleed instead distorts it
+      // and makes neighbouring tiles disagree — which is a visible seam.
+      ctx.drawImage(backdrop, 0, 0);
+      ctx.filter = "none";
+      const tint = Math.max(0, Math.min(1, effect.tint ?? 0));
+      if (tint > 0) {
+        ctx.globalAlpha = tint;
+        ctx.fillStyle = effect.color;
+        ctx.fillRect(0, 0, size.width, size.height);
+      }
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.globalAlpha = 1;
+      ctx.drawImage(contentBuf, 0, 0);
+      break;
+    }
+
     case "bevel-emboss": {
       // Light one edge and shade the opposite one, both confined to the layer.
       const { dx, dy } = bevelOffset(effect, light);
@@ -587,7 +622,7 @@ export function composeLayerWithEffects(
   // Shadows and glows sit under the layer's own pixels.
   for (const effect of effects) {
     if (!isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds);
+    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
     stampEffect(out, effectBuf, blend, backdrop, effect, size);
   }
 
@@ -600,7 +635,7 @@ export function composeLayerWithEffects(
   // drawLayerEffect leaves it unclipped and it still composites above.
   for (const effect of effects) {
     if (isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds);
+    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
     stampEffect(out, effectBuf, blend, backdrop, effect, size);
   }
 }

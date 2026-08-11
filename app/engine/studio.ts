@@ -2117,6 +2117,11 @@ export class Studio {
           enabled: true, opacity: 0.35, color: "#101014", blur: 0, offsetX: 0, offsetY: 0,
           pattern: "checker", patternScale: 16,
         };
+      case "backdrop-blur":
+        return {
+          enabled: true, opacity: 1, color: "#ffffff", blur: 24, offsetX: 0, offsetY: 0,
+          saturation: 1.8, tint: 0.12,
+        };
     }
   }
 
