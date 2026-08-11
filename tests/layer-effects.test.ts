@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import { pixelAt, testCanvas } from "./canvas-harness.ts";
 import {
   EFFECTS_BELOW_CONTENT,
   bevelOffset,
+  effectsInPaintOrder,
   createDocument,
   createRasterLayer,
   isEffectBelowContent,
@@ -185,6 +187,56 @@ test("effects stack: a stroke and an overlay both apply", () => {
   assert.ok(inside.b > 200, "overlay should still recolour the fill");
   const ring = pixelAt(target, 30, 18);
   assert.ok(ring.g > 150, "stroke should still paint outside");
+});
+
+test("the result does not depend on the order effects were added", () => {
+  // Photoshop paints layer styles in a fixed order. Rendering in array order
+  // made a stroke added before an overlay look different from the reverse.
+  const overlay = effect("color-overlay", { id: "a", color: "#0000ff" });
+  const stroke = effect("stroke", { id: "b", color: "#00ff00", width: 4, position: "outside" });
+  const digest = (effects: LayerEffect[]) => {
+    const target = render(effects);
+    const { data } = target.getContext("2d")!.getImageData(0, 0, SIZE, SIZE);
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString("base64");
+  };
+  assert.equal(digest([overlay, stroke]), digest([stroke, overlay]));
+});
+
+test("effects paint in Photoshop's order, not insertion order", () => {
+  // Colour overlay paints first, so a bevel stays visible on top of it.
+  const ordered = effectsInPaintOrder([
+    effect("bevel-emboss", { id: "bevel" }),
+    effect("drop-shadow", { id: "shadow" }),
+    effect("color-overlay", { id: "overlay" }),
+  ]);
+  assert.deepEqual(ordered.map((e) => e.kind), ["drop-shadow", "color-overlay", "bevel-emboss"]);
+});
+
+test("duplicate effects of one kind keep the order they were added", () => {
+  const ordered = effectsInPaintOrder([
+    effect("stroke", { id: "first" }),
+    effect("stroke", { id: "second" }),
+  ]);
+  assert.deepEqual(ordered.map((e) => e.id), ["first", "second"]);
+});
+
+test("the GPU renderer draws effects through the shared pipeline", () => {
+  // WebGL2 cannot run headlessly, so the guarantee is structural instead: the
+  // GPU path used to carry its own effect code that handled drop-shadow and
+  // silently skipped the other five, so exporting with GPU on produced a
+  // different image. Reintroducing a second implementation fails here.
+  const source = readFileSync(new URL("../app/engine/gl-renderer.ts", import.meta.url), "utf8");
+  assert.match(
+    source,
+    /import \{ composeLayerWithEffects \} from "\.\/layer-effects"/,
+    "gl-renderer must use the shared effect pipeline",
+  );
+  for (const marker of ["shadowBlur", "shadowOffsetX", 'kind !== "drop-shadow"']) {
+    assert.ok(
+      !source.includes(marker),
+      `gl-renderer contains "${marker}" — it is drawing effects itself again`,
+    );
+  }
 });
 
 test("every effect kind renders without throwing", () => {

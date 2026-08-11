@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { DEFAULT_DEPLOY_ORIGIN } from "../app/deploy-origin.ts";
 
 const config = JSON.parse(
   readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
 ) as {
-  app: { windows: Array<Record<string, unknown>> };
+  app: { windows: Array<Record<string, unknown>>; security?: { csp?: string } };
   build: Record<string, unknown>;
 };
 
@@ -35,4 +36,16 @@ test("the desktop window can still show the full inspector", () => {
 test("the desktop build points at a static frontend", () => {
   // Without frontendDist a packaged build has nothing to serve.
   assert.equal(config.build.frontendDist, "../dist-desktop");
+});
+
+test("the CSP allows the origin the desktop app actually calls", () => {
+  // A JSON config cannot import the constant, so the link is enforced here.
+  // Move the deploy host without updating the CSP and every AI edit in the
+  // desktop app fails on a connect-src violation.
+  const csp = config.app.security?.csp ?? "";
+  const connect = /connect-src ([^;]*)/.exec(csp)?.[1] ?? "";
+  assert.ok(
+    connect.includes(DEFAULT_DEPLOY_ORIGIN),
+    `connect-src must list ${DEFAULT_DEPLOY_ORIGIN}; got "${connect.trim()}"`,
+  );
 });

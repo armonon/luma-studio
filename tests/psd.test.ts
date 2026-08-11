@@ -11,6 +11,8 @@ import {
   createRasterLayer,
   createShapeLayer,
   newCanvas,
+  type LayerEffect,
+  type LayerEffectKind,
 } from "../app/engine/document.ts";
 import {
   exportPhotoshopDocument,
@@ -504,6 +506,87 @@ test("mask controls, non-Luma effects, group pass-through, guides, and resolutio
   assert.equal(child.effects?.innerShadow?.[0].color && "r" in child.effects.innerShadow[0].color ? child.effects.innerShadow[0].color.r : undefined, 12);
   assert.equal(restored.imageResources?.resolutionInfo?.horizontalResolution, 300);
   assert.deepEqual(restored.imageResources?.gridAndGuidesInformation?.guides, [{ location: 9, direction: "vertical" }]);
+});
+
+test("all six effect kinds survive a PSD round trip", async () => {
+  // Only drop shadows used to be mapped in either direction, so a stroke or a
+  // bevel authored in Photoshop vanished on import and one authored in Luma
+  // vanished on export — silently, in both cases.
+  const source: Psd = {
+    width: 16,
+    height: 16,
+    children: [{
+      name: "Styled",
+      canvas: newCanvas(16, 16),
+      left: 0,
+      top: 0,
+      effects: {
+        dropShadow: [{ enabled: true, size: { units: "Pixels", value: 6 }, distance: { units: "Pixels", value: 4 }, angle: 0, color: { r: 0, g: 0, b: 0 }, opacity: 0.5 }],
+        innerShadow: [{ enabled: true, size: { units: "Pixels", value: 3 }, distance: { units: "Pixels", value: 2 }, angle: 90, color: { r: 10, g: 20, b: 30 }, opacity: 0.4 }],
+        outerGlow: { enabled: true, size: { units: "Pixels", value: 9 }, color: { r: 255, g: 238, b: 170 }, opacity: 0.6 },
+        solidFill: [{ enabled: true, color: { r: 118, g: 86, b: 239 }, opacity: 1 }],
+        stroke: [{ enabled: true, size: { units: "Pixels", value: 5 }, position: "inside", color: { r: 16, g: 16, b: 20 }, opacity: 1 }],
+        bevel: { enabled: true, size: { units: "Pixels", value: 7 }, angle: 120, soften: { units: "Pixels", value: 2 }, highlightColor: { r: 255, g: 255, b: 255 }, shadowColor: { r: 0, g: 0, b: 0 }, highlightOpacity: 0.75 },
+      },
+    }],
+  };
+
+  const imported = await importPsd(writePsd(source, { noBackground: true }));
+  const layer = imported.layers.find((candidate) => candidate.name === "Styled");
+  assert.ok(layer, "imported layer missing");
+  const byKind = new Map<LayerEffectKind, LayerEffect>((layer.effects ?? []).map((effect) => [effect.kind, effect]));
+  assert.deepEqual(
+    [...byKind.keys()].sort(),
+    ["bevel-emboss", "color-overlay", "drop-shadow", "inner-shadow", "outer-glow", "stroke"],
+    "not every effect kind was imported",
+  );
+  assert.equal(byKind.get("stroke")!.width, 5);
+  assert.equal(byKind.get("stroke")!.position, "inside");
+  assert.equal(byKind.get("bevel-emboss")!.depth, 7);
+  assert.equal(byKind.get("bevel-emboss")!.angle, 120);
+  assert.equal(byKind.get("outer-glow")!.blur, 9);
+  assert.equal(byKind.get("color-overlay")!.color, "#7656ef");
+  assert.ok(Math.abs(byKind.get("drop-shadow")!.offsetX - 4) < 0.001, "shadow angle/distance became the wrong offset");
+
+  // Edit one effect so the export cannot short-circuit to preserved metadata.
+  layer.effects = (layer.effects ?? []).map((effect) =>
+    effect.kind === "stroke" ? { ...effect, width: 11 } : effect);
+
+  const restored = readPsd(exportPsd(imported), { skipLayerImageData: true, skipCompositeImageData: true });
+  const written = restored.children?.[0]?.effects;
+  assert.ok(written, "no effects were written back");
+  assert.equal(written.stroke?.[0].size?.value, 11, "the edited stroke width was not exported");
+  assert.equal(written.stroke?.[0].position, "inside");
+  assert.equal(written.bevel?.size?.value, 7);
+  assert.equal(written.outerGlow?.size?.value, 9);
+  assert.ok(written.solidFill?.length, "colour overlay was dropped on export");
+  assert.ok(written.innerShadow?.length, "inner shadow was dropped on export");
+  assert.ok(written.dropShadow?.length, "drop shadow was dropped on export");
+});
+
+test("removing an effect in Luma removes it from the exported PSD", async () => {
+  // mergedEffects used to only override dropShadow, so a stroke deleted in
+  // Luma came back from the preserved source descriptor.
+  const source: Psd = {
+    width: 16,
+    height: 16,
+    children: [{
+      name: "Styled",
+      canvas: newCanvas(16, 16),
+      left: 0,
+      top: 0,
+      effects: {
+        stroke: [{ enabled: true, size: { units: "Pixels", value: 5 }, position: "outside", color: { r: 0, g: 0, b: 0 }, opacity: 1 }],
+      },
+    }],
+  };
+  const imported = await importPsd(writePsd(source, { noBackground: true }));
+  const layer = imported.layers.find((candidate) => candidate.name === "Styled")!;
+  assert.equal(layer.effects?.length, 1);
+  layer.effects = [];
+
+  const restored = readPsd(exportPsd(imported), { skipLayerImageData: true, skipCompositeImageData: true });
+  assert.ok(!restored.children?.[0]?.effects?.stroke?.length, "the deleted stroke came back");
 });
 
 test("PSB export is explicit and 32-bit output remains an honest compatibility conversion", async () => {

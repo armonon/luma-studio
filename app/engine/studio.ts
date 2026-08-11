@@ -2103,9 +2103,10 @@ export class Studio {
     return effect;
   }
 
-  /** Patch one effect in place. */
+  /** Patch one effect in place. Locked layers are refused, as for add/remove. */
   updateLayerEffect(layerId: string, effectId: string, patch: Partial<Omit<LayerEffect, "id" | "kind">>) {
     const layer = this.findLayer(layerId);
+    if (layer?.locked) return;
     if (!layer?.effects?.some((effect) => effect.id === effectId)) return;
     const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects) };
     layer.effects = layer.effects.map((effect) =>

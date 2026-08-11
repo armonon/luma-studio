@@ -1,6 +1,15 @@
+# Netlify is a secondary target; the primary build is `npm run build`
+# (vinext / Cloudflare). Keep both working or drop one — a half-configured
+# deploy target is worse than none.
+
 [build]
   command = "npm run build:netlify"
-  publish = ".next"
+
+# Required for App Router: /api/ai/edit is a server route, so publishing the
+# raw .next directory as a static site cannot work. The plugin wires the
+# server output to Netlify Functions and sets the publish directory itself.
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
 
 [build.environment]
   NODE_VERSION = "24"

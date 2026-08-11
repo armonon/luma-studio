@@ -203,10 +203,17 @@ test("stroke and bevel presets fill in their own fields", () => {
   studio.dispose();
 });
 
-test("a locked layer refuses new effects", () => {
+test("a locked layer refuses every effect change, not just adding", () => {
   const { studio, layerId } = studioWithLayer();
+  const effect = studio.addLayerEffect(layerId, "drop-shadow")!;
   studio.setLayerProp(layerId, "locked", true, "Lock");
-  assert.equal(studio.addLayerEffect(layerId, "stroke"), null);
+
+  assert.equal(studio.addLayerEffect(layerId, "stroke"), null, "add should be refused");
+  studio.removeLayerEffect(layerId, effect.id);
+  assert.equal(studio.doc.layers[0].effects?.length, 1, "remove should be refused");
+  // Editing used to sail through while add and remove were both blocked.
+  studio.updateLayerEffect(layerId, effect.id, { blur: 999 });
+  assert.equal(studio.doc.layers[0].effects![0].blur, effect.blur, "edit should be refused");
   studio.dispose();
 });
 

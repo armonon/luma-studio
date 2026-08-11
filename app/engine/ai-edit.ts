@@ -1,3 +1,5 @@
+import { DEPLOY_ORIGIN } from "../deploy-origin";
+
 export type AiEditOperation = "fill" | "remove" | "relight" | "harmonize" | "upscale" | "expand";
 export type AiEditQuality = "auto" | "low" | "medium" | "high";
 export type AiSelectionMode = "none" | "selection" | "inverse-selection";
@@ -322,7 +324,7 @@ export class AiEditConnectionError extends Error {
   }
 }
 
-export const DESKTOP_AI_EDIT_ENDPOINT = "https://luma-studio-preview.armonon.chatgpt.site/api/ai/edit";
+export const DESKTOP_AI_EDIT_ENDPOINT = `${DEPLOY_ORIGIN}/api/ai/edit`;
 
 export function resolveAiEditEndpoint(desktop: boolean) {
   return desktop ? DESKTOP_AI_EDIT_ENDPOINT : "/api/ai/edit";

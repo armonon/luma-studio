@@ -9701,7 +9701,9 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
 
 .context-range {
   display: grid !important;
-  min-width: 112px;
+  /* Must not be narrower than the tracks below, or a long label ("Opacity")
+     pushes the value readout past the border and into the next control. */
+  min-width: max-content;
   grid-template-columns: auto 54px 31px !important;
   gap: 5px !important;
   align-items: center;
@@ -10584,7 +10586,7 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
   }
 
   .context-range {
-    min-width: 102px;
+    min-width: max-content;
     grid-template-columns: auto 45px 28px !important;
   }
 

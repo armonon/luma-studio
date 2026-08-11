@@ -13,6 +13,7 @@ import {
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
+import { composeLayerWithEffects } from "./layer-effects";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, VS } from "./gl-shaders";
 
@@ -307,25 +308,17 @@ function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
   const contentCtx = content.getContext("2d")!;
   drawLayerContentManaged(contentCtx, layer);
   applySmartFilters(content, layer.filters);
-  for (const effect of layer.effects ?? []) {
-    if (!effect.enabled || effect.opacity <= 0 || effect.kind !== "drop-shadow") continue;
-    const effectCanvas = newCanvas(doc.width, doc.height);
-    const effectCtx = effectCanvas.getContext("2d")!;
-    effectCtx.globalAlpha = effect.opacity;
-    effectCtx.shadowColor = effect.color;
-    effectCtx.shadowBlur = effect.blur;
-    effectCtx.shadowOffsetX = effect.offsetX;
-    effectCtx.shadowOffsetY = effect.offsetY;
-    effectCtx.drawImage(content, 0, 0);
-    effectCtx.shadowColor = "transparent";
-    effectCtx.globalCompositeOperation = "destination-out";
-    effectCtx.globalAlpha = 1;
-    effectCtx.drawImage(content, 0, 0);
-    ctx.drawImage(effectCanvas, 0, 0);
-  }
-  ctx.globalAlpha = resolvedFillOpacity(layer);
-  ctx.drawImage(content, 0, 0);
-  ctx.globalAlpha = 1;
+  // Shared with the CPU renderer so GPU export cannot diverge from CPU export.
+  // Effects are unscaled here: this rasterizes at document resolution.
+  composeLayerWithEffects(
+    ctx,
+    content,
+    newCanvas(doc.width, doc.height),
+    newCanvas(doc.width, doc.height),
+    layer,
+    { width: doc.width, height: doc.height },
+    { x: 1, y: 1 },
+  );
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
     if (base) {
@@ -345,7 +338,10 @@ function layerVersion(layer: Layer): string {
   const t = layer.transform;
   const tKey = `${t.tx.toFixed(2)}|${t.ty.toFixed(2)}|${t.sx.toFixed(4)}|${t.sy.toFixed(4)}|${t.rotation.toFixed(4)}`;
   const filterKey = layer.filters?.map((filter) => `${filter.id}:${filter.enabled ? 1 : 0}:${filter.opacity}:${filter.kind}:${JSON.stringify(filter.params)}`).join("|") ?? "";
-  const effectKey = layer.effects?.map((effect) => `${effect.id}:${effect.enabled ? 1 : 0}:${effect.opacity}:${effect.kind}:${effect.color}:${effect.blur}:${effect.offsetX}:${effect.offsetY}`).join("|") ?? "";
+  // Serialize the whole effect, not a hand-picked subset: listing fields by
+  // hand meant stroke width and bevel angle were left out, so editing them
+  // reused a stale texture.
+  const effectKey = layer.effects?.map((effect) => JSON.stringify(effect)).join("|") ?? "";
   const fillKey = resolvedFillOpacity(layer).toFixed(4);
   if (layer.kind === "raster" || layer.kind === "smart-object") {
     const surfaceVersion = layer.surface?.stats().revision ?? 0;

@@ -1,10 +1,7 @@
 import {
   Document,
   Layer,
-  LayerEffect,
   ToneParams,
-  bevelOffset,
-  isEffectBelowContent,
   applyCurvesToImageData,
   applyHslToImageData,
   applyLevelsToImageData,
@@ -17,6 +14,7 @@ import {
 import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
 import { compositeBlendStack } from "./blend";
+import { composeLayerWithEffects, layerEffectReach } from "./layer-effects";
 import { getDisplayCtx } from "./gl-renderer";
 import { softProofDisplayRgb } from "./color";
 import { DEFAULT_TILE_SIZE } from "./tile-store";
@@ -731,161 +729,6 @@ export function renderClean(doc: Document, target: HTMLCanvasElement) {
   render(doc, target, { checkerboard: false, selectionOverlay: false, proofing: false });
 }
 
-/**
- * Draw ONLY the shadow of `src`, never `src` itself.
- *
- * `drawImage` with a shadow set paints the image *and* its shadow. Every
- * inside-the-shape effect needs the silhouette alone, so the source is drawn
- * far off-canvas and the shadow offset compensates, leaving just the shadow in
- * frame. The caller's compositing operation is preserved.
- */
-function stampSilhouette(
-  ctx: CanvasRenderingContext2D,
-  src: HTMLCanvasElement,
-  color: string,
-  blur: number,
-  offsetX: number,
-  offsetY: number,
-) {
-  const hide = src.width + Math.abs(offsetX) + blur + 100;
-  ctx.shadowColor = color;
-  ctx.shadowBlur = blur;
-  ctx.shadowOffsetX = offsetX + hide;
-  ctx.shadowOffsetY = offsetY;
-  ctx.drawImage(src, -hide, 0);
-  ctx.shadowColor = "transparent";
-  ctx.shadowBlur = 0;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 0;
-}
-
-/** Grow the silhouette of `src` by `reach`, painted in `color`. */
-function stampDilated(
-  ctx: CanvasRenderingContext2D,
-  src: HTMLCanvasElement,
-  color: string,
-  reach: number,
-) {
-  if (reach <= 0) {
-    stampSilhouette(ctx, src, color, 0, 0, 0);
-    return;
-  }
-  const steps = 16;
-  for (let i = 0; i < steps; i += 1) {
-    const angle = (i / steps) * Math.PI * 2;
-    stampSilhouette(ctx, src, color, 0, Math.cos(angle) * reach, Math.sin(angle) * reach);
-  }
-}
-
-/**
- * Paint one layer style effect into `effectBuf`, using `contentBuf` as the
- * layer's own pixels and `scratchBuf` for intermediate silhouettes.
- *
- * Compositing vocabulary used throughout:
- *   destination-in  — keep only where the incoming alpha also covers
- *   destination-out — punch the incoming alpha away
- * Offsets scale with the viewport so effects hold position while zooming.
- */
-function drawLayerEffect(
-  effectBuf: HTMLCanvasElement,
-  contentBuf: HTMLCanvasElement,
-  scratchBuf: HTMLCanvasElement,
-  effect: LayerEffect,
-  frame: RenderFrame,
-  scale: { x: number; y: number },
-  uniformScale: number,
-) {
-  const ctx = effectBuf.getContext("2d")!;
-  clearContext(ctx, frame.outputWidth, frame.outputHeight);
-  ctx.save();
-  ctx.globalAlpha = effect.opacity;
-  const blur = effect.blur * uniformScale;
-
-  switch (effect.kind) {
-    case "drop-shadow":
-    case "outer-glow": {
-      // A glow is a shadow with no offset, so they share one path.
-      const offsetX = effect.kind === "outer-glow" ? 0 : effect.offsetX * scale.x;
-      const offsetY = effect.kind === "outer-glow" ? 0 : effect.offsetY * scale.y;
-      stampSilhouette(ctx, contentBuf, effect.color, blur, offsetX, offsetY);
-      // Keep only the halo; the layer draws its own pixels separately.
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.globalAlpha = 1;
-      ctx.drawImage(contentBuf, 0, 0);
-      break;
-    }
-
-    case "color-overlay": {
-      ctx.fillStyle = effect.color;
-      ctx.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
-      ctx.globalCompositeOperation = "destination-in";
-      ctx.globalAlpha = 1;
-      ctx.drawImage(contentBuf, 0, 0);
-      break;
-    }
-
-    case "inner-shadow": {
-      // Colour everywhere the offset silhouette does NOT reach, then clip to
-      // the layer: what remains is a rim hugging the inside of the edge.
-      ctx.fillStyle = effect.color;
-      ctx.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
-      ctx.globalCompositeOperation = "destination-out";
-      ctx.globalAlpha = 1;
-      stampSilhouette(ctx, contentBuf, "#000000", blur, effect.offsetX * scale.x, effect.offsetY * scale.y);
-      ctx.globalCompositeOperation = "destination-in";
-      ctx.drawImage(contentBuf, 0, 0);
-      break;
-    }
-
-    case "stroke": {
-      // One formula covers all three positions:
-      //   band = dilate(outward) minus erode(inward)
-      const width = Math.max(0.5, (effect.width ?? 3) * uniformScale);
-      const position = effect.position ?? "outside";
-      const outward = position === "inside" ? 0 : position === "center" ? width / 2 : width;
-      const inward = position === "outside" ? 0 : position === "center" ? width / 2 : width;
-
-      ctx.globalCompositeOperation = "source-over";
-      ctx.globalAlpha = 1;
-      stampDilated(ctx, contentBuf, effect.color, outward);
-
-      if (inward > 0) {
-        // Erode into the scratch buffer by intersecting shifted copies.
-        const sctx = scratchBuf.getContext("2d")!;
-        clearContext(sctx, frame.outputWidth, frame.outputHeight);
-        sctx.drawImage(contentBuf, 0, 0);
-        sctx.globalCompositeOperation = "destination-in";
-        const steps = 16;
-        for (let i = 0; i < steps; i += 1) {
-          const angle = (i / steps) * Math.PI * 2;
-          sctx.drawImage(contentBuf, Math.cos(angle) * inward, Math.sin(angle) * inward);
-        }
-        sctx.globalCompositeOperation = "source-over";
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.drawImage(scratchBuf, 0, 0);
-      } else {
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.drawImage(contentBuf, 0, 0);
-      }
-      ctx.globalAlpha = effect.opacity;
-      break;
-    }
-
-    case "bevel-emboss": {
-      // Light one edge and shade the opposite one, both confined to the layer.
-      const { dx, dy } = bevelOffset(effect);
-      stampSilhouette(ctx, contentBuf, effect.highlightColor ?? "#ffffff", blur, dx * scale.x, dy * scale.y);
-      stampSilhouette(ctx, contentBuf, effect.shadowColor ?? "#000000", blur, -dx * scale.x, -dy * scale.y);
-      ctx.globalCompositeOperation = "destination-in";
-      ctx.globalAlpha = 1;
-      ctx.drawImage(contentBuf, 0, 0);
-      break;
-    }
-  }
-
-  ctx.restore();
-}
-
 function renderOverscanPixels(doc: Document, displayScale: number) {
   let extent = 2;
   for (const layer of doc.layers) {
@@ -899,18 +742,7 @@ function renderOverscanPixels(doc: Document, displayScale: number) {
       if (!effect.enabled) continue;
       // Every effect that can paint outside the layer silhouette has to widen
       // the overscan, or it gets clipped at tile boundaries.
-      let reach = 0;
-      if (effect.kind === "drop-shadow") {
-        reach = effect.blur * 2 + Math.abs(effect.offsetX) + Math.abs(effect.offsetY);
-      } else if (effect.kind === "outer-glow") {
-        reach = effect.blur * 2;
-      } else if (effect.kind === "stroke") {
-        reach = (effect.width ?? 3) + effect.blur;
-      } else if (effect.kind === "bevel-emboss") {
-        const { dx, dy } = bevelOffset(effect);
-        reach = Math.max(Math.abs(dx), Math.abs(dy)) + effect.blur * 2;
-      }
-      // color-overlay and inner-shadow are clipped to the layer, so 0 reach.
+      const reach = layerEffectReach(effect);
       if (reach > 0) extent = Math.max(extent, reach * displayScale);
     }
   }
@@ -981,28 +813,10 @@ function drawContentLayer(
   const scale = frameScale(frame);
   applySmartFilters(contentBuf, layer.filters, Math.sqrt(scale.x * scale.y));
 
-  const effects = (layer.effects ?? []).filter((effect) => effect.enabled && effect.opacity > 0);
-  const uniformScale = Math.sqrt(scale.x * scale.y);
-
-  // Shadows and glows sit under the layer's own pixels.
-  for (const effect of effects) {
-    if (!isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, contentBuf, clipBuf, effect, frame, scale, uniformScale);
-    bctx.drawImage(effectBuf, 0, 0);
-  }
-
-  bctx.globalAlpha = resolvedFillOpacity(layer);
-  bctx.drawImage(contentBuf, 0, 0);
-  bctx.globalAlpha = 1;
-
-  // Overlays, strokes and bevels sit on top. Stroke is the exception: an
-  // outside stroke must not be clipped away by the content it surrounds, so
-  // drawLayerEffect leaves it unclipped and it still composites above.
-  for (const effect of effects) {
-    if (isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, contentBuf, clipBuf, effect, frame, scale, uniformScale);
-    bctx.drawImage(effectBuf, 0, 0);
-  }
+  composeLayerWithEffects(bctx, contentBuf, effectBuf, clipBuf, layer, {
+    width: frame.outputWidth,
+    height: frame.outputHeight,
+  }, scale);
 
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);

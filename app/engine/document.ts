@@ -585,6 +585,24 @@ export function effectUses(kind: LayerEffectKind, field: EffectField) {
   return EFFECT_FIELDS[kind].includes(field);
 }
 
+/**
+ * Effects in painting order: bottom-most first.
+ *
+ * Photoshop paints layer styles in a fixed order regardless of the order they
+ * were added, and its dialog list is that order upside down — Bevel & Emboss
+ * sits at the top of the list because it paints last. Rendering in array order
+ * instead made the result depend on which button the user clicked first.
+ *
+ * Ties keep their relative order, so duplicates of one kind stack as added.
+ */
+export function effectsInPaintOrder(effects: ReadonlyArray<LayerEffect>): LayerEffect[] {
+  const rank = (effect: LayerEffect) => LAYER_EFFECT_KINDS.indexOf(effect.kind);
+  return effects
+    .map((effect, index) => ({ effect, index }))
+    .sort((a, b) => (rank(b.effect) - rank(a.effect)) || (a.index - b.index))
+    .map(({ effect }) => effect);
+}
+
 /** Light direction resolved to a pixel offset for bevel/emboss. */
 export function bevelOffset(effect: LayerEffect) {
   const depth = effect.depth ?? 3;

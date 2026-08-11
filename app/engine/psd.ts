@@ -21,6 +21,7 @@ import {
   BlendIfRange,
   Document,
   Layer,
+  LayerEffect,
   NEUTRAL_TONE,
   TextStyle,
   createAdjustmentLayer,
@@ -187,22 +188,154 @@ function applyImportedLayerMetadata(target: Layer, source: PsdLayer, parentId?: 
   target.locked = !!source.protected?.composite;
   const blend = source.blendMode?.toLowerCase();
   if (blend && PSD_TO_BLEND[blend]) target.blend = PSD_TO_BLEND[blend];
-  if (source.effects?.dropShadow?.length) {
-    target.effects = source.effects.dropShadow.map((effect, index) => {
-      const angle = (effect.angle ?? 45) * Math.PI / 180;
-      const distance = effect.distance?.value ?? 10;
-      return {
-        id: `${target.id}-psd-shadow-${index}`,
-        kind: "drop-shadow" as const,
-        enabled: effect.enabled !== false,
-        opacity: effect.opacity ?? 0.75,
-        color: psdColorToCss(effect.color),
-        blur: effect.size?.value ?? 12,
-        offsetX: Math.cos(angle) * distance,
-        offsetY: Math.sin(angle) * distance,
-      };
+  const effects = effectsFromPsd(target.id, source.effects);
+  if (effects.length) target.effects = effects;
+}
+
+/** Photoshop stores a shadow as angle + distance; we store a pixel offset. */
+function shadowOffset(effect: { angle?: number; distance?: { value: number } }) {
+  const angle = (effect.angle ?? 45) * Math.PI / 180;
+  const distance = effect.distance?.value ?? 10;
+  return { offsetX: Math.cos(angle) * distance, offsetY: Math.sin(angle) * distance };
+}
+
+/**
+ * Map a PSD layer's effects onto our six kinds.
+ *
+ * Kinds we have no renderer for (inner glow, satin, gradient and pattern
+ * overlay) are deliberately not mapped: they survive the round trip as
+ * preserved metadata instead of being flattened into something we would draw
+ * wrong. See `mergedEffects`.
+ */
+function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffect[] {
+  if (!source) return [];
+  const effects: LayerEffect[] = [];
+  const base = (kind: LayerEffect["kind"], index: number, enabled?: boolean, opacity?: number) => ({
+    id: `${layerId}-psd-${kind}-${index}`,
+    kind,
+    enabled: enabled !== false,
+    opacity: opacity ?? 0.75,
+    blur: 0,
+    offsetX: 0,
+    offsetY: 0,
+  });
+
+  source.dropShadow?.forEach((effect, index) => effects.push({
+    ...base("drop-shadow", index, effect.enabled, effect.opacity),
+    color: psdColorToCss(effect.color),
+    blur: effect.size?.value ?? 12,
+    ...shadowOffset(effect),
+  }));
+
+  source.innerShadow?.forEach((effect, index) => effects.push({
+    ...base("inner-shadow", index, effect.enabled, effect.opacity),
+    color: psdColorToCss(effect.color),
+    blur: effect.size?.value ?? 12,
+    ...shadowOffset(effect),
+  }));
+
+  if (source.outerGlow) {
+    effects.push({
+      ...base("outer-glow", 0, source.outerGlow.enabled, source.outerGlow.opacity),
+      color: psdColorToCss(source.outerGlow.color),
+      blur: source.outerGlow.size?.value ?? 12,
     });
   }
+
+  source.solidFill?.forEach((effect, index) => effects.push({
+    ...base("color-overlay", index, effect.enabled, effect.opacity ?? 1),
+    color: psdColorToCss(effect.color),
+  }));
+
+  source.stroke?.forEach((effect, index) => effects.push({
+    ...base("stroke", index, effect.enabled, effect.opacity ?? 1),
+    color: psdColorToCss(effect.color),
+    width: effect.size?.value ?? 3,
+    position: effect.position ?? "outside",
+  }));
+
+  if (source.bevel) {
+    effects.push({
+      ...base("bevel-emboss", 0, source.bevel.enabled, source.bevel.highlightOpacity),
+      color: psdColorToCss(source.bevel.shadowColor),
+      blur: source.bevel.soften?.value ?? 0,
+      depth: source.bevel.size?.value ?? 3,
+      angle: source.bevel.angle ?? 135,
+      highlightColor: psdColorToCss(source.bevel.highlightColor ?? { r: 255, g: 255, b: 255 }),
+      shadowColor: psdColorToCss(source.bevel.shadowColor ?? { r: 0, g: 0, b: 0 }),
+    });
+  }
+
+  return effects;
+}
+
+/** Inverse of effectsFromPsd, for the kinds we own. */
+function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
+  const of = (kind: LayerEffect["kind"]) => (layer.effects ?? []).filter((effect) => effect.kind === kind);
+  const px = (value: number) => ({ units: "Pixels" as const, value });
+  const shadow = (effect: LayerEffect) => ({
+    present: true,
+    showInDialog: true,
+    enabled: effect.enabled,
+    size: px(effect.blur),
+    angle: Math.atan2(effect.offsetY, effect.offsetX) * 180 / Math.PI,
+    distance: px(Math.hypot(effect.offsetX, effect.offsetY)),
+    color: cssColorToPsd(effect.color),
+    blendMode: "multiply" as const,
+    opacity: effect.opacity,
+    useGlobalLight: false,
+  });
+
+  const glow = of("outer-glow")[0];
+  const bevel = of("bevel-emboss")[0];
+  const list = <T>(items: T[]) => items.length ? items : undefined;
+
+  return {
+    dropShadow: list(of("drop-shadow").map(shadow)),
+    innerShadow: list(of("inner-shadow").map(shadow)),
+    outerGlow: glow && {
+      present: true,
+      showInDialog: true,
+      enabled: glow.enabled,
+      size: px(glow.blur),
+      color: cssColorToPsd(glow.color),
+      blendMode: "screen" as const,
+      opacity: glow.opacity,
+    },
+    solidFill: list(of("color-overlay").map((effect) => ({
+      present: true,
+      showInDialog: true,
+      enabled: effect.enabled,
+      blendMode: "normal" as const,
+      color: cssColorToPsd(effect.color),
+      opacity: effect.opacity,
+    }))),
+    stroke: list(of("stroke").map((effect) => ({
+      present: true,
+      showInDialog: true,
+      enabled: effect.enabled,
+      size: px(effect.width ?? 3),
+      position: effect.position ?? "outside",
+      fillType: "color" as const,
+      blendMode: "normal" as const,
+      color: cssColorToPsd(effect.color),
+      opacity: effect.opacity,
+    }))),
+    bevel: bevel && {
+      present: true,
+      showInDialog: true,
+      enabled: bevel.enabled,
+      size: px(bevel.depth ?? 3),
+      soften: px(bevel.blur),
+      angle: bevel.angle ?? 135,
+      style: "inner bevel" as const,
+      highlightColor: cssColorToPsd(bevel.highlightColor ?? "#ffffff"),
+      shadowColor: cssColorToPsd(bevel.shadowColor ?? "#000000"),
+      highlightOpacity: bevel.opacity,
+      shadowOpacity: bevel.opacity,
+      useGlobalLight: false,
+    },
+  };
 }
 
 function psdColorToCss(color: unknown) {
@@ -847,15 +980,37 @@ function preservedLayerFields(layer: Layer): PsdLayer {
   return copy;
 }
 
-function mergedEffects(layer: Layer, shadows: LayerEffectsInfo["dropShadow"]): LayerEffectsInfo | undefined {
+/**
+ * Combine what the user has in Luma with what the source file carried.
+ *
+ * An untouched import round-trips byte-for-byte through `preserved`, keeping
+ * descriptor details we do not model (choke, contours, global light). Once the
+ * effects are edited we regenerate every kind we own — including absent ones,
+ * so removing a stroke in Luma actually removes it — while kinds we cannot
+ * render still come through from `preserved`.
+ */
+/** The effect keys `effectsToPsd` is authoritative for. The rest pass through. */
+const OWNED_EFFECT_KEYS = ["dropShadow", "innerShadow", "outerGlow", "solidFill", "stroke", "bevel"] as const;
+
+function mergedEffects(layer: Layer, generated: Partial<LayerEffectsInfo>): LayerEffectsInfo | undefined {
   const metadata = getPhotoshopLayerMetadata(layer);
   const preserved = metadata?.source.effects;
-  if (!preserved && !shadows?.length) return undefined;
+  const filled = (value: unknown) => Array.isArray(value) ? value.length > 0 : !!value;
+  const hasGenerated = Object.values(generated).some(filled);
+  if (!preserved && !hasGenerated) return undefined;
   if (preserved && metadata?.originalEffectsFingerprint === effectsFingerprint(layer)) return preserved;
-  return {
-    ...preserved,
-    dropShadow: shadows?.length ? shadows : preserved?.dropShadow,
-  };
+
+  const merged: LayerEffectsInfo = { ...preserved };
+  for (const key of OWNED_EFFECT_KEYS) {
+    const value = generated[key];
+    // Delete rather than assign undefined: ag-psd walks its own keys and
+    // would try to serialize the hole. An absent key is also what "the user
+    // removed this effect" has to mean, or a deleted stroke comes back from
+    // the preserved descriptor.
+    if (filled(value)) Object.assign(merged, { [key]: value });
+    else delete merged[key];
+  }
+  return Object.values(merged).some(filled) ? merged : undefined;
 }
 
 function exportedBlendMode(layer: Layer, mode: BlendMode): PsdBlend {
@@ -866,18 +1021,6 @@ function exportedBlendMode(layer: Layer, mode: BlendMode): PsdBlend {
 }
 
 function psdLayerMetadata(doc: Document, layer: Layer, mode: BlendMode, opacity = layer.opacity): PsdLayer {
-  const shadows = layer.effects?.filter((effect) => effect.kind === "drop-shadow").map((effect) => ({
-    present: true,
-    showInDialog: true,
-    enabled: effect.enabled,
-    size: { units: "Pixels" as const, value: effect.blur },
-    angle: Math.atan2(effect.offsetY, effect.offsetX) * 180 / Math.PI,
-    distance: { units: "Pixels" as const, value: Math.hypot(effect.offsetX, effect.offsetY) },
-    color: cssColorToPsd(effect.color),
-    blendMode: "multiply" as const,
-    opacity: effect.opacity,
-    useGlobalLight: false,
-  }));
   const preserved = preservedLayerFields(layer);
   return {
     ...preserved,
@@ -892,7 +1035,7 @@ function psdLayerMetadata(doc: Document, layer: Layer, mode: BlendMode, opacity 
       ? { ...preserved.protected, composite: true }
       : preserved.protected ? { ...preserved.protected, composite: undefined } : undefined,
     mask: psdMask(doc, layer),
-    effects: mergedEffects(layer, shadows),
+    effects: mergedEffects(layer, effectsToPsd(layer)),
   };
 }
 
