@@ -22,6 +22,8 @@ import {
   type GlowSource,
   type GradientStop,
   type GradientStyle,
+  type GlowTechnique,
+  type StrokeFillType,
   type Layer,
   type LayerEffect,
   type LayerEffectKind,
@@ -278,7 +280,42 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           <input type="checkbox" checked={!!effect.invert} onChange={(event) => patch({ invert: event.target.checked })} />
         </label>
       )}
-      {effectUses(effect.kind, "gradientStops") && (
+      {effectUses(effect.kind, "fillType") && (
+        <label className="layer-style-select">
+          <span>Fill</span>
+          <select
+            value={effect.fillType ?? "color"}
+            onChange={(event) => patch({ fillType: event.target.value as StrokeFillType })}
+            aria-label="Stroke fill type"
+          >
+            <option value="color">Color</option>
+            <option value="gradient">Gradient</option>
+            <option value="pattern">Pattern</option>
+          </select>
+        </label>
+      )}
+      {effectUses(effect.kind, "technique") && (
+        <label className="layer-style-select">
+          <span>Technique</span>
+          <select
+            value={effect.technique ?? "softer"}
+            onChange={(event) => patch({ technique: event.target.value as GlowTechnique })}
+            aria-label="Glow technique"
+          >
+            <option value="softer">Softer</option>
+            <option value="precise">Precise</option>
+          </select>
+        </label>
+      )}
+      {effectUses(effect.kind, "range") && (
+        <Slider label="Range" value={(effect.range ?? 1) * 100} min={5} max={100} suffix="%" onChange={(v) => patch({ range: v / 100 })} />
+      )}
+      {effectUses(effect.kind, "dither") && (
+        <Slider label="Dither" value={(effect.dither ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ dither: v / 100 })} />
+      )}
+      {/* Stroke switches these on with its Fill control; they are not in the
+          field table because each is read only under one setting. */}
+      {(effectUses(effect.kind, "gradientStops") || (effect.kind === "stroke" && effect.fillType === "gradient")) && (
         <>
           <Slider label="Angle" value={effect.gradientAngle ?? 90} min={0} max={360} suffix="°" onChange={(gradientAngle) => patch({ gradientAngle })} />
           <label className="layer-style-select">
@@ -302,7 +339,7 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           />
         </>
       )}
-      {effectUses(effect.kind, "pattern") && (
+      {(effectUses(effect.kind, "pattern") || (effect.kind === "stroke" && effect.fillType === "pattern")) && (
         <>
           <label className="layer-style-select">
             <span>Pattern</span>

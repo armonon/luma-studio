@@ -535,7 +535,9 @@ export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shad
 export type StrokePosition = "outside" | "inside" | "center";
 /** Edge glows hug the inside of the silhouette; centre glows radiate outwards. */
 export type GlowSource = "edge" | "center";
-export type GradientStyle = "linear" | "radial";
+export type GradientStyle = "linear" | "radial" | "angle" | "reflected" | "diamond";
+export type StrokeFillType = "color" | "gradient" | "pattern";
+export type GlowTechnique = "softer" | "precise";
 export type PatternKind = "checker" | "stripes" | "dots";
 
 export type GradientStop = { offset: number; color: string };
@@ -613,6 +615,18 @@ export type LayerEffect = {
   gradientStyle?: GradientStyle;
   /** gradient-overlay only. Defaults to false. */
   reverse?: boolean;
+  /** gradient-overlay only — dithers the ramp to hide banding, 0..1. */
+  dither?: number;
+  /** stroke only — what fills the band. Defaults to "color". */
+  fillType?: StrokeFillType;
+  /** glows — "precise" dilates the silhouette, "softer" blurs it. */
+  technique?: GlowTechnique;
+  /**
+   * glows — the part of the falloff the contour is applied across, 0..1.
+   * Photoshop's Range: at 1 the contour spans the whole glow, lower values
+   * compress it towards the edge.
+   */
+  range?: number;
   /** pattern-overlay only. Defaults to "checker". */
   pattern?: PatternKind;
   /** pattern-overlay only — cell size in document pixels. Defaults to 16. */
@@ -704,7 +718,8 @@ export type EffectField =
   | "offset" | "blur" | "width" | "position" | "depth" | "angle" | "altitude" | "bevelColors"
   | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
-  | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps" | "strength";
+  | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps" | "strength"
+  | "dither" | "fillType" | "technique" | "range";
 
 /** Falloff shaping applies wherever an effect has a soft edge to shape. */
 const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
@@ -722,13 +737,17 @@ const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
 export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> = {
   "drop-shadow": ["offset", "blur", "globalLight", ...FALLOFF],
   "inner-shadow": ["blendMode", "offset", "blur", "globalLight", ...FALLOFF],
-  "outer-glow": ["blur", ...FALLOFF],
-  "inner-glow": ["blendMode", "blur", "glowSource", ...FALLOFF],
+  "outer-glow": ["blur", "technique", "range", ...FALLOFF],
+  "inner-glow": ["blendMode", "blur", "glowSource", "technique", "range", ...FALLOFF],
   satin: ["blendMode", "offset", "blur", "invert", "globalLight", "contour"],
   "color-overlay": ["blendMode"],
-  "gradient-overlay": ["blendMode", "gradientStops", "gradientAngle", "gradientStyle", "gradientReverse"],
+  "gradient-overlay": ["blendMode", "gradientStops", "gradientAngle", "gradientStyle", "gradientReverse", "dither"],
   "pattern-overlay": ["blendMode", "pattern", "patternScale"],
-  stroke: ["blendMode", "width", "position"],
+  // Stroke's gradient and pattern parameters are deliberately absent: they are
+  // read only under the matching fillType, and this table's contract is that a
+  // listed field always changes the render. Conditional parameters get their
+  // own tests instead of weakening the invariant to "sometimes".
+  stroke: ["blendMode", "width", "position", "fillType"],
   "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour"],
   "backdrop-blur": ["blendMode", "blur", "saturation", "tint"],
   bloom: ["blendMode", "blur", "threshold"],

@@ -21,6 +21,7 @@ import {
   type BlendIfRange,
   type Document,
   type EffectField,
+  type GradientStyle,
   type Layer,
   type LayerEffect,
   type LayerEffectKind,
@@ -177,6 +178,8 @@ function baseEffect(kind: LayerEffectKind): LayerEffect {
     gradientAngle: 90, gradientStyle: "linear",
     pattern: "checker", patternScale: 8,
     saturation: 1.6, tint: 0, threshold: 0.6, steps: 24, strength: 10,
+    dither: 0, fillType: "color", technique: "softer", range: 1,
+    contour: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }],
   };
 }
 
@@ -194,7 +197,7 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   blendMode: { blendMode: "difference" },
   spread: { spread: 0.9 },
   noise: { noise: 0.8 },
-  contour: { contour: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }] },
+  contour: { contour: [{ x: 0, y: 1 }, { x: 1, y: 0 }] },
   glowSource: { glowSource: "center" },
   invert: { invert: true },
   gradientStops: { stops: [{ offset: 0, color: "#00ff00" }, { offset: 1, color: "#ffff00" }] },
@@ -208,6 +211,10 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   threshold: { threshold: 0.05 },
   steps: { steps: 3 },
   strength: { strength: 40 },
+  dither: { dither: 1 },
+  fillType: { fillType: "gradient" },
+  technique: { technique: "precise" },
+  range: { range: 0.3 },
 };
 
 const ALL_FIELDS = Object.keys(FIELD_CHANGES) as EffectField[];
@@ -318,6 +325,9 @@ test("an effect blend mode acts on the layer's own pixels", () => {
     blur: 3,
     offsetX: 6,
     offsetY: 6,
+    // Plain falloff: this is about how the effect composites, and the base
+    // fixture's ringed contour reshapes it enough to saturate the sample.
+    contour: undefined,
   });
 
   const darkened = testCanvas(SIZE, SIZE);
@@ -380,6 +390,56 @@ test("every backdrop-reading effect is listed as one", () => {
       `${kind} bails without a backdrop but is missing from BACKDROP_READING_KINDS`,
     );
   }
+});
+
+test("every gradient style renders differently from the others", () => {
+  // The field table only ever swaps one style for one other, so it cannot tell
+  // whether the rest are wired at all — removing the conic branch left it
+  // green. Comparing all five against each other does.
+  const digests = new Map<string, string>();
+  for (const gradientStyle of ["linear", "radial", "angle", "reflected", "diamond"] as GradientStyle[]) {
+    const digest = renderDigest({
+      ...baseEffect("gradient-overlay"),
+      id: "g1",
+      gradientStyle,
+      gradientAngle: 45,
+      opacity: 1,
+      dither: 0,
+    });
+    for (const [other, seen] of digests) {
+      assert.notEqual(digest, seen, `${gradientStyle} renders identically to ${other}`);
+    }
+    digests.set(gradientStyle, digest);
+  }
+});
+
+test("a stroke can be filled with a gradient or a pattern, not just a colour", () => {
+  // fillType is in the field table; the parameters it switches between are
+  // not, because each is read only under one setting. Tested here instead.
+  const stroke = (patch: Partial<LayerEffect>) => renderDigest({
+    ...baseEffect("stroke"),
+    id: "st",
+    width: 8,
+    position: "outside",
+    opacity: 1,
+    ...patch,
+  });
+
+  const solid = stroke({ fillType: "color" });
+  const gradient = stroke({ fillType: "gradient" });
+  const pattern = stroke({ fillType: "pattern" });
+  assert.notEqual(gradient, solid, "a gradient stroke should not match a colour one");
+  assert.notEqual(pattern, solid, "a pattern stroke should not match a colour one");
+  assert.notEqual(pattern, gradient, "gradient and pattern strokes should differ");
+
+  // And the gradient's own parameters reach it.
+  const rotated = stroke({ fillType: "gradient", gradientAngle: 0 });
+  assert.notEqual(rotated, gradient, "the gradient angle should reach a gradient stroke");
+  const restopped = stroke({
+    fillType: "gradient",
+    stops: [{ offset: 0, color: "#00ff00" }, { offset: 1, color: "#ffff00" }],
+  });
+  assert.notEqual(restopped, gradient, "the stops should reach a gradient stroke");
 });
 
 // --- contact shadow and reflection -----------------------------------------

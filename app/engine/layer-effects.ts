@@ -182,11 +182,63 @@ function gradientFill(
   const centre = project(frame, centreX, centreY);
   const radius = Math.hypot(to.x - centre.x, to.y - centre.y);
 
-  const gradient = (effect.gradientStyle ?? "linear") === "radial"
-    ? ctx.createRadialGradient(centre.x, centre.y, 0, centre.x, centre.y, Math.max(1e-3, radius))
-    : ctx.createLinearGradient(from.x, from.y, to.x, to.y);
-  for (const stop of resolvedGradientStops(effect)) gradient.addColorStop(stop.offset, stop.color);
+  const style = effect.gradientStyle ?? "linear";
+  const stops = resolvedGradientStops(effect);
+
+  // Reflected is a linear ramp mirrored about its centre: remap the stops into
+  // the two halves rather than needing a separate primitive.
+  const mirrored = style === "reflected"
+    ? [
+      ...stops.map((stop) => ({ offset: 0.5 - stop.offset / 2, color: stop.color })).reverse(),
+      ...stops.map((stop) => ({ offset: 0.5 + stop.offset / 2, color: stop.color })),
+    ]
+    : stops;
+
+  const gradient = style === "radial" || style === "diamond"
+    // Diamond needs a square distance metric canvas has no primitive for; a
+    // radial ramp is the closest honest approximation, so it is labelled as
+    // radial-with-a-different-falloff rather than pretending to be a diamond.
+    ? ctx.createRadialGradient(centre.x, centre.y, 0, centre.x, centre.y, Math.max(1e-3, style === "diamond" ? radius * 0.75 : radius))
+    : style === "angle"
+      ? ctx.createConicGradient(radians, centre.x, centre.y)
+      : ctx.createLinearGradient(from.x, from.y, to.x, to.y);
+
+  for (const stop of mirrored) {
+    gradient.addColorStop(Math.max(0, Math.min(1, stop.offset)), stop.color);
+  }
   return gradient;
+}
+
+/**
+ * Break up a gradient ramp with a hash so eight-bit banding does not show.
+ *
+ * A per-pixel dither of well under one level: enough to scatter the step
+ * boundaries, not enough to read as noise.
+ */
+function ditherGradient(
+  ctx: CanvasRenderingContext2D,
+  effect: LayerEffect,
+  frame: EffectFrame,
+) {
+  const amount = Math.max(0, Math.min(1, effect.dither ?? 0));
+  if (amount <= 0) return;
+  const { outputWidth: width, outputHeight: height } = frame;
+  if (width <= 0 || height <= 0) return;
+  const image = ctx.getImageData(0, 0, width, height);
+  const data = image.data;
+  const seed = seedFrom(effect.id);
+  const spread = amount * 2;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      if (data[index + 3] === 0) continue;
+      const jitter = (hashNoise(x + Math.round(frame.x), y + Math.round(frame.y), seed) - 0.5) * spread;
+      data[index] += jitter;
+      data[index + 1] += jitter;
+      data[index + 2] += jitter;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
 }
 
 /**
@@ -275,6 +327,9 @@ function shapeFalloff(
   const image = ctx.getImageData(0, 0, width, height);
   const data = image.data;
   const lut = hasContour ? curveToLut(effect.contour!) : null;
+  const range = effectUses(effect.kind, "range")
+    ? Math.max(0.05, Math.min(1, effect.range ?? 1))
+    : 1;
   const seed = seedFrom(effect.id);
   // Sample the noise in document space so it does not crawl when panning.
   const stepX = frame.width / Math.max(1, width);
@@ -286,7 +341,13 @@ function shapeFalloff(
       const index = (y * width + x) * 4 + 3;
       let alpha = data[index];
       if (alpha === 0) continue;
-      if (lut) alpha = lut[alpha];
+      if (lut) {
+        // Range compresses the contour's domain towards the outer edge of the
+        // falloff, so a ringed contour can be squeezed into the last few
+        // pixels instead of spanning the whole glow.
+        const scaled = range >= 1 ? alpha : Math.min(255, Math.round(alpha / range));
+        alpha = lut[scaled];
+      }
       if (noise > 0) {
         const docX = Math.round(frame.x + x * stepX);
         alpha *= 1 - noise * hashNoise(docX, docY, seed);
@@ -402,7 +463,13 @@ function drawLayerEffect(
       const offsetX = effect.kind === "outer-glow" ? 0 : offset.x * scale.x;
       const offsetY = effect.kind === "outer-glow" ? 0 : offset.y * scale.y;
       const spread = applySpread(effect, contentBuf, scratchBuf, blur, size);
-      stampSilhouette(ctx, spread.source, effect.color, spread.blur, offsetX, offsetY);
+      if (effect.kind === "outer-glow" && (effect.technique ?? "softer") === "precise") {
+        // Precise grows the silhouette geometrically instead of blurring it,
+        // which is what keeps a glow's corners sharp on type and hard shapes.
+        stampDilated(ctx, spread.source, effect.color, spread.blur);
+      } else {
+        stampSilhouette(ctx, spread.source, effect.color, spread.blur, offsetX, offsetY);
+      }
       // Keep only the halo; the layer draws its own pixels separately.
       ctx.globalCompositeOperation = "destination-out";
       ctx.globalAlpha = 1;
@@ -463,16 +530,32 @@ function drawLayerEffect(
         ctx.globalCompositeOperation = "destination-out";
         ctx.drawImage(contentBuf, 0, 0);
       }
+      // Recolour the finished band. `source-in` keeps the band's alpha and
+      // replaces what fills it, so gradient and pattern strokes reuse exactly
+      // the geometry the colour stroke already produced.
+      const fillType = effect.fillType ?? "color";
+      if (fillType !== "color") {
+        ctx.globalCompositeOperation = "source-in";
+        ctx.globalAlpha = 1;
+        if (fillType === "gradient") {
+          ctx.fillStyle = gradientFill(ctx, effect, frame, bounds);
+          ctx.fillRect(0, 0, size.width, size.height);
+        } else {
+          drawPattern(ctx, effect, frame, uniformScale);
+        }
+      }
       ctx.globalAlpha = effect.opacity;
       break;
     }
 
     case "inner-glow": {
       const glow = applySpread(effect, contentBuf, scratchBuf, blur, size);
+      const precise = (effect.technique ?? "softer") === "precise";
       if ((effect.glowSource ?? "edge") === "center") {
         // A centre glow is the blurred silhouette kept inside itself: solid
         // through the middle, falling away as it approaches the edge.
-        stampSilhouette(ctx, glow.source, effect.color, glow.blur, 0, 0);
+        if (precise) stampDilated(ctx, glow.source, effect.color, glow.blur);
+        else stampSilhouette(ctx, glow.source, effect.color, glow.blur, 0, 0);
       } else {
         // An edge glow is the complement: colour everywhere the blurred
         // silhouette does not reach, leaving a rim inside the outline.
@@ -480,7 +563,8 @@ function drawLayerEffect(
         ctx.fillRect(0, 0, size.width, size.height);
         ctx.globalCompositeOperation = "destination-out";
         ctx.globalAlpha = 1;
-        stampSilhouette(ctx, glow.source, "#000000", glow.blur, 0, 0);
+        if (precise) stampDilated(ctx, glow.source, "#000000", glow.blur);
+        else stampSilhouette(ctx, glow.source, "#000000", glow.blur, 0, 0);
       }
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = 1;
@@ -520,6 +604,7 @@ function drawLayerEffect(
     case "gradient-overlay": {
       ctx.fillStyle = gradientFill(ctx, effect, frame, bounds);
       ctx.fillRect(0, 0, size.width, size.height);
+      ditherGradient(ctx, effect, frame);
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = 1;
       ctx.drawImage(contentBuf, 0, 0);
