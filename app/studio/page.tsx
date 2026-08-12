@@ -3224,6 +3224,25 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                             studio?.updateText(activeLayer.id, { font });
                           }} />
                       </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 11 }}>
+                        <span>Tracking</span>
+                        <input type="range" min="-100" max="600" step="10" value={activeLayer.text.tracking ?? 0}
+                          onChange={(e) => studio?.updateText(activeLayer.id, { tracking: Number(e.target.value) })} />
+                        <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{activeLayer.text.tracking ?? 0}</small>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 11 }}>
+                        <span>Para space</span>
+                        <input type="range" min="0" max="3" step="0.1" value={activeLayer.text.paragraphSpacing ?? 0}
+                          onChange={(e) => studio?.updateText(activeLayer.id, { paragraphSpacing: Number(e.target.value) })} />
+                        <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{(activeLayer.text.paragraphSpacing ?? 0).toFixed(1)}</small>
+                      </label>
+                      {activeLayer.text.layout === "paragraph" && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 11 }}>
+                          <input type="checkbox" checked={activeLayer.text.justify ?? false}
+                            onChange={(e) => studio?.updateText(activeLayer.id, { justify: e.target.checked })} />
+                          <span>Justify</span>
+                        </label>
+                      )}
                       <button onClick={() => activeLayer?.text && studio?.updateText(activeLayer.id, { text: textDraft })} style={{ marginTop: 4, fontSize: 11 }}>Update active text</button>
                     </>
                   )}

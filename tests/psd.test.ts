@@ -232,6 +232,42 @@ test("PSD rich text runs and paragraph metadata survive an unchanged round trip"
   assert.deepEqual(text.transform, [1, 0.15, 0.05, 1, 12, 28]);
 });
 
+test("tracking, paragraph spacing and justification survive an edited text layer", async () => {
+  // Editing invalidates the preserved rich-text blob, so this exercises the
+  // simple single-style path where Luma has to emit the values itself.
+  const sourceBytes = writePsd({
+    width: 200,
+    height: 120,
+    children: [{
+      name: "Type",
+      text: {
+        text: "Hello world",
+        transform: [1, 0, 0, 1, 0, 0],
+        style: { font: { name: "ArialMT" }, fontSize: 20, tracking: 120 },
+        paragraphStyle: { justification: "justify-center", spaceAfter: 30 },
+        shapeType: "point",
+      },
+    }],
+  }, { noBackground: true });
+
+  const imported = await importPsd(sourceBytes);
+  const layer = imported.layers.find((entry) => entry.kind === "text")!;
+  assert.equal(layer.text?.tracking, 120, "tracking is already in thousandths of an em on both sides");
+  assert.equal(layer.text?.paragraphSpacing, 1.5, "30px after a 20px face is 1.5 ems");
+  assert.equal(layer.text?.justify, true);
+  assert.equal(layer.text?.align, "center", "justify-center is centred *and* justified");
+
+  // Edit it, so the preserved original can no longer be reused.
+  layer.text = { ...layer.text!, text: "Goodbye world" };
+  const text = readPsd(exportPsd(imported), { skipLayerImageData: true, skipCompositeImageData: true })
+    .children?.[0].text;
+  assert.ok(text);
+  assert.equal(text.text, "Goodbye world");
+  assert.equal(text.style?.tracking, 120);
+  assert.equal(text.paragraphStyle?.spaceAfter, 30);
+  assert.equal(text.paragraphStyle?.justification, "justify-center");
+});
+
 test("Photoshop source mode is byte-for-byte for untouched files and disengages after edits", async () => {
   const preview = newCanvas(12, 10);
   preview.getContext("2d")!.fillRect(0, 0, 12, 10);

@@ -315,6 +315,57 @@ export type PathArcSample = { x: number; y: number; distance: number };
  */
 const vectorMaskCache = new WeakMap<PathStyle, { canvas: HTMLCanvasElement; width: number; height: number }>();
 
+/**
+ * Set canvas letter spacing, where the platform has it.
+ *
+ * Doing this per character instead would give up the font's kerning pairs,
+ * which is a worse trade than losing tracking on an old browser: Photoshop
+ * tracks *and* kerns. Chrome, Safari and Firefox have all shipped it.
+ */
+function applyTracking(ctx: CanvasRenderingContext2D, px: number) {
+  if (!("letterSpacing" in ctx)) return;
+  ctx.letterSpacing = `${px}px`;
+}
+
+/**
+ * Draw one line stretched to fill the measure, by widening the word gaps.
+ *
+ * Justification overrides the paragraph's alignment and treats `x` as the left
+ * edge — the two settings contradict each other, and Photoshop resolves it the
+ * same way. A line already wider than the box, or with nothing to stretch, is
+ * drawn as it stands rather than squeezed.
+ */
+function drawJustified(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  boxWidth: number,
+  track: number,
+) {
+  const words = text.split(" ").filter(Boolean);
+  const gaps = words.length - 1;
+  if (gaps < 1) {
+    ctx.fillText(text, x, y);
+    return;
+  }
+  // Canvas letter spacing puts a step after the last glyph as well, which is
+  // advance the word never draws. Taking it off here — in the sum *and* in the
+  // cursor step, so the two agree — is what makes the line land on the measure
+  // instead of a whole tracking step short of it.
+  const widthOf = (word: string) => ctx.measureText(word).width - track;
+  const natural = words.reduce((sum, word) => sum + widthOf(word), 0);
+  const extra = (boxWidth - natural) / gaps;
+  const align = ctx.textAlign;
+  ctx.textAlign = "left";
+  let cursor = x;
+  for (const word of words) {
+    ctx.fillText(word, cursor, y);
+    cursor += widthOf(word) + extra;
+  }
+  ctx.textAlign = align;
+}
+
 export function rasterizeVectorMask(
   path: PathStyle,
   width: number,
@@ -471,6 +522,12 @@ export type TextStyle = {
   layout?: "point" | "paragraph" | "vertical" | "path";
   boxWidth?: number;
   boxHeight?: number;
+  /** Letter spacing in thousandths of an em, which is Photoshop's unit. */
+  tracking?: number;
+  /** Extra space after each paragraph, as a multiple of the font size. */
+  paragraphSpacing?: number;
+  /** Stretch every line but the last to fill the box. Paragraph layout only. */
+  justify?: boolean;
   /** Frozen path geometry for type-on-path so the text layer stays portable. */
   path?: PathStyle;
 };
@@ -1592,30 +1649,64 @@ export function drawLayerContent(
     ctx.fillStyle = s.color;
     const fontSize = extractFontSize(s.font);
     const lh = fontSize * s.lineHeight;
+    // Photoshop measures tracking in thousandths of an em, so it holds its
+    // proportion when the point size changes.
+    const track = ((s.tracking ?? 0) / 1000) * fontSize;
+    applyTracking(ctx, track);
+    // Canvas adds the spacing after the last glyph too, which drags centred
+    // and right-aligned text off its anchor by half a step and a full step
+    // respectively. The measured run is that much wider than what is drawn.
+    const trackNudge = track === 0 ? 0
+      : ctx.textAlign === "center" ? track / 2
+      : ctx.textAlign === "right" || ctx.textAlign === "end" ? track
+      : 0;
+    const gap = fontSize * (s.paragraphSpacing ?? 0);
     if (s.layout === "vertical") {
+      // Vertical runs advance down the column, so canvas letter spacing — a
+      // horizontal advance — is the wrong axis for it; tracking is added to
+      // the row step by hand instead.
+      applyTracking(ctx, 0);
       let row = 0;
       let column = 0;
       for (const character of s.text) {
         if (character === "\n") { column += 1; row = 0; continue; }
-        ctx.fillText(character, s.x - column * lh, s.y + row * lh);
+        ctx.fillText(character, s.x - column * lh, s.y + row * (lh + track));
         row += 1;
       }
     } else if (s.layout === "paragraph" && s.boxWidth) {
-      const lines: string[] = [];
-      for (const paragraph of s.text.split("\n")) {
+      // Each entry keeps its paragraph index so the spacing after a paragraph
+      // can be applied without re-splitting, and so the last line of a
+      // paragraph is exempt from justification the way it is in Photoshop.
+      const lines: { text: string; paragraph: number; last: boolean }[] = [];
+      s.text.split("\n").forEach((paragraph, index) => {
+        const wrapped: string[] = [];
         let line = "";
         for (const word of paragraph.split(/\s+/)) {
           const candidate = line ? `${line} ${word}` : word;
-          if (line && ctx.measureText(candidate).width > s.boxWidth) {
-            lines.push(line);
+          if (line && ctx.measureText(candidate).width > s.boxWidth!) {
+            wrapped.push(line);
             line = word;
           } else line = candidate;
         }
-        lines.push(line);
+        wrapped.push(line);
+        wrapped.forEach((text, position) => lines.push({
+          text, paragraph: index, last: position === wrapped.length - 1,
+        }));
+      });
+      const step = (index: number) => index * lh + lines[index].paragraph * gap;
+      const maximumLines = s.boxHeight
+        ? Math.max(1, lines.filter((_, index) => step(index) + lh <= s.boxHeight!).length)
+        : lines.length;
+      for (let index = 0; index < Math.min(maximumLines, lines.length); index += 1) {
+        const line = lines[index];
+        const y = s.y + step(index);
+        if (s.justify && !line.last) drawJustified(ctx, line.text, s.x, y, s.boxWidth, track);
+        else ctx.fillText(line.text, s.x + trackNudge, y);
       }
-      const maximumLines = s.boxHeight ? Math.max(1, Math.floor(s.boxHeight / lh)) : lines.length;
-      lines.slice(0, maximumLines).forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));
     } else if (s.layout === "path" && s.path?.anchors.length) {
+      // Per-character drawing already advances by hand, so canvas letter
+      // spacing here would both double the gap and inflate every measurement.
+      applyTracking(ctx, 0);
       const table = pathArcTable(s.path);
       let distance = nearestPathDistance(table, s.x, s.y);
       let previous = "";
@@ -1638,12 +1729,17 @@ export function drawLayerContent(
         ctx.rotate(sample.angle);
         ctx.fillText(character, -advance / 2, 0);
         ctx.restore();
-        distance += advance;
+        distance += advance + track;
         previous = character;
       }
     } else {
-      s.text.split("\n").forEach((line, index) => ctx.fillText(line, s.x, s.y + index * lh));
+      let paragraph = 0;
+      s.text.split("\n").forEach((line, index) => {
+        ctx.fillText(line, s.x + trackNudge, s.y + index * lh + paragraph * gap);
+        paragraph += 1;
+      });
     }
+    applyTracking(ctx, 0);
   } else if (layer.kind === "path" && layer.path) {
     const p = layer.path;
     if (p.anchors.length >= 2) {

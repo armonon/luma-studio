@@ -9,6 +9,7 @@ import type {
   LayerEffectsInfo,
   LayerTextData,
   LayerVectorMask,
+  Justification,
   VectorContent,
   PixelData,
   LayerRawData,
@@ -849,6 +850,12 @@ function drawPrecisionPreview(target: HTMLCanvasElement, surface: PrecisionTileS
   }
 }
 
+/** Fold Luma's separate alignment and justify flag back into one PSD value. */
+function psdJustification(style: TextStyle): Justification {
+  const align = style.align === "right" ? "right" : style.align === "center" ? "center" : "left";
+  return style.justify ? (`justify-${align}` as Justification) : align;
+}
+
 function importedTextStyle(layer: PsdLayer): TextStyle {
   const text = layer.text!;
   const firstStyle = { ...(text.style ?? {}), ...(text.styleRuns?.[0]?.style ?? {}) };
@@ -857,13 +864,22 @@ function importedTextStyle(layer: PsdLayer): TextStyle {
   const family = firstStyle.font?.name ?? "Arial";
   const weight = firstStyle.fauxBold ? "700" : "400";
   const italic = firstStyle.fauxItalic ? "italic " : "";
-  const align = firstParagraph.justification;
+  // Photoshop's justification is alignment and justification in one value:
+  // "justify-center" means justified, with the last line centred. Splitting it
+  // apart is what lets both survive the trip in.
+  const align = firstParagraph.justification ?? "left";
+  const lastLine = align.startsWith("justify-") ? align.slice("justify-".length) : align;
   return {
     text: text.text,
     font: `${italic}${weight} ${size}px ${family}, sans-serif`,
     color: psdColorToCss(firstStyle.fillColor),
-    align: align?.startsWith("right") ? "right" : align?.startsWith("center") ? "center" : "left",
+    align: lastLine === "right" ? "right" : lastLine === "center" ? "center" : "left",
     lineHeight: firstStyle.leading ? firstStyle.leading / size : 1.2,
+    // Photoshop measures tracking in thousandths of an em, which is the unit
+    // TextStyle.tracking already uses, so it carries across unconverted.
+    tracking: firstStyle.tracking,
+    paragraphSpacing: firstParagraph.spaceAfter ? firstParagraph.spaceAfter / size : undefined,
+    justify: align.startsWith("justify") || undefined,
     x: 0,
     y: 0,
   };
@@ -1308,9 +1324,11 @@ function textLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
       fauxItalic: font.italic,
       leading: font.size * style.lineHeight,
       fillColor: cssColorToPsd(style.color),
+      ...(style.tracking ? { tracking: style.tracking } : {}),
     },
     paragraphStyle: {
-      justification: style.align === "right" ? "right" : style.align === "center" ? "center" : "left",
+      justification: psdJustification(style),
+      ...(style.paragraphSpacing ? { spaceAfter: style.paragraphSpacing * font.size } : {}),
     },
     // Existing rich runs are valid only while the complete Luma text model is
     // unchanged. Once edited, emit a valid single-style text layer rather than
