@@ -33,6 +33,7 @@ import {
   type StrokePosition,
 } from "@/app/engine/document";
 import { formatCssColor, parseCssColor } from "@/app/engine/color";
+import { BUILT_IN_LAYER_STYLES } from "@/app/engine/layer-styles";
 import BlendIfRangeEditor from "./blend-if-range-editor";
 
 /** "Blending Options" is a pane like the effects, but it edits the layer itself. */
@@ -641,12 +642,34 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
             <button type="button" onClick={() => studio.pasteLayerStyle(layer.id)} disabled={!studio.hasCopiedLayerStyle()} title="Paste the copied style onto this layer">Paste</button>
             <button type="button" onClick={() => studio.scaleLayerEffects(layer.id, 0.5)} disabled={!effects.length} title="Halve every effect size">−50%</button>
             <button type="button" onClick={() => studio.scaleLayerEffects(layer.id, 2)} disabled={!effects.length} title="Double every effect size">+100%</button>
+            <button
+              type="button"
+              onClick={() => studio.createLayersFromStyle(layer.id)}
+              disabled={!effects.length}
+              title="Rasterize each effect into its own layer"
+            >To layers</button>
             <button type="button" onClick={() => studio.clearLayerStyle(layer.id)} disabled={!effects.length} title="Remove every effect">Clear</button>
           </div>
           <button type="button" onClick={onClose} aria-label="Close layer style">×</button>
         </header>
         <div className="layer-style-body">
           <nav className="layer-style-rail" aria-label="Layer style sections">
+            <label className="layer-style-preset">
+              <span>Preset</span>
+              <select
+                value=""
+                onChange={(event) => {
+                  const preset = BUILT_IN_LAYER_STYLES.find((candidate) => candidate.name === event.target.value);
+                  if (preset) studio.applyLayerStyle(layer.id, preset);
+                }}
+                aria-label="Apply a style preset"
+              >
+                <option value="">Presets…</option>
+                {BUILT_IN_LAYER_STYLES.map((preset) => (
+                  <option key={preset.name} value={preset.name}>{preset.name}</option>
+                ))}
+              </select>
+            </label>
             <button
               type="button"
               className={pane === "blending" ? "active" : ""}

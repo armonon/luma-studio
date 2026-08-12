@@ -30,6 +30,7 @@ import {
 import { formatCssColor, parseCssColor } from "../app/engine/color.ts";
 import { BACKDROP_READING_KINDS, documentNeedsFullBackdrop, layerEffectReach } from "../app/engine/layer-effects.ts";
 import { glCanRenderDocument } from "../app/engine/gl-renderer.ts";
+import { BUILT_IN_LAYER_STYLES, captureStyle } from "../app/engine/layer-styles.ts";
 import { renderClean, renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
 
@@ -484,6 +485,92 @@ test("a stroke can be filled with a gradient or a pattern, not just a colour", (
     stops: [{ offset: 0, color: "#00ff00" }, { offset: 1, color: "#ffff00" }],
   });
   assert.notEqual(restopped, gradient, "the stops should reach a gradient stroke");
+});
+
+// --- style presets and Create Layers ---------------------------------------
+
+test("every built-in style applies and produces the effects it promises", () => {
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+  studio.addBlankRaster("Styled");
+  const layerId = studio.doc.layers[0].id;
+
+  for (const preset of BUILT_IN_LAYER_STYLES) {
+    assert.equal(studio.applyLayerStyle(layerId, preset), true, `${preset.name} was refused`);
+    const applied = studio.doc.layers[0].effects ?? [];
+    assert.equal(applied.length, preset.effects.length, `${preset.name} lost effects`);
+    assert.deepEqual(
+      applied.map((effect) => effect.kind),
+      preset.effects.map((effect) => effect.kind),
+      `${preset.name} changed kinds`,
+    );
+    // Ids must be minted, not shared with the preset or between layers.
+    assert.equal(new Set(applied.map((effect) => effect.id)).size, applied.length);
+  }
+  studio.dispose();
+});
+
+test("capturing a style round-trips through applying it", () => {
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+  studio.addBlankRaster("Source");
+  const layerId = studio.doc.layers[0].id;
+  studio.addLayerEffect(layerId, "stroke");
+  studio.addLayerEffect(layerId, "outer-glow");
+  studio.setLayerFillOpacity(layerId, 0.4);
+
+  const captured = captureStyle(studio.doc.layers[0], "Mine");
+  studio.clearLayerStyle(layerId);
+  assert.equal(studio.doc.layers[0].effects?.length, 0);
+
+  studio.applyLayerStyle(layerId, captured);
+  assert.deepEqual(
+    studio.doc.layers[0].effects?.map((effect) => effect.kind),
+    ["stroke", "outer-glow"],
+  );
+  assert.equal(resolvedFillOpacity(studio.doc.layers[0]), 0.4);
+  studio.dispose();
+});
+
+test("Create Layers splits a style into real layers and removes it", () => {
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+  const square = testCanvas(24, 24);
+  const squareCtx = square.getContext("2d")!;
+  squareCtx.fillStyle = "#ff0000";
+  squareCtx.fillRect(0, 0, 24, 24);
+  studio.addRasterFromImage(
+    "square",
+    Object.assign(square, { naturalWidth: 24, naturalHeight: 24 }) as unknown as HTMLImageElement,
+  );
+  const layerId = studio.doc.layers[0].id;
+  const glow = studio.addLayerEffect(layerId, "outer-glow")!;
+  studio.updateLayerEffect(layerId, glow.id, { blur: 10, opacity: 1, color: "#00ff00" });
+  studio.addLayerEffect(layerId, "color-overlay");
+
+  const before = studio.doc.layers.length;
+  const result = studio.createLayersFromStyle(layerId)!;
+  assert.equal(result.created, 2, "expected one layer per splittable effect");
+  assert.equal(studio.doc.layers.length, before + 2);
+  assert.equal(studio.doc.layers.find((l) => l.id === layerId)?.effects?.length, 0, "the style must not remain");
+  studio.dispose();
+});
+
+test("Create Layers keeps backdrop-reading effects rather than breaking them", () => {
+  // Separated from their layer they would sample a different backdrop — the
+  // new layers included — and stop matching what they replaced.
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+  studio.addBlankRaster("Glass");
+  const layerId = studio.doc.layers[0].id;
+  studio.addLayerEffect(layerId, "backdrop-blur");
+  studio.addLayerEffect(layerId, "stroke");
+
+  const result = studio.createLayersFromStyle(layerId)!;
+  assert.equal(result.created, 1, "only the stroke can be split out");
+  assert.equal(result.kept, 1, "the backdrop blur must be reported as kept");
+  assert.deepEqual(
+    studio.doc.layers.find((l) => l.id === layerId)?.effects?.map((e) => e.kind),
+    ["backdrop-blur"],
+    "the unsplittable effect should still be on the layer",
+  );
+  studio.dispose();
 });
 
 // --- contact shadow and reflection -----------------------------------------

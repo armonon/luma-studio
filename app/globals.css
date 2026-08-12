@@ -11063,3 +11063,19 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
   height: 12px;
   accent-color: #7656ef;
 }
+
+.layer-style-preset {
+  display: grid;
+  gap: 4px;
+  padding: 0 2px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(76, 87, 104, 0.1);
+  color: #6b727c;
+  font-size: 7.5px;
+  font-weight: 600;
+}
+
+.layer-style-preset select {
+  height: 26px;
+  font-size: 8px;
+}

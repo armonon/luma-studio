@@ -58,6 +58,7 @@ import {
   transformPoint,
   type GlobalLight,
 } from "./document";
+import { instantiateStyle, planCreateLayers, type LayerStylePreset } from "./layer-styles";
 import { isNeutralBlendIf } from "./blend";
 import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
 import {
@@ -2326,6 +2327,85 @@ export class Studio {
     this.requestRender();
     this.emit();
     return matte;
+  }
+
+  /** Apply a named style preset, replacing whatever the layer had. */
+  applyLayerStyle(layerId: string, preset: LayerStylePreset) {
+    const layer = this.findLayer(layerId);
+    if (!layer || layer.locked) return false;
+    const before: LayerSnapshot = {
+      layerId,
+      effects: cloneEffects(layer.effects ?? []),
+      blendStack: layer.blendStack ? layer.blendStack.map((pass) => ({ ...pass })) : null,
+      fillOpacity: layer.fillOpacity ?? null,
+    };
+    const style = instantiateStyle(preset);
+    layer.effects = style.effects;
+    if (style.blendStack) layer.blendStack = style.blendStack;
+    layer.fillOpacity = style.fillOpacity;
+    this.commit({
+      label: `Style: ${preset.name}`,
+      before: [before],
+      after: [{
+        layerId,
+        effects: cloneEffects(layer.effects),
+        blendStack: layer.blendStack ? layer.blendStack.map((pass) => ({ ...pass })) : null,
+        fillOpacity: layer.fillOpacity ?? null,
+      }],
+    });
+    this.requestRender();
+    return true;
+  }
+
+  /**
+   * Photoshop's "Create Layers": rasterize each effect into its own layer.
+   *
+   * The style is removed afterwards, because leaving it would double every
+   * effect. Effects that read the layers beneath are left in place instead of
+   * being split: separated, they would sample a different backdrop — including
+   * the new layers themselves — and stop matching what they replaced.
+   */
+  createLayersFromStyle(layerId: string) {
+    const layer = this.findLayer(layerId);
+    if (!layer?.effects?.length || layer.locked) return null;
+    const { layers: plan, unsplittable } = planCreateLayers(layer);
+    if (!plan.length) return { created: 0, kept: unsplittable.length };
+
+    const created: Layer[] = [];
+    for (const item of plan) {
+      // Render this effect alone, at document resolution.
+      const isolated: Layer = { ...shallowCloneLayer(layer), effects: [item.effect] };
+      const canvas = newCanvas(this.doc.width, this.doc.height);
+      const only = createDocument(this.doc.width, this.doc.height);
+      only.globalLight = this.doc.globalLight;
+      only.layers = [isolated];
+      renderClean(only, canvas);
+      // Subtract the layer's own pixels so only the effect remains.
+      const context = canvas.getContext("2d")!;
+      const bare = newCanvas(this.doc.width, this.doc.height);
+      const bareDoc = createDocument(this.doc.width, this.doc.height);
+      bareDoc.layers = [{ ...shallowCloneLayer(layer), effects: [] }];
+      renderClean(bareDoc, bare);
+      context.globalCompositeOperation = "destination-out";
+      context.drawImage(bare, 0, 0);
+      context.globalCompositeOperation = "source-over";
+
+      const effectLayer = createRasterLayer(item.name, canvas);
+      effectLayer.parentId = layer.parentId;
+      created.push(effectLayer);
+    }
+
+    this.commitStructural("Effects to layers", () => {
+      const index = this.doc.layers.findIndex((candidate) => candidate.id === layerId);
+      const above = created.filter((_, i) => plan[i].placement === "above");
+      const below = created.filter((_, i) => plan[i].placement === "below");
+      // Index 0 is topmost, so "above" goes before the layer and "below" after.
+      this.doc.layers.splice(index, 0, ...above.reverse());
+      this.doc.layers.splice(index + above.length + 1, 0, ...below);
+      layer.effects = unsplittable.length ? unsplittable.map((effect) => ({ ...effect })) : [];
+    });
+    this.requestRender();
+    return { created: created.length, kept: unsplittable.length };
   }
 
   /**
