@@ -67,7 +67,23 @@ function clearContext(ctx: CanvasRenderingContext2D, width: number, height: numb
 }
 
 /** Effects that read the composited layers beneath, not just their own pixels. */
-export const BACKDROP_READING_KINDS: ReadonlyArray<LayerEffect["kind"]> = ["backdrop-blur", "refraction"];
+export const BACKDROP_READING_KINDS: ReadonlyArray<LayerEffect["kind"]> = [
+  "backdrop-blur", "refraction", "reflection", "contact-shadow",
+];
+
+/**
+ * Effects whose sampling is unbounded, so a tile margin cannot serve them.
+ *
+ * Reflection mirrors the backdrop across the layer, which can reach the far
+ * side of the canvas — there is no radius that covers it. The renderer drops
+ * to a single tile for these rather than seaming; correctness over cache.
+ */
+export const FULL_BACKDROP_KINDS: ReadonlyArray<LayerEffect["kind"]> = ["reflection"];
+
+export function documentNeedsFullBackdrop(layers: ReadonlyArray<Layer>) {
+  return layers.some((layer) => layer.effects?.some((effect) =>
+    effect.enabled && FULL_BACKDROP_KINDS.includes(effect.kind)));
+}
 
 export function effectNeedsBackdrop(effect: LayerEffect) {
   return BACKDROP_READING_KINDS.includes(effect.kind);
@@ -110,6 +126,11 @@ export function layerEffectReach(effect: LayerEffect) {
     case "refraction":
       // Bounded displacement, which is exactly why this one tiles correctly.
       return (effect.strength ?? 12) + effect.blur;
+    case "contact-shadow":
+      return (effect.strength ?? 8) + effect.blur;
+    case "reflection":
+      // Unbounded; documentNeedsFullBackdrop stops the renderer tiling instead.
+      return effect.blur * 2;
     // Painted inside the layer, but sampled from beyond it.
     case "inner-shadow":
       return effect.blur * 2 + Math.hypot(effect.offsetX, effect.offsetY);
@@ -621,6 +642,82 @@ function drawLayerEffect(
       }
       ctx.putImageData(out, 0, 0);
       // putImageData ignores globalAlpha, so the opacity is reapplied by mask.
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.globalAlpha = effect.opacity;
+      ctx.drawImage(contentBuf, 0, 0);
+      break;
+    }
+
+    case "contact-shadow": {
+      // Ambient occlusion by hand: darken the backdrop in a tight band hugging
+      // the outside of the shape. Reading the backdrop rather than painting a
+      // rim is what makes it a *shadow* — it deepens whatever is underneath
+      // instead of laying an opaque smudge over it, and it needs no blend mode
+      // to do so, which below-content effects do not have.
+      if (!backdrop) break;
+      const reach = Math.max(1, (effect.strength ?? 8) * uniformScale);
+      const sctx = scratchBuf.getContext("2d")!;
+      clearContext(sctx, size.width, size.height);
+      // Band = dilated silhouette minus the silhouette itself.
+      stampDilated(sctx, contentBuf, "#000000", reach);
+      sctx.globalCompositeOperation = "destination-out";
+      sctx.drawImage(contentBuf, 0, 0);
+      sctx.globalCompositeOperation = "source-over";
+      if (blur > 0) {
+        const softened = newCanvas(size.width, size.height);
+        const soft = softened.getContext("2d")!;
+        soft.filter = `blur(${blur}px)`;
+        soft.drawImage(scratchBuf, 0, 0);
+        soft.filter = "none";
+        clearContext(sctx, size.width, size.height);
+        sctx.drawImage(softened, 0, 0);
+      }
+
+      // Multiply, not a veil laid on top. Occlusion scales what is already
+      // there, so it can never lighten: over a near-black backdrop it stays
+      // near-black, where a semi-transparent grey rim would lift it. That is
+      // the only thing separating this from a tight dark outer glow, and
+      // `source-atop` with black — the first attempt — was algebraically the
+      // same as the glow, which made the backdrop sampling pointless.
+      //
+      // Order matters. Canvas blends are premultiplied, so where the
+      // destination is transparent or partial the source comes through
+      // un-blended in proportion. Multiplying into an already-clipped band
+      // therefore leaked raw band colour along every soft edge and lightened
+      // the very thing this must not lighten. Multiply against the opaque
+      // backdrop first, then clip.
+      ctx.globalAlpha = 1;
+      ctx.drawImage(backdrop, 0, 0);
+      ctx.globalCompositeOperation = "multiply";
+      ctx.globalAlpha = effect.opacity;
+      ctx.fillStyle = effect.color;
+      ctx.fillRect(0, 0, size.width, size.height);
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.globalAlpha = 1;
+      ctx.drawImage(scratchBuf, 0, 0);
+      break;
+    }
+
+    case "reflection": {
+      // Mirror the backdrop within the layer, the way a reflective surface
+      // shows what faces it. Unbounded sampling, which is why the renderer
+      // stops tiling for it.
+      //
+      // The mirror line is the layer's centre, not its lower edge: a layer's
+      // bounds are the whole canvas unless it is transformed, so reflecting
+      // about the bottom threw the entire reflection off-screen.
+      if (!backdrop) break;
+      const mirrorY = project(frame, bounds.x, (bounds.y + bounds.bottom) / 2).y;
+      ctx.save();
+      // Offset slides the reflection so it can sit apart from its source. Raw,
+      // not global-light-resolved: this is a gap, not a light direction, and
+      // rotating it with the shadows would be meaningless.
+      ctx.translate(effect.offsetX * scale.x, mirrorY * 2 + effect.offsetY * scale.y);
+      ctx.scale(1, -1);
+      if (blur > 0) ctx.filter = `blur(${blur}px)`;
+      ctx.drawImage(backdrop, 0, 0);
+      ctx.filter = "none";
+      ctx.restore();
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = effect.opacity;
       ctx.drawImage(contentBuf, 0, 0);

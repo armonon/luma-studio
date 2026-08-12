@@ -339,6 +339,18 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           Blurs the layers behind this one, live. Nothing underneath means nothing to blur.
         </p>
       )}
+      {effect.kind === "contact-shadow" && (
+        <p className="layer-style-hint">
+          Darkens the layers underneath in a band hugging the shape, rather than painting a rim over
+          them — which is what makes it read as contact rather than outline.
+        </p>
+      )}
+      {effect.kind === "reflection" && (
+        <p className="layer-style-hint">
+          Mirrors the layers behind this one inside it. Sampling is unbounded, so a document using
+          this renders in one pass instead of tiles.
+        </p>
+      )}
       {effect.kind === "refraction" && (
         <p className="layer-style-hint">
           Bends the layers behind this one along its own edges, like glass. Displacement is capped

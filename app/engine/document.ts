@@ -525,10 +525,12 @@ export type LayerEffectKind =
   | "bloom"
   | "relief"
   | "long-shadow"
-  | "refraction";
+  | "refraction"
+  | "reflection"
+  | "contact-shadow";
 
 /** Effects painted beneath the layer content; the rest paint over it. */
-export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow", "long-shadow"];
+export const EFFECTS_BELOW_CONTENT: ReadonlyArray<LayerEffectKind> = ["drop-shadow", "outer-glow", "long-shadow", "contact-shadow"];
 
 export type StrokePosition = "outside" | "inside" | "center";
 /** Edge glows hug the inside of the silhouette; centre glows radiate outwards. */
@@ -632,7 +634,10 @@ export type LayerEffect = {
   threshold?: number;
   /** long-shadow only — how many stamps make up the trail. Defaults to 32. */
   steps?: number;
-  /** refraction only — how far the backdrop is displaced, in pixels. Defaults to 12. */
+  /**
+   * refraction — how far the backdrop is displaced, in pixels. Defaults to 12.
+   * contact-shadow — how far the darkening reaches from the edge. Defaults to 8.
+   */
   strength?: number;
   /**
    * Confine this effect to the layer's subject matte.
@@ -663,8 +668,10 @@ export const LAYER_EFFECT_KINDS: ReadonlyArray<LayerEffectKind> = [
   "outer-glow",
   "drop-shadow",
   "long-shadow",
+  "contact-shadow",
   "backdrop-blur",
   "refraction",
+  "reflection",
 ];
 
 export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
@@ -683,6 +690,8 @@ export const EFFECT_LABELS: Record<LayerEffectKind, string> = {
   relief: "Relief",
   "long-shadow": "Long Shadow",
   refraction: "Refraction",
+  reflection: "Reflection",
+  "contact-shadow": "Contact Shadow",
 };
 
 /** Controls an effect actually reads. Anything omitted here is ignored by the renderer. */
@@ -726,6 +735,8 @@ export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> 
   relief: ["blendMode", "depth", "angle", "globalLight"],
   "long-shadow": ["offset", "globalLight", "steps"],
   refraction: ["blendMode", "strength", "blur"],
+  reflection: ["blendMode", "blur", "offset"],
+  "contact-shadow": ["strength", "blur"],
 };
 
 /**
@@ -780,6 +791,8 @@ export const EFFECT_BLEND_DEFAULTS: Record<LayerEffectKind, BlendMode> = {
   relief: "hard-light",
   "long-shadow": "source-over",
   refraction: "source-over",
+  reflection: "source-over",
+  "contact-shadow": "source-over",
 };
 
 export function resolvedEffectBlendMode(effect: LayerEffect): BlendMode {

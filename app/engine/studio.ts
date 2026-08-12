@@ -2145,6 +2145,17 @@ export class Studio {
           enabled: true, opacity: 1, color: "#ffffff", blur: 6, offsetX: 0, offsetY: 0,
           strength: 18,
         };
+      case "reflection":
+        return {
+          enabled: true, opacity: 0.35, color: "#ffffff", blur: 10, offsetX: 0, offsetY: 6,
+        };
+      case "contact-shadow":
+        // Mid-dark rather than black: the colour is a multiplier here, so pure
+        // black would crush the band to nothing at any opacity.
+        return {
+          enabled: true, opacity: 0.7, color: "#3a3a44", blur: 6, offsetX: 0, offsetY: 0,
+          strength: 10,
+        };
     }
   }
 

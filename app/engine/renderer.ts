@@ -14,7 +14,7 @@ import {
 import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
 import { compositeBlendStack } from "./blend";
-import { composeLayerWithEffects, layerEffectReach } from "./layer-effects";
+import { composeLayerWithEffects, documentNeedsFullBackdrop, layerEffectReach } from "./layer-effects";
 import { getDisplayCtx } from "./gl-renderer";
 import { softProofDisplayRgb } from "./color";
 import { DEFAULT_TILE_SIZE } from "./tile-store";
@@ -667,7 +667,12 @@ export function renderViewport(
   // the layer hierarchy. Misses still share one prepared hierarchy per frame.
   const getPreparedLayers = () => (preparedLayers ??= prepareLayers(doc));
 
-  const tilePixels = DEFAULT_TILE_SIZE;
+  // A reflection samples the whole backdrop, and no tile margin covers that.
+  // One tile the size of the viewport is the honest answer: it costs the tile
+  // cache, and it is the only way the effect can be right.
+  const tilePixels = documentNeedsFullBackdrop(doc.layers)
+    ? Math.max(viewport.outputWidth, viewport.outputHeight, 1)
+    : DEFAULT_TILE_SIZE;
   const overscan = renderOverscanPixels(doc, viewport.zoom);
   const scaleX = viewport.outputWidth / viewport.width;
   const scaleY = viewport.outputHeight / viewport.height;

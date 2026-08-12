@@ -26,7 +26,7 @@ import {
   type LayerEffectKind,
 } from "../app/engine/document.ts";
 import { formatCssColor, parseCssColor } from "../app/engine/color.ts";
-import { BACKDROP_READING_KINDS, layerEffectReach } from "../app/engine/layer-effects.ts";
+import { BACKDROP_READING_KINDS, documentNeedsFullBackdrop, layerEffectReach } from "../app/engine/layer-effects.ts";
 import { glCanRenderDocument } from "../app/engine/gl-renderer.ts";
 import { renderClean, renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
@@ -380,6 +380,152 @@ test("every backdrop-reading effect is listed as one", () => {
       `${kind} bails without a backdrop but is missing from BACKDROP_READING_KINDS`,
     );
   }
+});
+
+// --- contact shadow and reflection -----------------------------------------
+
+/** A panel over a split backdrop, for the two effects that read behind it. */
+function panelOverSplit(effect: LayerEffect, panelInset = 16) {
+  const backdrop = newCanvas(SIZE, SIZE);
+  const backdropCtx = backdrop.getContext("2d")!;
+  backdropCtx.fillStyle = "#808080";
+  backdropCtx.fillRect(0, 0, SIZE, SIZE);
+  backdropCtx.fillStyle = "#ffffff";
+  backdropCtx.fillRect(0, 0, SIZE, SIZE / 2);
+
+  const panel = newCanvas(SIZE, SIZE);
+  const panelCtx = panel.getContext("2d")!;
+  panelCtx.fillStyle = "#4060a0";
+  panelCtx.fillRect(panelInset, panelInset, SIZE - panelInset * 2, SIZE - panelInset * 2);
+
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [
+    { ...createRasterLayer("panel", panel), effects: [effect] },
+    createRasterLayer("backdrop", backdrop),
+  ];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+  return target;
+}
+
+test("contact shadow occludes and so can never lighten what is under it", () => {
+  // The discriminator that matters. A semi-transparent grey rim laid on top
+  // *lifts* a dark backdrop; multiplying it cannot. An earlier version used
+  // source-atop with black, which is algebraically identical to compositing
+  // black — the backdrop sampling did nothing and the effect was a tight dark
+  // outer glow wearing a different name.
+  const render = (enabled: boolean) => {
+    const backdrop = newCanvas(SIZE, SIZE);
+    const backdropCtx = backdrop.getContext("2d")!;
+    backdropCtx.fillStyle = "#050505";
+    backdropCtx.fillRect(0, 0, SIZE, SIZE);
+
+    const panel = newCanvas(SIZE, SIZE);
+    const panelCtx = panel.getContext("2d")!;
+    panelCtx.fillStyle = "#4060a0";
+    panelCtx.fillRect(20, 20, 20, 20);
+
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [
+      {
+        ...createRasterLayer("panel", panel),
+        effects: [{
+          ...baseEffect("contact-shadow"),
+          id: "cs",
+          // A light grey: as a veil this would visibly lift near-black.
+          color: "#b0b0b0",
+          strength: 8,
+          blur: 2,
+          opacity: 1,
+          enabled,
+        }],
+      },
+      createRasterLayer("backdrop", backdrop),
+    ];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return target;
+  };
+
+  const shadow = render(true);
+  const none = render(false);
+  const band = { x: 30, y: 16 };
+  const occluded = pixelAt(shadow, band.x, band.y);
+  const bare = pixelAt(none, band.x, band.y);
+  assert.ok(
+    occluded.r <= bare.r + 1,
+    `occlusion must not lighten: ${bare.r} became ${occluded.r}`,
+  );
+});
+
+test("contact shadow darkens proportionally to what is behind it", () => {
+  // Multiplying scales the backdrop, so a bright backdrop loses more absolute
+  // brightness than a dim one under the same band.
+  const render = (backdropColor: string) => {
+    const backdrop = newCanvas(SIZE, SIZE);
+    const backdropCtx = backdrop.getContext("2d")!;
+    backdropCtx.fillStyle = backdropColor;
+    backdropCtx.fillRect(0, 0, SIZE, SIZE);
+
+    const panel = newCanvas(SIZE, SIZE);
+    const panelCtx = panel.getContext("2d")!;
+    panelCtx.fillStyle = "#4060a0";
+    panelCtx.fillRect(20, 20, 20, 20);
+
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [
+      {
+        ...createRasterLayer("panel", panel),
+        effects: [{ ...baseEffect("contact-shadow"), id: "cs", color: "#404040", strength: 8, blur: 2, opacity: 1 }],
+      },
+      createRasterLayer("backdrop", backdrop),
+    ];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return pixelAt(target, 30, 16).r;
+  };
+
+  const fromWhite = 255 - render("#ffffff");
+  const fromMid = 128 - render("#808080");
+  assert.ok(
+    fromWhite > fromMid + 10,
+    `expected proportional darkening, lost ${fromWhite} from white vs ${fromMid} from mid`,
+  );
+});
+
+test("reflection mirrors the backdrop inside the layer", () => {
+  // The backdrop's white half is on top. Mirrored, it appears in the lower
+  // half of the panel, which is otherwise over grey.
+  const reflected = panelOverSplit({
+    ...baseEffect("reflection"),
+    id: "rf",
+    blur: 0,
+    offsetX: 0,
+    offsetY: 0,
+    opacity: 1,
+  });
+  // y=40 maps back to source y=20, inside the backdrop's white half. The panel
+  // ends at y=44, so sampling there sits exactly on the clip boundary.
+  const lower = pixelAt(reflected, 30, 40);
+  assert.ok(lower.r > 200, `expected the mirrored white half, got r=${lower.r}`);
+  // Outside the panel the backdrop is untouched grey.
+  assert.ok(pixelAt(reflected, 4, 40).r < 200, "the reflection escaped the layer");
+});
+
+test("a document with a reflection stops tiling instead of seaming", () => {
+  const withReflection = createDocument(SIZE, SIZE);
+  withReflection.layers = [{
+    ...createRasterLayer("panel", newCanvas(SIZE, SIZE)),
+    effects: [{ ...baseEffect("reflection"), id: "rf" }],
+  }];
+  assert.equal(documentNeedsFullBackdrop(withReflection.layers), true);
+
+  const disabled = createDocument(SIZE, SIZE);
+  disabled.layers = [{
+    ...createRasterLayer("panel", newCanvas(SIZE, SIZE)),
+    effects: [{ ...baseEffect("reflection"), id: "rf", enabled: false }],
+  }];
+  assert.equal(documentNeedsFullBackdrop(disabled.layers), false, "a disabled effect must not cost the tile cache");
 });
 
 // --- tile sampling reach ---------------------------------------------------
