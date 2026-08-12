@@ -118,8 +118,12 @@ export function layerEffectReach(effect: LayerEffect) {
     case "stroke":
       // An inside stroke stays within the shape, but the outward band does not.
       return (effect.position ?? "outside") === "inside" ? 0 : (effect.width ?? 3) + effect.blur;
-    case "bevel-emboss":
-      return (effect.depth ?? 3) + effect.blur * 2;
+    case "bevel-emboss": {
+      // Outer, emboss and stroke styles push the relief past the silhouette.
+      const inside = (effect.bevelStyle ?? "inner") === "inner" || (effect.bevelStyle ?? "inner") === "pillow";
+      const spill = inside ? 0 : (effect.depth ?? 3) + effect.blur;
+      return (effect.depth ?? 3) + effect.blur * 2 + spill;
+    }
     case "backdrop-blur":
       // Sampling reach, not painting reach.
       return effect.blur * 2;
@@ -407,6 +411,58 @@ function applySpread(
   clearContext(sctx, size.width, size.height);
   stampDilated(sctx, contentBuf, "#000000", blur * spread);
   return { source: scratchBuf, blur: blur * (1 - spread) };
+}
+
+/**
+ * Where a bevel is allowed to land, which is what its style actually selects.
+ *
+ * Inner and pillow keep the relief inside the shape; outer pushes it into the
+ * band just beyond the edge; emboss straddles both; stroke emboss confines it
+ * to a narrow band centred on the outline.
+ */
+function bevelClipSource(
+  effect: LayerEffect,
+  contentBuf: HTMLCanvasElement,
+  scratchBuf: HTMLCanvasElement,
+  size: { width: number; height: number },
+  blur: number,
+): HTMLCanvasElement {
+  const style = effect.bevelStyle ?? "inner";
+  if (style === "inner" || style === "pillow") return contentBuf;
+
+  const reach = Math.max(1, (effect.depth ?? 3) + blur);
+  const sctx = scratchBuf.getContext("2d")!;
+  clearContext(sctx, size.width, size.height);
+
+  if (style === "stroke") {
+    // Stroke emboss straddles the outline: a band half outside and half in,
+    // which is what makes it read as relief *on* the edge rather than beside
+    // it. Dilating and then subtracting the shape — the outer recipe — would
+    // make it indistinguishable from Outer.
+    const half = reach / 2;
+    stampDilated(sctx, contentBuf, "#000000", half);
+    const eroded = newCanvas(size.width, size.height);
+    const ectx = eroded.getContext("2d")!;
+    ectx.drawImage(contentBuf, 0, 0);
+    ectx.globalCompositeOperation = "destination-in";
+    const steps = 16;
+    for (let i = 0; i < steps; i += 1) {
+      const angle = (i / steps) * Math.PI * 2;
+      ectx.drawImage(contentBuf, Math.cos(angle) * half, Math.sin(angle) * half);
+    }
+    sctx.globalCompositeOperation = "destination-out";
+    sctx.drawImage(eroded, 0, 0);
+    sctx.globalCompositeOperation = "source-over";
+    return scratchBuf;
+  }
+
+  stampDilated(sctx, contentBuf, "#000000", reach);
+  if (style === "outer") {
+    sctx.globalCompositeOperation = "destination-out";
+    sctx.drawImage(contentBuf, 0, 0);
+    sctx.globalCompositeOperation = "source-over";
+  }
+  return scratchBuf;
 }
 
 /** Grow the silhouette of `src` by `reach`, painted in `color`. */
@@ -869,15 +925,38 @@ function drawLayerEffect(
     }
 
     case "bevel-emboss": {
-      // Light one edge and shade the opposite one, both confined to the layer.
+      // Light one edge and shade the opposite one. Which side is lit, and
+      // where the relief is allowed to land, is what separates the styles.
       const { dx, dy } = bevelOffset(effect, light);
+      const carved = (effect.direction ?? "up") === "down";
+      const lit = carved ? (effect.shadowColor ?? "#000000") : (effect.highlightColor ?? "#ffffff");
+      const shade = carved ? (effect.highlightColor ?? "#ffffff") : (effect.shadowColor ?? "#000000");
       // A light overhead rakes across nothing, so the relief flattens out.
       ctx.globalAlpha = effect.opacity * bevelLightStrength(effect, light);
-      stampSilhouette(ctx, contentBuf, effect.highlightColor ?? "#ffffff", blur, dx * scale.x, dy * scale.y);
-      stampSilhouette(ctx, contentBuf, effect.shadowColor ?? "#000000", blur, -dx * scale.x, -dy * scale.y);
+      stampSilhouette(ctx, contentBuf, lit, blur, dx * scale.x, dy * scale.y);
+      stampSilhouette(ctx, contentBuf, shade, blur, -dx * scale.x, -dy * scale.y);
+
+      // Pillow emboss adds the opposite relief, which is what makes the edge
+      // look pressed into the surface rather than standing off it.
+      if ((effect.bevelStyle ?? "inner") === "pillow") {
+        stampSilhouette(ctx, contentBuf, shade, blur, dx * scale.x * 0.5, dy * scale.y * 0.5);
+        stampSilhouette(ctx, contentBuf, lit, blur, -dx * scale.x * 0.5, -dy * scale.y * 0.5);
+      }
+
+      if (effect.glossContour?.length) {
+        // The gloss contour reshapes the lighting ramp itself, which is how a
+        // bevel gets a metallic double-highlight rather than a linear fade.
+        const gloss = curveToLut(effect.glossContour);
+        const image = ctx.getImageData(0, 0, size.width, size.height);
+        for (let i = 3; i < image.data.length; i += 4) {
+          if (image.data[i] !== 0) image.data[i] = gloss[image.data[i]];
+        }
+        ctx.putImageData(image, 0, 0);
+      }
+
       ctx.globalCompositeOperation = "destination-in";
       ctx.globalAlpha = 1;
-      ctx.drawImage(contentBuf, 0, 0);
+      ctx.drawImage(bevelClipSource(effect, contentBuf, scratchBuf, size, blur), 0, 0);
       break;
     }
   }

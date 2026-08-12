@@ -23,6 +23,7 @@ import {
   Layer,
   LayerEffect,
   NEUTRAL_TONE,
+  type BevelStyle,
   type CurvePoints,
   TextStyle,
   createAdjustmentLayer,
@@ -221,6 +222,22 @@ function contourToPsd(contour: CurvePoints | undefined) {
   return { contour: { name: "Luma contour", curve: contour.map((point) => ({ x: point.x, y: point.y })) } };
 }
 
+const PSD_BEVEL_STYLE = {
+  inner: "inner bevel",
+  outer: "outer bevel",
+  emboss: "emboss",
+  pillow: "pillow emboss",
+  stroke: "stroke emboss",
+} as const;
+
+const LUMA_BEVEL_STYLE: Record<string, BevelStyle> = {
+  "inner bevel": "inner",
+  "outer bevel": "outer",
+  emboss: "emboss",
+  "pillow emboss": "pillow",
+  "stroke emboss": "stroke",
+};
+
 /** Photoshop stores a shadow as angle + distance; we store a pixel offset. */
 function shadowOffset(effect: { angle?: number; distance?: { value: number } }) {
   const angle = (effect.angle ?? 45) * Math.PI / 180;
@@ -336,6 +353,8 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
       blur: source.bevel.soften?.value ?? 0,
       depth: source.bevel.size?.value ?? 3,
       angle: source.bevel.angle ?? 135,
+      bevelStyle: LUMA_BEVEL_STYLE[source.bevel.style ?? "inner bevel"] ?? "inner",
+      direction: source.bevel.direction === "down" ? "down" : "up",
       highlightColor: psdColorToCss(source.bevel.highlightColor ?? { r: 255, g: 255, b: 255 }),
       shadowColor: psdColorToCss(source.bevel.shadowColor ?? { r: 0, g: 0, b: 0 }),
     });
@@ -465,7 +484,8 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
       soften: px(bevel.blur),
       angle: bevel.angle ?? 135,
       altitude: bevel.altitude ?? 30,
-      style: "inner bevel" as const,
+      style: PSD_BEVEL_STYLE[bevel.bevelStyle ?? "inner"],
+      direction: (bevel.direction ?? "up") === "down" ? "down" as const : "up" as const,
       ...contourToPsd(bevel.contour),
       highlightColor: cssColorToPsd(bevel.highlightColor ?? "#ffffff"),
       shadowColor: cssColorToPsd(bevel.shadowColor ?? "#000000"),

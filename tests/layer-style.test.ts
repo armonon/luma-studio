@@ -20,6 +20,7 @@ import {
   resolvedGlobalLight,
   type BlendIfRange,
   type Document,
+  type BevelStyle,
   type EffectField,
   type GradientStyle,
   type Layer,
@@ -179,6 +180,7 @@ function baseEffect(kind: LayerEffectKind): LayerEffect {
     pattern: "checker", patternScale: 8,
     saturation: 1.6, tint: 0, threshold: 0.6, steps: 24, strength: 10,
     dither: 0, fillType: "color", technique: "softer", range: 1,
+    bevelStyle: "inner", direction: "up",
     contour: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }],
   };
 }
@@ -215,6 +217,9 @@ const FIELD_CHANGES: Record<EffectField, Partial<LayerEffect>> = {
   fillType: { fillType: "gradient" },
   technique: { technique: "precise" },
   range: { range: 0.3 },
+  bevelStyle: { bevelStyle: "outer" },
+  direction: { direction: "down" },
+  glossContour: { glossContour: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }] },
 };
 
 const ALL_FIELDS = Object.keys(FIELD_CHANGES) as EffectField[];
@@ -390,6 +395,45 @@ test("every backdrop-reading effect is listed as one", () => {
       `${kind} bails without a backdrop but is missing from BACKDROP_READING_KINDS`,
     );
   }
+});
+
+test("every bevel style renders differently from the others", () => {
+  // Same reasoning as the gradient styles: the field table only swaps one
+  // value for one other, so it cannot show that all five are wired.
+  const digests = new Map<string, string>();
+  for (const bevelStyle of ["inner", "outer", "emboss", "pillow", "stroke"] as BevelStyle[]) {
+    const digest = renderDigest({
+      ...baseEffect("bevel-emboss"),
+      id: "b1",
+      bevelStyle,
+      depth: 5,
+      blur: 3,
+      opacity: 1,
+    });
+    for (const [other, seen] of digests) {
+      assert.notEqual(digest, seen, `${bevelStyle} renders identically to ${other}`);
+    }
+    digests.set(bevelStyle, digest);
+  }
+});
+
+test("bevel direction swaps which edge is lit", () => {
+  const raised = renderDigest({ ...baseEffect("bevel-emboss"), id: "b1", direction: "up", depth: 5, opacity: 1 });
+  const carved = renderDigest({ ...baseEffect("bevel-emboss"), id: "b1", direction: "down", depth: 5, opacity: 1 });
+  assert.notEqual(raised, carved, "up and down should not look the same");
+
+  // Carving is the same relief with the light on the other side, so swapping
+  // the two colours as well should bring it back.
+  const swapped = renderDigest({
+    ...baseEffect("bevel-emboss"),
+    id: "b1",
+    direction: "down",
+    depth: 5,
+    opacity: 1,
+    highlightColor: "#000000",
+    shadowColor: "#ffffff",
+  });
+  assert.equal(swapped, raised, "down with swapped colours should match up");
 });
 
 test("every gradient style renders differently from the others", () => {

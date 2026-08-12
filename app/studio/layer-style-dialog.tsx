@@ -22,6 +22,8 @@ import {
   type GlowSource,
   type GradientStop,
   type GradientStyle,
+  type BevelDirection,
+  type BevelStyle,
   type GlowTechnique,
   type StrokeFillType,
   type Layer,
@@ -260,6 +262,47 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           <ColorField label="Highlight" value={effect.highlightColor ?? "#ffffff"} onChange={(highlightColor) => patch({ highlightColor })} />
           <ColorField label="Shadow" value={effect.shadowColor ?? "#000000"} onChange={(shadowColor) => patch({ shadowColor })} />
         </>
+      )}
+      {effectUses(effect.kind, "bevelStyle") && (
+        <label className="layer-style-select">
+          <span>Style</span>
+          <select
+            value={effect.bevelStyle ?? "inner"}
+            onChange={(event) => patch({ bevelStyle: event.target.value as BevelStyle })}
+            aria-label="Bevel style"
+          >
+            <option value="inner">Inner Bevel</option>
+            <option value="outer">Outer Bevel</option>
+            <option value="emboss">Emboss</option>
+            <option value="pillow">Pillow Emboss</option>
+            <option value="stroke">Stroke Emboss</option>
+          </select>
+        </label>
+      )}
+      {effectUses(effect.kind, "direction") && (
+        <label className="layer-style-select">
+          <span>Direction</span>
+          <select
+            value={effect.direction ?? "up"}
+            onChange={(event) => patch({ direction: event.target.value as BevelDirection })}
+            aria-label="Bevel direction"
+          >
+            <option value="up">Up</option>
+            <option value="down">Down</option>
+          </select>
+        </label>
+      )}
+      {effectUses(effect.kind, "glossContour") && (
+        <label className="layer-style-select">
+          <span>Gloss</span>
+          <select
+            value={contourNameOf(effect.glossContour)}
+            onChange={(event) => patch({ glossContour: CONTOUR_PRESETS[event.target.value] })}
+            aria-label="Gloss contour"
+          >
+            {Object.keys(CONTOUR_PRESETS).map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
       )}
       {effectUses(effect.kind, "glowSource") && (
         <label className="layer-style-select">

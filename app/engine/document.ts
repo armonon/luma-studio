@@ -538,6 +538,9 @@ export type GlowSource = "edge" | "center";
 export type GradientStyle = "linear" | "radial" | "angle" | "reflected" | "diamond";
 export type StrokeFillType = "color" | "gradient" | "pattern";
 export type GlowTechnique = "softer" | "precise";
+/** Where the bevel's relief sits relative to the layer's edge. */
+export type BevelStyle = "outer" | "inner" | "emboss" | "pillow" | "stroke";
+export type BevelDirection = "up" | "down";
 export type PatternKind = "checker" | "stripes" | "dots";
 
 export type GradientStop = { offset: number; color: string };
@@ -577,6 +580,12 @@ export type LayerEffect = {
   blendMode?: BlendMode;
   /** bevel-emboss only — light elevation in degrees. Defaults to 30. */
   altitude?: number;
+  /** bevel-emboss only — where the relief sits. Defaults to "inner". */
+  bevelStyle?: BevelStyle;
+  /** bevel-emboss only — "up" is raised, "down" is carved. Defaults to "up". */
+  direction?: BevelDirection;
+  /** bevel-emboss only — remaps the highlight/shadow ramp before it is drawn. */
+  glossContour?: CurvePoints;
   /**
    * Shadows and glows — how much of `blur` hardens the edge instead of
    * softening it, 0..1. Photoshop calls this Spread outward and Choke inward.
@@ -719,7 +728,8 @@ export type EffectField =
   | "globalLight" | "glowSource" | "invert" | "blendMode" | "spread" | "noise" | "contour"
   | "gradientStops" | "gradientAngle" | "gradientStyle" | "gradientReverse"
   | "pattern" | "patternScale" | "saturation" | "tint" | "threshold" | "steps" | "strength"
-  | "dither" | "fillType" | "technique" | "range";
+  | "dither" | "fillType" | "technique" | "range"
+  | "bevelStyle" | "direction" | "glossContour";
 
 /** Falloff shaping applies wherever an effect has a soft edge to shape. */
 const FALLOFF: ReadonlyArray<EffectField> = ["spread", "noise", "contour"];
@@ -748,7 +758,7 @@ export const EFFECT_FIELDS: Record<LayerEffectKind, ReadonlyArray<EffectField>> 
   // listed field always changes the render. Conditional parameters get their
   // own tests instead of weakening the invariant to "sometimes".
   stroke: ["blendMode", "width", "position", "fillType"],
-  "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour"],
+  "bevel-emboss": ["blendMode", "depth", "angle", "altitude", "blur", "bevelColors", "globalLight", "contour", "bevelStyle", "direction", "glossContour"],
   "backdrop-blur": ["blendMode", "blur", "saturation", "tint"],
   bloom: ["blendMode", "blur", "threshold"],
   relief: ["blendMode", "depth", "angle", "globalLight"],
