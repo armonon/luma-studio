@@ -870,7 +870,7 @@ function drawContentLayer(
     bctx.globalCompositeOperation = "source-over";
   }
 
-  applyKnockout(composite, rootComposite, contentBuf, layer, frame);
+  applyKnockout(composite, rootComposite, contentBuf, layer);
   withChannelMask(composite, layer, frame, () => {
     compositeBlendStack(composite, layerBuf, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
   });
@@ -888,7 +888,6 @@ function applyKnockout(
   rootComposite: CanvasRenderingContext2D,
   contentBuf: HTMLCanvasElement,
   layer: Layer,
-  frame: RenderFrame,
 ) {
   const knockout = layer.knockout ?? "none";
   if (knockout === "none") return;
@@ -907,7 +906,6 @@ function applyKnockout(
     composite.drawImage(contentBuf, 0, 0);
     composite.restore();
   }
-  void frame;
 }
 
 /**

@@ -66,13 +66,24 @@ function clearContext(ctx: CanvasRenderingContext2D, width: number, height: numb
   ctx.restore();
 }
 
+/** Effects that read the composited layers beneath, not just their own pixels. */
+export const BACKDROP_READING_KINDS: ReadonlyArray<LayerEffect["kind"]> = ["backdrop-blur", "refraction"];
+
+export function effectNeedsBackdrop(effect: LayerEffect) {
+  return BACKDROP_READING_KINDS.includes(effect.kind);
+}
+
 /**
  * How far outside its own silhouette an effect reaches, in document pixels.
  *
- * This sets the tile margin, so it covers reading as well as writing. Backdrop
- * Blur paints nothing outside the layer but *samples* far outside it, and
- * returning 0 gave every tile only its own slice of the backdrop to blur —
- * which showed up as a grid of seams across the frosted panel.
+ * This sets the tile margin, so it covers *reading* as well as writing — and
+ * that distinction is the whole point. An effect clipped to the layer still
+ * samples outside it: an inner shadow stamps the silhouette displaced by its
+ * offset, satin displaces it both ways, relief reads luminance either side of
+ * the light direction. Reporting 0 for those because they paint nothing
+ * outside gave each tile only its own slice to work from, which shows up as
+ * seams at tile boundaries in the editor. Export is unaffected — it composites
+ * the whole document in one frame — which is exactly why it went unnoticed.
  *
  * Deliberately independent of the light angle — global light can rotate a
  * shadow at any time, and an overscan that shrank with the angle would clip
@@ -99,14 +110,19 @@ export function layerEffectReach(effect: LayerEffect) {
     case "refraction":
       // Bounded displacement, which is exactly why this one tiles correctly.
       return (effect.strength ?? 12) + effect.blur;
-    // Clipped to the layer, so they never reach outside it.
+    // Painted inside the layer, but sampled from beyond it.
+    case "inner-shadow":
+      return effect.blur * 2 + Math.hypot(effect.offsetX, effect.offsetY);
+    case "satin":
+      return effect.blur * 2 + Math.hypot(effect.offsetX, effect.offsetY);
+    case "inner-glow":
+      return effect.blur * 2;
+    case "relief":
+      return effect.depth ?? 3;
+    // Genuinely local: every output pixel depends only on the same input pixel.
     case "color-overlay":
     case "gradient-overlay":
     case "pattern-overlay":
-    case "inner-shadow":
-    case "inner-glow":
-    case "satin":
-    case "relief":
       return 0;
   }
 }

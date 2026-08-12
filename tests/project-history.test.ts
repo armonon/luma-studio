@@ -331,3 +331,30 @@ test("legacy v1 projects remain readable and receive safe generated ids", async 
   assert.equal(decoded.doc.guides.length, 0);
   assert.equal(decoded.history, undefined);
 });
+
+test("a subject matte is not written into the project and cannot poison a reopen", async () => {
+  // The matte is a canvas. Left in the serializer's spread it went through
+  // JSON.stringify as `{}` — truthy, with no getContext — so a reopened
+  // document threw the moment a subject-restricted effect tried to draw it.
+  // It is derived data, so it is dropped and recomputed on demand.
+  const doc = createDocument(32, 32);
+  const layer = createRasterLayer("Styled", newCanvas(32, 32));
+  layer.subjectMask = newCanvas(32, 32);
+  layer.effects = [{
+    id: "e1", kind: "outer-glow", enabled: true, opacity: 1,
+    color: "#00ff00", blur: 8, offsetX: 0, offsetY: 0, restrictToSubject: true,
+  }];
+  doc.layers = [layer];
+
+  const blob = await encodeLumaProject(doc, [], "Matte fixture");
+  const decoded = await decodeLumaProject(await blob.arrayBuffer());
+  const restored = decoded.doc.layers[0];
+
+  assert.equal(restored.subjectMask, undefined, "the matte must not survive as a plain object");
+  assert.equal(restored.effects?.[0].restrictToSubject, true, "the request itself must survive");
+
+  // The symptom the old bug produced was a truthy non-canvas, which threw the
+  // moment anything drew it. Absent is the only safe value here; the render
+  // path for a missing matte is covered in layer-style.test.ts.
+  assert.ok(!("subjectMask" in restored) || restored.subjectMask === undefined);
+});

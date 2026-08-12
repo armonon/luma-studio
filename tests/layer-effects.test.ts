@@ -226,9 +226,12 @@ test("the GPU renderer draws effects through the shared pipeline", () => {
   // silently skipped the other five, so exporting with GPU on produced a
   // different image. Reintroducing a second implementation fails here.
   const source = readFileSync(new URL("../app/engine/gl-renderer.ts", import.meta.url), "utf8");
+  // Match the symbol and its origin, not the exact import line — pinning the
+  // whole line means adding any second import from the module breaks a test
+  // that has nothing to say about it.
   assert.match(
     source,
-    /import \{ composeLayerWithEffects \} from "\.\/layer-effects"/,
+    /import \{[^}]*composeLayerWithEffects[^}]*\} from "\.\/layer-effects"/,
     "gl-renderer must use the shared effect pipeline",
   );
   for (const marker of ["shadowBlur", "shadowOffsetX", 'kind !== "drop-shadow"']) {

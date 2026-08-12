@@ -50,7 +50,7 @@ type SerializedRawSource = Omit<NonNullable<Layer["raw"]>, "original"> & {
   asset: string;
 };
 
-type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "raw"> & {
+type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "raw" | "subjectMask"> & {
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
@@ -306,7 +306,12 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
 }
 
 async function serializeLayer(layer: Layer, context: EncodeContext): Promise<SerializedLayer> {
-  const { bitmap, surface, mask, raw, ...metadata } = layer;
+  // subjectMask is a canvas and derived data — recomputable from the layer by
+  // the same model that produced it. Left in the spread it went through
+  // JSON.stringify as `{}`, which is truthy but has no getContext, so a
+  // reopened document threw the moment a subject-restricted effect drew.
+  const { bitmap, surface, mask, raw, subjectMask, ...metadata } = layer;
+  void subjectMask;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,

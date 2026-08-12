@@ -26,7 +26,9 @@ import {
   type LayerEffectKind,
 } from "../app/engine/document.ts";
 import { formatCssColor, parseCssColor } from "../app/engine/color.ts";
-import { renderClean } from "../app/engine/renderer.ts";
+import { BACKDROP_READING_KINDS, layerEffectReach } from "../app/engine/layer-effects.ts";
+import { glCanRenderDocument } from "../app/engine/gl-renderer.ts";
+import { renderClean, renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
 
 // The Layer Style dialog decides which controls to show from EFFECT_FIELDS, and
@@ -332,18 +334,121 @@ test("an effect blend mode acts on the layer's own pixels", () => {
   );
 });
 
-test("the GPU path declines rather than ignoring an effect blend mode", () => {
-  // rasterizeLayer builds each layer independently and has no backdrop, so a
-  // blended effect cannot be right there. Declining sends it to the CPU
-  // renderer instead of silently exporting a different image.
-  const source = readFileSync(new URL("../app/engine/gl-renderer.ts", import.meta.url), "utf8");
-  // Match the guard itself, not the import — the identifier alone survives
-  // deleting the check, which is exactly how this test first passed hollow.
-  assert.match(
-    source,
-    /resolvedEffectBlendMode\(effect\) !== "source-over"\)\)\) return false;/,
-    "gl-renderer must decline documents whose effect blend modes it cannot honour",
-  );
+test("the GPU path declines every effect it cannot render faithfully", () => {
+  // This replaces a source-text assertion that only checked the guard was
+  // mentioned. It passed while backdrop-reading effects were being dropped,
+  // which is the exact divergence the guard exists to prevent — so the check
+  // is now behavioural and covers every kind at once.
+  const withEffect = (effect: Partial<LayerEffect> & { kind: LayerEffectKind }) => {
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [{
+      ...createRasterLayer("box", newCanvas(SIZE, SIZE)),
+      effects: [{ ...baseEffect(effect.kind), ...effect }],
+    }];
+    return doc;
+  };
+
+  for (const kind of BACKDROP_READING_KINDS) {
+    assert.equal(
+      glCanRenderDocument(withEffect({ kind })),
+      false,
+      `${kind} reads the backdrop, which the GPU path does not have`,
+    );
+  }
+
+  // A blended effect has nothing to blend against there either.
+  assert.equal(glCanRenderDocument(withEffect({ kind: "inner-shadow", blendMode: "multiply" })), false);
+
+  // Anything self-contained is fine, and a disabled effect never blocks.
+  assert.equal(glCanRenderDocument(withEffect({ kind: "color-overlay" })), true);
+  assert.equal(glCanRenderDocument(withEffect({ kind: "backdrop-blur", enabled: false })), true);
+});
+
+test("every backdrop-reading effect is listed as one", () => {
+  // The list drives the GPU guard, so a new backdrop effect that forgets to
+  // join it would silently export wrong again. Anything whose implementation
+  // bails without a backdrop belongs here.
+  const source = readFileSync(new URL("../app/engine/layer-effects.ts", import.meta.url), "utf8");
+  // Stop at the next `case`, or the scan runs past one arm into another's
+  // guard and blames the wrong effect.
+  const bailing = [...source.matchAll(/case "([a-z-]+)": \{((?:(?!case ")[\s\S])*?)if \(!backdrop\) break;/g)]
+    .map((match) => match[1]);
+  assert.ok(bailing.length > 0, "expected to find effects that bail without a backdrop");
+  for (const kind of bailing) {
+    assert.ok(
+      BACKDROP_READING_KINDS.includes(kind as LayerEffectKind),
+      `${kind} bails without a backdrop but is missing from BACKDROP_READING_KINDS`,
+    );
+  }
+});
+
+// --- tile sampling reach ---------------------------------------------------
+
+test("effects that sample beyond their silhouette declare a reach", () => {
+  // layerEffectReach sets the tile margin, so it has to cover reading as well
+  // as painting. These four are clipped to the layer but read from outside it,
+  // and reporting 0 gave each tile only its own slice — visible as seams.
+  const sampling: Array<[LayerEffectKind, Partial<LayerEffect>]> = [
+    ["inner-shadow", { blur: 10, offsetX: 12, offsetY: 0 }],
+    ["inner-glow", { blur: 10 }],
+    ["satin", { blur: 10, offsetX: 12, offsetY: 0 }],
+    ["relief", { depth: 9 }],
+  ];
+  for (const [kind, patch] of sampling) {
+    const reach = layerEffectReach({ ...baseEffect(kind), ...patch });
+    assert.ok(reach > 0, `${kind} samples outside the silhouette but reports reach ${reach}`);
+  }
+
+  // Genuinely per-pixel effects should stay at zero so tiles stay cheap.
+  for (const kind of ["color-overlay", "gradient-overlay", "pattern-overlay"] as LayerEffectKind[]) {
+    assert.equal(layerEffectReach(baseEffect(kind)), 0, `${kind} should need no margin`);
+  }
+});
+
+test("a tiled viewport render matches the untiled one for a sampling effect", () => {
+  // The behavioural half: an inner shadow far enough to cross tile boundaries
+  // must look the same however the frame was cut up.
+  const BIG = 512;
+  const bitmap = newCanvas(BIG, BIG);
+  const ctx = bitmap.getContext("2d")!;
+  ctx.fillStyle = "#ff0000";
+  ctx.fillRect(40, 40, BIG - 80, BIG - 80);
+
+  const doc = createDocument(BIG, BIG);
+  doc.layers = [{
+    ...createRasterLayer("box", bitmap),
+    effects: [{
+      ...baseEffect("inner-shadow"),
+      id: "is",
+      color: "#000000",
+      blur: 20,
+      offsetX: 24,
+      offsetY: 24,
+      opacity: 1,
+    }],
+  }];
+
+  const untiled = testCanvas(BIG, BIG);
+  renderClean(doc, untiled);
+
+  const tiled = testCanvas(BIG, BIG);
+  renderViewport(doc, tiled, {
+    x: 0, y: 0, width: BIG, height: BIG, zoom: 1,
+    outputWidth: BIG, outputHeight: BIG, cssScale: 1, devicePixelRatio: 1,
+  }, {
+    checkerboard: false,
+    selectionOverlay: false,
+    proofing: false,
+  });
+
+  // Sample along a horizontal line crossing several tile boundaries.
+  let worst = 0;
+  for (let x = 45; x < BIG - 45; x += 7) {
+    const a = pixelAt(untiled, x, 70);
+    const b = pixelAt(tiled, x, 70);
+    worst = Math.max(worst, Math.abs(a.r - b.r), Math.abs(a.g - b.g), Math.abs(a.b - b.b));
+  }
+  assert.ok(worst <= 2, `tiled and untiled renders diverge by ${worst}`);
 });
 
 // --- subject-restricted effects --------------------------------------------

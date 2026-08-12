@@ -14,7 +14,7 @@ import {
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
-import { composeLayerWithEffects } from "./layer-effects";
+import { composeLayerWithEffects, effectNeedsBackdrop } from "./layer-effects";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, VS } from "./gl-shaders";
 
@@ -536,7 +536,18 @@ let linearCompositing = true;
 export function setLinearCompositing(on: boolean) { linearCompositing = on; }
 export function isLinearCompositing() { return linearCompositing; }
 
-export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = true, checkerboard = true): boolean {
+/**
+ * Whether the GPU path can render this document faithfully.
+ *
+ * Pure and exported so it can be tested without a WebGL context — the previous
+ * guard was covered only by a source-text assertion, which is why adding
+ * backdrop-reading effects slipped past it and reintroduced the very
+ * divergence the guard exists to prevent.
+ *
+ * The rule: this renderer rasterizes each layer independently, so anything an
+ * effect needs beyond its own layer cannot be honoured here.
+ */
+export function glCanRenderDocument(doc: Document): boolean {
   // Adjustment programs transform the current composite directly. Route
   // adjustment layers with custom blend passes through the exact CPU path.
   if (doc.layers.some((layer) => {
@@ -545,11 +556,20 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
     return enabled.length !== 1 || enabled[0].mode !== "source-over" || enabled[0].opacity !== 1
       || !isNeutralBlendIf(resolvedBlendIf(layer));
   })) return false;
-  // Layers are rasterized independently here, so there is no backdrop for a
-  // blended effect to composite against. Decline and let the CPU renderer take
-  // it rather than exporting a quietly different image.
-  if (doc.layers.some((layer) => layer.effects?.some((effect) =>
-    effect.enabled && resolvedEffectBlendMode(effect) !== "source-over"))) return false;
+
+  return !doc.layers.some((layer) => layer.effects?.some((effect) => {
+    if (!effect.enabled) return false;
+    // No backdrop here, so an effect that reads one renders as nothing.
+    if (effectNeedsBackdrop(effect)) return true;
+    // No backdrop means nothing for a blended effect to composite against.
+    return resolvedEffectBlendMode(effect) !== "source-over";
+  }));
+}
+
+export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = true, checkerboard = true): boolean {
+  // Decline rather than export a quietly different image; the caller falls
+  // back to the CPU renderer.
+  if (!glCanRenderDocument(doc)) return false;
   const c = ensureCache(doc.width, doc.height);
   if (!c) return false;
   const { gl } = c;
