@@ -363,6 +363,47 @@ function shapeFalloff(
 }
 
 /**
+ * Name- and size-keyed working canvases, so the effects that need a second
+ * intermediate do not allocate one per tile per frame. Each name is owned by
+ * exactly one call site, none of which nest, so two live buffers never alias.
+ */
+const effectBufs = new Map<string, HTMLCanvasElement>();
+const MAX_EFFECT_BUFS = 12;
+
+function pooledBuffer(name: string, width: number, height: number): HTMLCanvasElement {
+  const key = `${name}:${width}:${height}`;
+  let buf = effectBufs.get(key);
+  if (!buf) {
+    if (effectBufs.size >= MAX_EFFECT_BUFS) effectBufs.delete(effectBufs.keys().next().value!);
+    buf = newCanvas(width, height);
+    effectBufs.set(key, buf);
+  }
+  clearContext(buf.getContext("2d")!, width, height);
+  return buf;
+}
+
+/**
+ * `src` recoloured flat, keeping its alpha.
+ *
+ * The shadow trick below is the only way to get a silhouette *offset and
+ * blurred* in one pass, but when neither is wanted it is far more machinery
+ * than the job needs: a `source-in` fill does the same thing without going
+ * near the shadow filter. Effects that stamp the silhouette dozens of times
+ * build it once here and then plain-draw it, which is worth roughly a factor
+ * of five on Long Shadow, Stroke and Contact Shadow.
+ */
+function silhouetteOf(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
+  const buf = pooledBuffer("silhouette", src.width, src.height);
+  const ctx = buf.getContext("2d")!;
+  ctx.drawImage(src, 0, 0);
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, src.width, src.height);
+  ctx.globalCompositeOperation = "source-over";
+  return buf;
+}
+
+/**
  * Draw ONLY the shadow of `src`, never `src` itself.
  *
  * `drawImage` with a shadow set paints the image *and* its shadow. Every
@@ -441,7 +482,7 @@ function bevelClipSource(
     // make it indistinguishable from Outer.
     const half = reach / 2;
     stampDilated(sctx, contentBuf, "#000000", half);
-    const eroded = newCanvas(size.width, size.height);
+    const eroded = pooledBuffer("erode", size.width, size.height);
     const ectx = eroded.getContext("2d")!;
     ectx.drawImage(contentBuf, 0, 0);
     ectx.globalCompositeOperation = "destination-in";
@@ -476,10 +517,11 @@ function stampDilated(
     stampSilhouette(ctx, src, color, 0, 0, 0);
     return;
   }
+  const shape = silhouetteOf(src, color);
   const steps = 16;
   for (let i = 0; i < steps; i += 1) {
     const angle = (i / steps) * Math.PI * 2;
-    stampSilhouette(ctx, src, color, 0, Math.cos(angle) * reach, Math.sin(angle) * reach);
+    ctx.drawImage(shape, Math.cos(angle) * reach, Math.sin(angle) * reach);
   }
 }
 
@@ -708,10 +750,11 @@ function drawLayerEffect(
       const steps = Math.max(1, Math.min(128, Math.round(effect.steps ?? 32)));
       const dx = offset.x * scale.x;
       const dy = offset.y * scale.y;
+      const trail = silhouetteOf(contentBuf, effect.color);
       for (let i = 1; i <= steps; i += 1) {
         const t = i / steps;
         ctx.globalAlpha = effect.opacity * (1 - t);
-        stampSilhouette(ctx, contentBuf, effect.color, 0, dx * t, dy * t);
+        ctx.drawImage(trail, dx * t, dy * t);
       }
       ctx.globalCompositeOperation = "destination-out";
       ctx.globalAlpha = 1;
@@ -805,7 +848,7 @@ function drawLayerEffect(
       sctx.drawImage(contentBuf, 0, 0);
       sctx.globalCompositeOperation = "source-over";
       if (blur > 0) {
-        const softened = newCanvas(size.width, size.height);
+        const softened = pooledBuffer("soften", size.width, size.height);
         const soft = softened.getContext("2d")!;
         soft.filter = `blur(${blur}px)`;
         soft.drawImage(scratchBuf, 0, 0);
