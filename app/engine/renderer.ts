@@ -34,6 +34,8 @@ type Scratch = {
   contentBuf: HTMLCanvasElement;
   effectBuf: HTMLCanvasElement;
   clipBuf: HTMLCanvasElement;
+  /** The layer's full extent, for Transparency Shapes Layer when it is off. */
+  extentBuf: HTMLCanvasElement;
   /** Reused by nesting depth; sibling groups never need distinct buffers. */
   groupBufs: HTMLCanvasElement[];
 };
@@ -98,9 +100,10 @@ function scratch(width: number, height: number): Scratch {
     contentBuf: newCanvas(width, height),
     effectBuf: newCanvas(width, height),
     clipBuf: newCanvas(width, height),
+    extentBuf: newCanvas(width, height),
     groupBufs: [],
   };
-  const bytes = width * height * 4 * 6;
+  const bytes = width * height * 4 * 7;
   scratchCache.set(key, { buffers, bytes, used: ++scratchCacheClock });
   scratchCacheBytes += bytes;
   trimScratchCache(key);
@@ -626,9 +629,11 @@ function renderLayerSequence(
       if (clipped.length) {
         const stackCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const stackContext = stackCanvas.getContext("2d")!;
-        drawContentLayer(stackContext, s, doc, { ...layer, blendStack: undefined, blend: "source-over", opacity: 1 }, frame, stackContext);
+        // rootComposite, not the stack: a deep knockout means "to the bottom
+        // of the document", and passing the stack made it stop at the group.
+        drawContentLayer(stackContext, s, doc, { ...layer, blendStack: undefined, blend: "source-over", opacity: 1 }, frame, rootComposite);
         for (const member of clipped) {
-          drawContentLayer(stackContext, s, doc, member, frame, stackContext);
+          drawContentLayer(stackContext, s, doc, member, frame, rootComposite);
         }
         compositeBlendStack(
           composite,
@@ -863,7 +868,7 @@ function drawContentLayer(
   frame: RenderFrame,
   rootComposite: CanvasRenderingContext2D = composite,
 ) {
-  const { layerBuf, contentBuf, effectBuf, clipBuf } = scratchBuffers;
+  const { layerBuf, contentBuf, effectBuf, clipBuf, extentBuf } = scratchBuffers;
   const bctx = layerBuf.getContext("2d")!;
   const contentCtx = contentBuf.getContext("2d")!;
   clearContext(bctx, frame.outputWidth, frame.outputHeight);
@@ -901,13 +906,14 @@ function drawContentLayer(
   const shapesLayer = layer.transparencyShapesLayer ?? true;
   let effectShape = contentBuf;
   if (!shapesLayer) {
-    // A fresh canvas rather than a scratch one: clipBuf is the effect
-    // pipeline's own working buffer and would be cleared out from under this.
-    const extent = newCanvas(frame.outputWidth, frame.outputHeight);
-    const extentCtx = extent.getContext("2d")!;
+    // A dedicated scratch buffer, not clipBuf: that is the effect pipeline's
+    // own working canvas and would be cleared out from under this. Allocating
+    // a fresh one here instead cost a canvas per tile per frame.
+    const extentCtx = extentBuf.getContext("2d")!;
+    clearContext(extentCtx, frame.outputWidth, frame.outputHeight);
     extentCtx.fillStyle = "#ffffff";
     extentCtx.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
-    effectShape = extent;
+    effectShape = extentBuf;
   }
 
   // `composite` is a different canvas from layerBuf, so it is a stable view of

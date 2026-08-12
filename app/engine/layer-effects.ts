@@ -1030,6 +1030,42 @@ function stampEffect(
 }
 
 /**
+ * Render one effect's own pixels, at document resolution.
+ *
+ * This is what "Create Layers" needs: the effect alone, already clipped the
+ * way the compositor clips it. Deriving it by rendering the styled layer and
+ * subtracting the bare one cannot work — the subtraction is by alpha, so every
+ * effect that sits on top of the content is erased by the content's own
+ * silhouette, which silently emptied twelve of the seventeen kinds.
+ */
+export function renderEffectAlone(
+  layer: Layer,
+  effect: LayerEffect,
+  content: HTMLCanvasElement,
+  width: number,
+  height: number,
+  light: GlobalLight = DEFAULT_GLOBAL_LIGHT,
+  backdrop: HTMLCanvasElement | null = null,
+): HTMLCanvasElement {
+  const out = newCanvas(width, height);
+  const frame: EffectFrame = { x: 0, y: 0, width, height, outputWidth: width, outputHeight: height };
+  drawLayerEffect(
+    out,
+    content,
+    newCanvas(width, height),
+    effect,
+    frame,
+    { x: 1, y: 1 },
+    1,
+    light,
+    layerBounds(layer, frame),
+    backdrop,
+  );
+  restrictToSubject(out, effect, layer, frame);
+  return out;
+}
+
+/**
  * Draw a layer's own pixels plus its layer style into `out`.
  *
  * `content` must already hold the layer's rasterized, filtered pixels.

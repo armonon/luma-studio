@@ -53,12 +53,14 @@ import {
   nextId,
   resolvedBlendPasses,
   resolvedBlendIf,
+  resolvedEffectBlendMode,
   resolvedFillOpacity,
   resolvedGlobalLight,
   transformPoint,
   type GlobalLight,
 } from "./document";
 import { instantiateStyle, planCreateLayers, type LayerStylePreset } from "./layer-styles";
+import { renderEffectAlone } from "./layer-effects";
 import { isNeutralBlendIf } from "./blend";
 import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
 import {
@@ -2374,27 +2376,25 @@ export class Studio {
     const { layers: plan, unsplittable } = planCreateLayers(layer);
     if (!plan.length) return { created: 0, kept: unsplittable.length };
 
+    // The layer's own pixels, rendered once and reused for every effect.
+    const content = newCanvas(this.doc.width, this.doc.height);
+    drawLayerContentManaged(content.getContext("2d")!, layer);
+
     const created: Layer[] = [];
     for (const item of plan) {
-      // Render this effect alone, at document resolution.
-      const isolated: Layer = { ...shallowCloneLayer(layer), effects: [item.effect] };
-      const canvas = newCanvas(this.doc.width, this.doc.height);
-      const only = createDocument(this.doc.width, this.doc.height);
-      only.globalLight = this.doc.globalLight;
-      only.layers = [isolated];
-      renderClean(only, canvas);
-      // Subtract the layer's own pixels so only the effect remains.
-      const context = canvas.getContext("2d")!;
-      const bare = newCanvas(this.doc.width, this.doc.height);
-      const bareDoc = createDocument(this.doc.width, this.doc.height);
-      bareDoc.layers = [{ ...shallowCloneLayer(layer), effects: [] }];
-      renderClean(bareDoc, bare);
-      context.globalCompositeOperation = "destination-out";
-      context.drawImage(bare, 0, 0);
-      context.globalCompositeOperation = "source-over";
-
+      const canvas = renderEffectAlone(
+        layer,
+        item.effect,
+        content,
+        this.doc.width,
+        this.doc.height,
+        resolvedGlobalLight(this.doc),
+      );
       const effectLayer = createRasterLayer(item.name, canvas);
       effectLayer.parentId = layer.parentId;
+      // The effect's own blend mode has to travel with it, or a multiplied
+      // inner shadow becomes an opaque grey smear once it is its own layer.
+      effectLayer.blend = resolvedEffectBlendMode(item.effect);
       created.push(effectLayer);
     }
 

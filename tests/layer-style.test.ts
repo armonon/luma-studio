@@ -625,7 +625,10 @@ test("capturing a style round-trips through applying it", () => {
   studio.dispose();
 });
 
-test("Create Layers splits a style into real layers and removes it", () => {
+test("Create Layers reproduces the style it replaced", () => {
+  // The test this replaces only counted layers, so it passed while every
+  // above-content effect rasterized to nothing: the extraction subtracted the
+  // bare layer by alpha, and the content's own silhouette erased them.
   const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
   const square = testCanvas(24, 24);
   const squareCtx = square.getContext("2d")!;
@@ -636,15 +639,40 @@ test("Create Layers splits a style into real layers and removes it", () => {
     Object.assign(square, { naturalWidth: 24, naturalHeight: 24 }) as unknown as HTMLImageElement,
   );
   const layerId = studio.doc.layers[0].id;
-  const glow = studio.addLayerEffect(layerId, "outer-glow")!;
-  studio.updateLayerEffect(layerId, glow.id, { blur: 10, opacity: 1, color: "#00ff00" });
-  studio.addLayerEffect(layerId, "color-overlay");
 
-  const before = studio.doc.layers.length;
+  const shadow = studio.addLayerEffect(layerId, "drop-shadow")!;
+  studio.updateLayerEffect(layerId, shadow.id, { blur: 6, offsetX: 8, offsetY: 8, opacity: 1, color: "#000000" });
+  const overlay = studio.addLayerEffect(layerId, "color-overlay")!;
+  studio.updateLayerEffect(layerId, overlay.id, { color: "#0000ff", opacity: 1 });
+  const stroke = studio.addLayerEffect(layerId, "stroke")!;
+  studio.updateLayerEffect(layerId, stroke.id, { color: "#00ff00", width: 3, position: "outside", opacity: 1 });
+
+  const before = testCanvas(SIZE, SIZE);
+  renderClean(studio.doc, before);
+
   const result = studio.createLayersFromStyle(layerId)!;
-  assert.equal(result.created, 2, "expected one layer per splittable effect");
-  assert.equal(studio.doc.layers.length, before + 2);
+  assert.equal(result.created, 3, "expected one layer per splittable effect");
   assert.equal(studio.doc.layers.find((l) => l.id === layerId)?.effects?.length, 0, "the style must not remain");
+
+  const after = testCanvas(SIZE, SIZE);
+  renderClean(studio.doc, after);
+
+  // Sample across the whole picture: overlay interior, stroke band, shadow.
+  const points: Array<[number, number, string]> = [
+    [30, 30, "overlay interior"],
+    [19, 30, "stroke band"],
+    [46, 46, "shadow"],
+    [3, 3, "empty corner"],
+  ];
+  for (const [x, y, what] of points) {
+    const wanted = pixelAt(before, x, y);
+    const got = pixelAt(after, x, y);
+    const drift = Math.max(
+      Math.abs(wanted.r - got.r), Math.abs(wanted.g - got.g),
+      Math.abs(wanted.b - got.b), Math.abs(wanted.a - got.a),
+    );
+    assert.ok(drift <= 3, `${what} drifted by ${drift}: ${JSON.stringify(wanted)} became ${JSON.stringify(got)}`);
+  }
   studio.dispose();
 });
 
@@ -980,6 +1008,40 @@ test("knockout punches the layer's shape through what is beneath it", () => {
   const knocked = stackedDoc({ fillOpacity: 0, knockout: "deep" });
   assert.equal(pixelAt(knocked, 30, 30).a, 0, "knockout should have cut through to nothing");
   assert.ok(pixelAt(knocked, 5, 5).r > 200, "outside the shape the backdrop is untouched");
+});
+
+test("a deep knockout inside a clipped stack still reaches the document", () => {
+  // The base and its clipped members composite into their own buffer first. A
+  // deep knockout has to punch through that buffer *and* the document beneath,
+  // or the hole stops at the stack and the backdrop survives.
+  const square = newCanvas(SIZE, SIZE);
+  const squareCtx = square.getContext("2d")!;
+  squareCtx.fillStyle = "#0000ff";
+  squareCtx.fillRect(20, 20, 20, 20);
+
+  // Covers only the left half of the base, so the right half is bare hole.
+  const member = newCanvas(SIZE, SIZE);
+  const memberCtx = member.getContext("2d")!;
+  memberCtx.fillStyle = "#00ff00";
+  memberCtx.fillRect(20, 20, 10, 20);
+
+  const backdrop = newCanvas(SIZE, SIZE);
+  const backdropCtx = backdrop.getContext("2d")!;
+  backdropCtx.fillStyle = "#ff0000";
+  backdropCtx.fillRect(0, 0, SIZE, SIZE);
+
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [
+    { ...createRasterLayer("clipped", member), clipping: true },
+    { ...createRasterLayer("base", square), fillOpacity: 0, knockout: "deep" },
+    createRasterLayer("backdrop", backdrop),
+  ];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+
+  assert.equal(pixelAt(target, 35, 30).a, 0, "the uncovered half of the base should be a hole");
+  assert.ok(pixelAt(target, 25, 30).g > 200, "the clipped member still paints its half");
+  assert.ok(pixelAt(target, 5, 5).r > 200, "outside the base the backdrop is untouched");
 });
 
 test("a layer restricted to one channel leaves the others alone", () => {
