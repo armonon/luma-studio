@@ -579,6 +579,30 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
           onChange={(event) => studio.setLayerBlendingOption(layer.id, "maskHidesEffects", event.target.checked)}
         />
       </label>
+      <label className="layer-style-check">
+        <span>Vector mask hides effects</span>
+        <input
+          type="checkbox"
+          checked={!!layer.vectorMaskHidesEffects}
+          onChange={(event) => studio.setLayerBlendingOption(layer.id, "vectorMaskHidesEffects", event.target.checked)}
+        />
+      </label>
+      <label className="layer-style-check">
+        <span>Transparency shapes layer</span>
+        <input
+          type="checkbox"
+          checked={layer.transparencyShapesLayer ?? true}
+          onChange={(event) => studio.setLayerBlendingOption(layer.id, "transparencyShapesLayer", event.target.checked)}
+        />
+      </label>
+      <label className="layer-style-check">
+        <span>Blend clipped as group</span>
+        <input
+          type="checkbox"
+          checked={layer.blendClippedAsGroup ?? true}
+          onChange={(event) => studio.setLayerBlendingOption(layer.id, "blendClippedAsGroup", event.target.checked)}
+        />
+      </label>
       <BlendIfRangeEditor label="This layer" range={channel.source} onChange={(range) => setRange("source", range)} />
       <BlendIfRangeEditor label="Underlying" range={channel.underlying} onChange={(range) => setRange("underlying", range)} />
       <button type="button" className="blend-if-reset" onClick={() => studio.resetLayerBlendIf(layer.id)} disabled={!layer.blendIf}>

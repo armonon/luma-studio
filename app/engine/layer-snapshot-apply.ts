@@ -52,6 +52,9 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
   if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
   if (snap.knockout !== undefined) layer.knockout = snap.knockout ?? undefined;
   if (snap.maskHidesEffects !== undefined) layer.maskHidesEffects = snap.maskHidesEffects ?? undefined;
+  if (snap.vectorMaskHidesEffects !== undefined) layer.vectorMaskHidesEffects = snap.vectorMaskHidesEffects ?? undefined;
+  if (snap.transparencyShapesLayer !== undefined) layer.transparencyShapesLayer = snap.transparencyShapesLayer ?? undefined;
+  if (snap.blendClippedAsGroup !== undefined) layer.blendClippedAsGroup = snap.blendClippedAsGroup ?? undefined;
   if (snap.blendChannels !== undefined) {
     layer.blendChannels = snap.blendChannels ? { ...snap.blendChannels } : undefined;
   }

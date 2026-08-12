@@ -209,6 +209,9 @@ export type LayerSnapshot = {
   knockout?: Layer["knockout"] | null;
   blendChannels?: Layer["blendChannels"] | null;
   maskHidesEffects?: boolean | null;
+  vectorMaskHidesEffects?: boolean | null;
+  transparencyShapesLayer?: boolean | null;
+  blendClippedAsGroup?: boolean | null;
 };
 
 /** A layer style on the clipboard: effects plus the blending options. */
@@ -2414,7 +2417,7 @@ export class Studio {
    * One setter rather than three, because they are one pane in the dialog and
    * share a history label.
    */
-  setLayerBlendingOption<K extends "knockout" | "blendChannels" | "maskHidesEffects">(
+  setLayerBlendingOption<K extends "knockout" | "blendChannels" | "maskHidesEffects" | "vectorMaskHidesEffects" | "transparencyShapesLayer" | "blendClippedAsGroup">(
     layerId: string,
     key: K,
     value: Layer[K],

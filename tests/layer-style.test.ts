@@ -487,6 +487,101 @@ test("a stroke can be filled with a gradient or a pattern, not just a colour", (
   assert.notEqual(restopped, gradient, "the stops should reach a gradient stroke");
 });
 
+// --- the remaining blending options ----------------------------------------
+
+test("a vector mask shapes the layer and carries its own hide-effects switch", () => {
+  const square = newCanvas(SIZE, SIZE);
+  const squareCtx = square.getContext("2d")!;
+  squareCtx.fillStyle = "#ff0000";
+  squareCtx.fillRect(10, 10, 40, 40);
+
+  // A triangle covering only the left of the square.
+  const vectorMask = {
+    anchors: [
+      { x: 0, y: 0, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+      { x: 30, y: 0, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+      { x: 30, y: SIZE, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+      { x: 0, y: SIZE, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+    ],
+    closed: true,
+    fill: "#ffffff",
+    stroke: "none",
+    strokeWidth: 0,
+  };
+
+  const render = (patch: Partial<Layer>) => {
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [{ ...createRasterLayer("shaped", square), vectorMask, ...patch }];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return target;
+  };
+
+  const masked = render({});
+  assert.ok(pixelAt(masked, 20, 30).r > 200, "inside the vector mask the layer shows");
+  assert.equal(pixelAt(masked, 45, 30).a, 0, "outside it the layer is hidden");
+
+  // With the effect switch off (the default) a glow escapes the mask.
+  const glow: LayerEffect = { ...baseEffect("outer-glow"), id: "g1", color: "#00ff00", blur: 8, opacity: 1 };
+  const escapes = render({ effects: [glow] });
+  const hides = render({ effects: [glow], vectorMaskHidesEffects: true });
+  assert.ok(pixelAt(escapes, 34, 30).a > 20, "by default the effect reaches past the vector mask");
+  assert.equal(pixelAt(hides, 34, 30).a, 0, "with the switch on it is cut back");
+});
+
+test("transparency shapes layer, off, stops the style following the artwork", () => {
+  const dot = newCanvas(SIZE, SIZE);
+  const dotCtx = dot.getContext("2d")!;
+  dotCtx.fillStyle = "#ff0000";
+  dotCtx.fillRect(26, 26, 8, 8);
+
+  const overlay: LayerEffect = { ...baseEffect("color-overlay"), id: "o1", color: "#0000ff", opacity: 1 };
+  const render = (transparencyShapesLayer: boolean) => {
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [{ ...createRasterLayer("dot", dot), effects: [overlay], transparencyShapesLayer }];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return target;
+  };
+
+  // On: the overlay is clipped to the little square.
+  assert.equal(pixelAt(render(true), 5, 5).a, 0, "the overlay should follow the artwork");
+  // Off: it fills the layer's extent instead.
+  assert.ok(pixelAt(render(false), 5, 5).b > 200, "the overlay should cover the layer's extent");
+});
+
+test("clipped layers blend as one group by default", () => {
+  // A half-opacity base with something clipped to it. Blended as a group the
+  // opacity applies once to the assembled stack; blended separately it applies
+  // to the base and then again through the clipped layer's own compositing.
+  const base = newCanvas(SIZE, SIZE);
+  const baseCtx = base.getContext("2d")!;
+  baseCtx.fillStyle = "#ff0000";
+  baseCtx.fillRect(10, 10, 40, 40);
+
+  const paint = newCanvas(SIZE, SIZE);
+  const paintCtx = paint.getContext("2d")!;
+  paintCtx.fillStyle = "#0000ff";
+  paintCtx.fillRect(0, 0, SIZE, SIZE);
+
+  const render = (blendClippedAsGroup: boolean) => {
+    const doc = createDocument(SIZE, SIZE);
+    doc.layers = [
+      { ...createRasterLayer("clipped", paint), clipping: true },
+      { ...createRasterLayer("base", base), opacity: 0.5, blendClippedAsGroup },
+    ];
+    const target = testCanvas(SIZE, SIZE);
+    renderClean(doc, target);
+    return pixelAt(target, 30, 30);
+  };
+
+  const grouped = render(true);
+  const separate = render(false);
+  assert.notDeepEqual(grouped, separate, "grouping should change how the opacity lands");
+  // Grouped, the clipped blue reaches the canvas at the base's opacity.
+  assert.ok(grouped.b > 100, `expected the clipped layer through the group, got b=${grouped.b}`);
+});
+
 // --- style presets and Create Layers ---------------------------------------
 
 test("every built-in style applies and produces the effects it promises", () => {

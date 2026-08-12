@@ -9,6 +9,7 @@ import {
   newCanvas,
   resolvedBlendIf,
   resolvedBlendPasses,
+  rasterizeVectorMask,
   resolvedFillOpacity,
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
@@ -606,7 +607,40 @@ function renderLayerSequence(
     } else if (layer.kind === "adjustment-hsl" && layer.hsl) {
       drawPixelAdjustment(composite, s, layer, frame, (img) => applyHslToImageData(img, layer.hsl!));
     } else {
-      drawContentLayer(composite, s, doc, layer, frame, rootComposite);
+      // Blend Clipped Layers as Group: the base and everything clipped to it
+      // composite into one buffer and blend once, so the group's blend mode
+      // and opacity apply to the assembled result rather than to each layer in
+      // turn. Clipped layers sit *before* their base in the array, and this
+      // loop runs bottom-up, so they are the entries already passed over.
+      const clipped: Layer[] = [];
+      if ((layer.blendClippedAsGroup ?? true) && !layer.clipping) {
+        for (let above = i - 1; above >= 0; above -= 1) {
+          const candidate = siblings[above];
+          if (!candidate.clipping) break;
+          if (included && !included.has(candidate.id)) break;
+          if (!candidate.visible || candidate.opacity <= 0) break;
+          clipped.push(candidate);
+        }
+      }
+
+      if (clipped.length) {
+        const stackCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
+        const stackContext = stackCanvas.getContext("2d")!;
+        drawContentLayer(stackContext, s, doc, { ...layer, blendStack: undefined, blend: "source-over", opacity: 1 }, frame, stackContext);
+        for (const member of clipped) {
+          drawContentLayer(stackContext, s, doc, member, frame, stackContext);
+        }
+        compositeBlendStack(
+          composite,
+          stackCanvas,
+          resolvedBlendPasses(layer),
+          layer.opacity,
+          resolvedBlendIf(layer),
+        );
+        i -= clipped.length;
+      } else {
+        drawContentLayer(composite, s, doc, layer, frame, rootComposite);
+      }
     }
   }
 }
@@ -849,13 +883,39 @@ function drawContentLayer(
     drawProjectedCanvas(contentCtx, layer.mask, frame);
     contentCtx.globalCompositeOperation = "source-over";
   }
+  // The vector mask carries its own switch, because a layer can have both and
+  // Photoshop lets each hide effects independently.
+  const vectorMask = layer.vectorMask
+    ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
+    : null;
+  const vectorHidesEffects = layer.vectorMaskHidesEffects ?? false;
+  if (vectorMask && !vectorHidesEffects) {
+    contentCtx.globalCompositeOperation = "destination-in";
+    drawProjectedCanvas(contentCtx, vectorMask, frame);
+    contentCtx.globalCompositeOperation = "source-over";
+  }
+
+  // Transparency Shapes Layer, off: the style stops following the artwork and
+  // fills the layer's extent instead, which is how you get a solid overlay on
+  // a soft-edged layer.
+  const shapesLayer = layer.transparencyShapesLayer ?? true;
+  let effectShape = contentBuf;
+  if (!shapesLayer) {
+    // A fresh canvas rather than a scratch one: clipBuf is the effect
+    // pipeline's own working buffer and would be cleared out from under this.
+    const extent = newCanvas(frame.outputWidth, frame.outputHeight);
+    const extentCtx = extent.getContext("2d")!;
+    extentCtx.fillStyle = "#ffffff";
+    extentCtx.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
+    effectShape = extent;
+  }
 
   // `composite` is a different canvas from layerBuf, so it is a stable view of
   // everything already drawn beneath this layer — exactly what a blended
   // effect has to composite against.
   composeLayerWithEffects(
     bctx, contentBuf, effectBuf, clipBuf, layer, frame, scale, doc.globalLight,
-    composite.canvas,
+    composite.canvas, effectShape,
   );
 
   if (layer.clipping) {
@@ -872,6 +932,11 @@ function drawContentLayer(
   if (layer.mask && maskHidesEffects) {
     bctx.globalCompositeOperation = "destination-in";
     drawProjectedCanvas(bctx, layer.mask, frame);
+    bctx.globalCompositeOperation = "source-over";
+  }
+  if (vectorMask && vectorHidesEffects) {
+    bctx.globalCompositeOperation = "destination-in";
+    drawProjectedCanvas(bctx, vectorMask, frame);
     bctx.globalCompositeOperation = "source-over";
   }
 

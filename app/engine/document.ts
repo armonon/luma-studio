@@ -306,6 +306,46 @@ export type PathStyle = {
 
 export type PathArcSample = { x: number; y: number; distance: number };
 
+/**
+ * Rasterize a path into an opaque mask the compositor can use like any other.
+ *
+ * Vector masks are resolution-independent in storage and pixels at render
+ * time; this is the one place that conversion happens, so the path stays the
+ * source of truth and nothing downstream needs to know it was ever a curve.
+ */
+export function rasterizeVectorMask(
+  path: PathStyle,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const canvas = newCanvas(width, height);
+  const ctx = canvas.getContext("2d")!;
+  if (path.anchors.length < 2) {
+    // An unusable path must not blank the layer, so an empty mask reveals all.
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    return canvas;
+  }
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.moveTo(path.anchors[0].x, path.anchors[0].y);
+  for (let i = 0; i < path.anchors.length - 1; i += 1) {
+    const a = path.anchors[i];
+    const b = path.anchors[i + 1];
+    ctx.bezierCurveTo(a.x + a.hOut.dx, a.y + a.hOut.dy, b.x + b.hIn.dx, b.y + b.hIn.dy, b.x, b.y);
+  }
+  const first = path.anchors[0];
+  const last = path.anchors[path.anchors.length - 1];
+  ctx.bezierCurveTo(
+    last.x + last.hOut.dx, last.y + last.hOut.dy,
+    first.x + first.hIn.dx, first.y + first.hIn.dy,
+    first.x, first.y,
+  );
+  ctx.closePath();
+  ctx.fill();
+  return canvas;
+}
+
 const midpoint = (a: number, b: number) => (a + b) / 2;
 
 function flattenCubic(
@@ -909,6 +949,14 @@ export type Layer = {
   /** Cached subject matte for effects with `restrictToSubject`. */
   subjectMask?: HTMLCanvasElement;
   /**
+   * A resolution-independent mask, rasterized from a path.
+   *
+   * Kept alongside the pixel mask rather than replacing it: Photoshop layers
+   * carry both, and "Vector Mask Hides Effects" is a separate switch from the
+   * pixel-mask one precisely because the two can differ.
+   */
+  vectorMask?: PathStyle;
+  /**
    * Advanced blending, matching Photoshop's pane.
    *
    * Knockout uses the layer's own alpha to punch through what is beneath —
@@ -927,6 +975,20 @@ export type Layer = {
    * which is the "on" behaviour, with no way to turn it off.
    */
   maskHidesEffects?: boolean;
+  /** As maskHidesEffects, for the vector mask. */
+  vectorMaskHidesEffects?: boolean;
+  /**
+   * When false, effects and knockout apply across the layer's whole extent
+   * rather than only where it has pixels. Photoshop's default is true, which
+   * is what makes a style follow the shape of the artwork.
+   */
+  transparencyShapesLayer?: boolean;
+  /**
+   * When true, a clipping stack composites into its base and blends as one
+   * unit. Photoshop defaults this on; compositing each clipped layer
+   * separately is the "off" behaviour.
+   */
+  blendClippedAsGroup?: boolean;
   bitmap?: HTMLCanvasElement;
   /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
   surface?: PrecisionTileSurface;

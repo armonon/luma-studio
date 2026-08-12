@@ -1048,6 +1048,12 @@ export function composeLayerWithEffects(
   light: GlobalLight = DEFAULT_GLOBAL_LIGHT,
   /** Everything already composited beneath this layer, for blended effects. */
   backdrop: HTMLCanvasElement | null = null,
+  /**
+   * What the effects treat as the layer's shape. Normally the content itself;
+   * with Transparency Shapes Layer off it is the layer's whole extent, so the
+   * style stops following the artwork.
+   */
+  shape: HTMLCanvasElement = content,
 ) {
   const effects = effectsInPaintOrder(
     (layer.effects ?? []).filter((effect) => effect.enabled && effect.opacity > 0),
@@ -1065,7 +1071,7 @@ export function composeLayerWithEffects(
   // Shadows and glows sit under the layer's own pixels.
   for (const effect of effects) {
     if (!isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
+    drawLayerEffect(effectBuf, shape, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
     restrictToSubject(effectBuf, effect, layer, frame);
     stampEffect(out, effectBuf, effect);
   }
@@ -1079,7 +1085,7 @@ export function composeLayerWithEffects(
   // drawLayerEffect leaves it unclipped and it still composites above.
   for (const effect of effects) {
     if (isEffectBelowContent(effect.kind)) continue;
-    drawLayerEffect(effectBuf, content, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
+    drawLayerEffect(effectBuf, shape, scratchBuf, effect, frame, scale, uniformScale, light, bounds, backdrop);
     restrictToSubject(effectBuf, effect, layer, frame);
     stampEffect(out, effectBuf, effect);
   }
