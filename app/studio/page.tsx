@@ -91,6 +91,8 @@ import {
   type LayerFocusState,
 } from "./layer-focus-model";
 import type { FocusCreateAction } from "./layer-focus-panel";
+import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
+import type { TransformCorner } from "./canvas-geometry";
 
 const ExportPopover = lazy(() => import("./export-popover"));
 const ToolDock = lazy(() => import("./tool-dock"));
@@ -275,12 +277,6 @@ const filmstrip = [
   { name: "Peaks", src: "/film-mountain.jpg" },
   { name: "Lake", src: "/film-lake.jpg" },
 ] as const;
-
-function rotMat(theta: number): [number, number, number, number] {
-  // Returns the 2x2 rotation matrix in row-major: [r00, r01, r10, r11].
-  const c = Math.cos(theta), s = Math.sin(theta);
-  return [c, -s, s, c];
-}
 
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -810,31 +806,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const quadTool = activeTool === "perspective-crop" || activeTool === "perspective-warp";
   const moveTool = activeTool === "move" || activeTool === "path-select";
 
-  const snapLayerTranslation = (layer: Layer, tx: number, ty: number) => {
-    if (!doc || !snapGuides) return { tx, ty };
-    const candidate: Layer = { ...layer, transform: { ...layer.transform, tx, ty } };
-    const [topLeft, topRight, bottomRight, bottomLeft] = layerCorners(candidate, doc.width, doc.height);
-    const xs = [topLeft[0], topRight[0], bottomRight[0], bottomLeft[0]];
-    const ys = [topLeft[1], topRight[1], bottomRight[1], bottomLeft[1]];
-    const anchorsX = [Math.min(...xs), (Math.min(...xs) + Math.max(...xs)) / 2, Math.max(...xs)];
-    const anchorsY = [Math.min(...ys), (Math.min(...ys) + Math.max(...ys)) / 2, Math.max(...ys)];
-    const targetsX = [0, doc.width / 2, doc.width, ...doc.guides.filter((guide) => guide.orientation === "vertical").map((guide) => guide.position)];
-    const targetsY = [0, doc.height / 2, doc.height, ...doc.guides.filter((guide) => guide.orientation === "horizontal").map((guide) => guide.position)];
-    const threshold = 8 / Math.max(view.zoom, 0.05);
-    let dx = 0;
-    let dy = 0;
-    let bestX = threshold + 1;
-    let bestY = threshold + 1;
-    for (const anchor of anchorsX) for (const target of targetsX) {
-      const delta = target - anchor;
-      if (Math.abs(delta) < bestX) { bestX = Math.abs(delta); dx = delta; }
-    }
-    for (const anchor of anchorsY) for (const target of targetsY) {
-      const delta = target - anchor;
-      if (Math.abs(delta) < bestY) { bestY = Math.abs(delta); dy = delta; }
-    }
-    return { tx: tx + (bestX <= threshold ? dx : 0), ty: ty + (bestY <= threshold ? dy : 0) };
-  };
+  const snapLayerTranslation = (layer: Layer, tx: number, ty: number) => (
+    doc && snapGuides ? snapTranslation(layer, doc, view.zoom, tx, ty) : { tx, ty }
+  );
 
   const activateCapturedBrush = (asset: CapturedBrushAsset, mode: ImageBrushMode = capturedBrushMode) => {
     if (!studio) return;
@@ -2111,42 +2085,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         studio.liveUpdateTransform(activeLayer.id, { rotation: newRot, tx: newTx, ty: newTy });
       }
     };
-    const applyCornerDrag = (layer: Layer, corner: "tl" | "tr" | "br" | "bl", start: Transform, px: number, py: number) => {
-      // Opposite corner in local space stays pinned.
-      const localOpposite = {
-        tl: [doc.width, doc.height], tr: [0, doc.height],
-        br: [0, 0], bl: [doc.width, 0],
-      }[corner] as [number, number];
-      const localGrabbed = {
-        tl: [0, 0], tr: [doc.width, 0],
-        br: [doc.width, doc.height], bl: [0, doc.height],
-      }[corner] as [number, number];
-      // Pinned canvas position (from start transform).
-      const R = rotMat(start.rotation);
-      const Qc = {
-        x: R[0] * start.sx * localOpposite[0] + R[1] * start.sy * localOpposite[1] + start.tx,
-        y: R[2] * start.sx * localOpposite[0] + R[3] * start.sy * localOpposite[1] + start.ty,
-      };
-      // Diagonal in canvas from pinned to pointer.
-      const dx = px - Qc.x;
-      const dy = py - Qc.y;
-      // Local axes at rotation.
-      const ex = { x: Math.cos(start.rotation), y: Math.sin(start.rotation) };
-      const ey = { x: -Math.sin(start.rotation), y: Math.cos(start.rotation) };
-      // Component of D along local axes, in the direction from opposite to grabbed.
-      const signX = localGrabbed[0] - localOpposite[0]; // ±docW
-      const signY = localGrabbed[1] - localOpposite[1]; // ±docH
-      const alongX = dx * ex.x + dy * ex.y;
-      const alongY = dx * ey.x + dy * ey.y;
-      const newSx = alongX / signX;
-      const newSy = alongY / signY;
-      // Guard against collapse
-      const sxSafe = Math.abs(newSx) < 0.02 ? Math.sign(newSx || 1) * 0.02 : newSx;
-      const sySafe = Math.abs(newSy) < 0.02 ? Math.sign(newSy || 1) * 0.02 : newSy;
-      // New translation so pinned corner maps back to Qc.
-      const newTx = Qc.x - (R[0] * sxSafe * localOpposite[0] + R[1] * sySafe * localOpposite[1]);
-      const newTy = Qc.y - (R[2] * sxSafe * localOpposite[0] + R[3] * sySafe * localOpposite[1]);
-      studio!.liveUpdateTransform(layer.id, { sx: sxSafe, sy: sySafe, tx: newTx, ty: newTy });
+    const applyCornerDrag = (layer: Layer, corner: TransformCorner, start: Transform, px: number, py: number) => {
+      studio!.liveUpdateTransform(layer.id, cornerDragTransform(corner, start, doc.width, doc.height, px, py));
     };
     const onHandleUp = () => {
       if (!studio) return;
