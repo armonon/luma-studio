@@ -975,6 +975,77 @@ test("an effect awaiting its matte renders unrestricted rather than vanishing", 
   assert.ok(pixelAt(target, 30, 16).a > 20, "the effect should still render with no matte");
 });
 
+test("a vector mask confines an adjustment layer the way a raster mask does", () => {
+  // Not mid grey: inverting 128 gives 127, which no assertion could tell apart.
+  const base = newCanvas(SIZE, SIZE);
+  const baseCtx = base.getContext("2d")!;
+  baseCtx.fillStyle = "#303030";
+  baseCtx.fillRect(0, 0, SIZE, SIZE);
+
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [{
+    ...createRasterLayer("invert", newCanvas(1, 1)),
+    kind: "adjustment-levels",
+    levels: { inBlack: 0, inWhite: 1, gamma: 1, outBlack: 1, outWhite: 0 },
+    // A rectangle covering only the left of the canvas.
+    vectorMask: {
+      anchors: [
+        { x: 0, y: 0, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+        { x: 30, y: 0, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+        { x: 30, y: SIZE, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+        { x: 0, y: SIZE, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } },
+      ],
+      closed: true,
+      fill: "#ffffff",
+      stroke: "none",
+      strokeWidth: 0,
+    },
+  }, createRasterLayer("base", base)];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+
+  assert.ok(pixelAt(target, 10, 32).r > 180, "inside the path the adjustment applies");
+  assert.ok(pixelAt(target, 50, 32).r < 80, "outside the path the base is untouched");
+});
+
+test("a style on an adjustment layer draws around the mask's shape", () => {
+  // An adjustment layer has no pixels of its own; its shape is its mask. A
+  // drop shadow should therefore fall off the edge of the masked region, and
+  // the adjustment itself must still reach the pixels beneath.
+  const base = newCanvas(SIZE, SIZE);
+  const baseCtx = base.getContext("2d")!;
+  baseCtx.fillStyle = "#808080";
+  baseCtx.fillRect(0, 0, SIZE, SIZE);
+
+  const mask = newCanvas(SIZE, SIZE);
+  const maskCtx = mask.getContext("2d")!;
+  maskCtx.fillStyle = "#ffffff";
+  maskCtx.fillRect(20, 20, 20, 20);
+
+  const doc = createDocument(SIZE, SIZE);
+  const adjustment: Layer = {
+    ...createRasterLayer("invert", newCanvas(1, 1)),
+    kind: "adjustment-levels",
+    levels: { inBlack: 0, inWhite: 1, gamma: 1, outBlack: 1, outWhite: 0 },
+    mask,
+    effects: [{
+      ...baseEffect("drop-shadow"),
+      id: "s1", color: "#000000", blur: 2, offsetX: 10, offsetY: 0, opacity: 1,
+      useGlobalLight: false, contour: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+    }],
+  };
+  doc.layers = [adjustment, createRasterLayer("base", base)];
+  const target = testCanvas(SIZE, SIZE);
+  renderClean(doc, target);
+
+  // Inside the mask the levels flip mid grey towards its complement.
+  assert.ok(pixelAt(target, 30, 30).r < 130, "the adjustment should still apply inside the mask");
+  // At angle 0 the shadow is thrown to the right of the masked square.
+  const shadow = pixelAt(target, 46, 30);
+  assert.ok(shadow.r < 110, `the shadow should darken outside the mask, got ${shadow.r}`);
+  assert.ok(pixelAt(target, 5, 5).r > 120, "far from the mask the base is untouched");
+});
+
 // --- advanced blending options ---------------------------------------------
 
 /** An opaque red backdrop under a blue square, both full-frame layers. */

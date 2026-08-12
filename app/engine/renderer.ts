@@ -602,13 +602,13 @@ function renderLayerSequence(
       continue;
     }
     if (layer.kind === "adjustment-tone" && layer.tone) {
-      drawAdjustment(composite, s, layer, frame);
+      drawAdjustment(composite, s, doc, layer, frame);
     } else if (layer.kind === "adjustment-curves" && layer.curves) {
-      drawPixelAdjustment(composite, s, layer, frame, (img) => applyCurvesToImageData(img, layer.curves!));
+      drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyCurvesToImageData(img, layer.curves!));
     } else if (layer.kind === "adjustment-levels" && layer.levels) {
-      drawPixelAdjustment(composite, s, layer, frame, (img) => applyLevelsToImageData(img, layer.levels!));
+      drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyLevelsToImageData(img, layer.levels!));
     } else if (layer.kind === "adjustment-hsl" && layer.hsl) {
-      drawPixelAdjustment(composite, s, layer, frame, (img) => applyHslToImageData(img, layer.hsl!));
+      drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyHslToImageData(img, layer.hsl!));
     } else {
       // Blend Clipped Layers as Group: the base and everything clipped to it
       // composite into one buffer and blend once, so the group's blend mode
@@ -1024,6 +1024,7 @@ function withChannelMask(
 function drawAdjustment(
   composite: CanvasRenderingContext2D,
   s: Scratch,
+  doc: Document,
   layer: Layer,
   frame: RenderFrame,
 ) {
@@ -1037,12 +1038,13 @@ function drawAdjustment(
   sctx.filter = "none";
   applyHighlightsShadows(sctx, frame.outputWidth, frame.outputHeight, layer.tone.highlights, layer.tone.shadows);
   sctx.restore();
-  compositeAdjustment(composite, s, snap, layer, frame);
+  compositeAdjustment(composite, s, doc, snap, layer, frame);
 }
 
 function drawPixelAdjustment(
   composite: CanvasRenderingContext2D,
   s: Scratch,
+  doc: Document,
   layer: Layer,
   frame: RenderFrame,
   op: (img: ImageData) => ImageData,
@@ -1054,26 +1056,52 @@ function drawPixelAdjustment(
   const img = sctx.getImageData(0, 0, frame.outputWidth, frame.outputHeight);
   op(img);
   sctx.putImageData(img, 0, 0);
-  compositeAdjustment(composite, s, snap, layer, frame);
+  compositeAdjustment(composite, s, doc, snap, layer, frame);
 }
 
 function compositeAdjustment(
   composite: CanvasRenderingContext2D,
   s: Scratch,
+  doc: Document,
   source: HTMLCanvasElement,
   layer: Layer,
   frame: RenderFrame,
 ) {
+  const vectorMask = layer.vectorMask
+    ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
+    : null;
   let adjusted = source;
-  if (layer.mask) {
+  if (layer.mask || vectorMask) {
     const bctx = s.layerBuf.getContext("2d")!;
     clearContext(bctx, frame.outputWidth, frame.outputHeight);
     bctx.drawImage(source, 0, 0);
     bctx.globalCompositeOperation = "destination-in";
-    drawProjectedCanvas(bctx, layer.mask, frame);
+    if (layer.mask) drawProjectedCanvas(bctx, layer.mask, frame);
+    if (vectorMask) drawProjectedCanvas(bctx, vectorMask, frame);
     bctx.globalCompositeOperation = "source-over";
     adjusted = s.layerBuf;
   }
+
+  // An adjustment layer's shape is its mask, so a style on one draws around
+  // the masked region — a drop shadow off the edge of a Curves mask, a stroke
+  // outlining it. Unmasked, the shape is the whole canvas and the outside
+  // effects have nowhere to land, which is also what Photoshop does.
+  if (layer.effects?.some((effect) => effect.enabled)) {
+    // contentBuf, not layerBuf: layerBuf may be holding the masked result that
+    // is about to be the input here, and s.a is the root composite itself.
+    const styled = s.contentBuf;
+    const styledCtx = styled.getContext("2d")!;
+    clearContext(styledCtx, frame.outputWidth, frame.outputHeight);
+    composeLayerWithEffects(
+      styledCtx, adjusted, s.effectBuf, s.clipBuf, layer, frame, frameScale(frame),
+      doc.globalLight, composite.canvas,
+    );
+    // Fill opacity is applied to the contents inside compose and must not
+    // reach the effects, so only master opacity is passed on here.
+    compositeBlendStack(composite, styled, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
+    return;
+  }
+
   compositeBlendStack(
     composite,
     adjusted,
