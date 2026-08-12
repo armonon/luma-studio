@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { BLEND_LABELS } from "../app/engine/document.ts";
+import { BLEND_LABELS, LAYER_EFFECT_KINDS } from "../app/engine/document.ts";
 import { normalizeAiOperation } from "../app/engine/ai-edit.ts";
 import { HISTORY_LIMIT } from "../app/engine/studio.ts";
 
@@ -35,6 +35,15 @@ test("blend-mode marketing counts match the engine", () => {
   assert.match(page, new RegExp(`<strong>${modes}</strong>[\\s\\S]*?Photoshop-class blend modes`));
 });
 
+test("layer-effect marketing counts match the engine", () => {
+  // Seventeen is a count of what the Layer Style dialog can add, so it moves
+  // whenever LAYER_EFFECT_KINDS does. Pinning it here is the only thing that
+  // keeps the hero strip and the performance stat from drifting apart.
+  const effects = LAYER_EFFECT_KINDS.length;
+  assert.match(page, new RegExp(`<b>${effects}</b> layer effects`));
+  assert.match(page, new RegExp(`<strong>${effects}</strong>[\\s\\S]*?non-destructive layer effects`));
+});
+
 test("no fabricated timing benchmarks in showcase metrics", () => {
   // A bare "N.Ns" metric asserts a measured latency. We have no benchmark
   // harness, so any such claim is invented.
@@ -50,6 +59,7 @@ test("no fabricated timing benchmarks in showcase metrics", () => {
 
 test("the performance section only advertises implementation-backed metrics", () => {
   assert.match(page, new RegExp(`<strong>${Object.keys(BLEND_LABELS).length}</strong>[\\s\\S]*?Photoshop-class blend modes`));
+  assert.match(page, new RegExp(`<strong>${LAYER_EFFECT_KINDS.length}</strong>[\\s\\S]*?non-destructive layer effects`));
   assert.match(page, /<strong>8<\/strong><span>×<\/span>[\s\S]*?passes on a single layer/);
   assert.match(page, /<strong>32<\/strong><span>-bit<\/span>[\s\S]*?floating-point tile masters/);
   assert.match(page, new RegExp(`<strong>${HISTORY_LIMIT}</strong>[\\s\\S]*?recoverable history nodes`));

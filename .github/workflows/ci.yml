@@ -31,9 +31,18 @@ jobs:
         run: npx eslint app tests --max-warnings 0
 
       # `npm test` builds first (the rendered-html test needs dist/), so this
-      # covers the production build as well as the unit suite.
+      # covers the primary Cloudflare/vinext build as well as the unit suite.
       - name: Test
         run: npm test
+
+      # The other two targets are real deploy paths that nothing else exercises,
+      # so they rot silently. netlify.toml says to keep both working or drop
+      # one; this is what "keep working" has to mean.
+      - name: Build (Netlify target)
+        run: npm run build:netlify
+
+      - name: Build (desktop bundle)
+        run: npm run desktop:build
 
   native-core:
     name: Native core (luma-core)

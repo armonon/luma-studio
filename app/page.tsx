@@ -211,6 +211,7 @@ export default function MarketingHome() {
           </div>
           <div className="hero-proof-strip" aria-label="Product highlights">
             <span><b>✦</b> Layer Focus</span>
+            <span><b>17</b> layer effects</span>
             <span><b>8×</b> blend passes</span>
             <span><b>32</b>-bit tiles</span>
             <span><b>↗</b> PSD + PSB</span>
@@ -249,6 +250,7 @@ export default function MarketingHome() {
             "Display P3",
             "Layer Focus",
             "Multi-pass blending",
+            "Layer styles",
             "32-bit color",
             "Branching history",
             "Editable AI layers",
@@ -444,6 +446,10 @@ export default function MarketingHome() {
           <article className="reveal">
             <strong>27</strong>
             <p>Photoshop-class blend modes</p>
+          </article>
+          <article className="reveal">
+            <strong>17</strong>
+            <p>non-destructive layer effects</p>
           </article>
           <article className="reveal">
             <strong>8</strong><span>×</span>
