@@ -29,7 +29,7 @@ import {
 } from "../app/engine/document.ts";
 import { formatCssColor, parseCssColor } from "../app/engine/color.ts";
 import { BACKDROP_READING_KINDS, documentNeedsFullBackdrop, layerEffectReach } from "../app/engine/layer-effects.ts";
-import { glCanRenderDocument } from "../app/engine/gl-renderer.ts";
+import { glCanRenderDocument, layerNeedsBackdrop } from "../app/engine/gl-renderer.ts";
 import { BUILT_IN_LAYER_STYLES, captureStyle } from "../app/engine/layer-styles.ts";
 import { renderClean, renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
@@ -350,34 +350,67 @@ test("an effect blend mode acts on the layer's own pixels", () => {
   );
 });
 
-test("the GPU path declines every effect it cannot render faithfully", () => {
-  // This replaces a source-text assertion that only checked the guard was
-  // mentioned. It passed while backdrop-reading effects were being dropped,
-  // which is the exact divergence the guard exists to prevent — so the check
-  // is now behavioural and covers every kind at once.
-  const withEffect = (effect: Partial<LayerEffect> & { kind: LayerEffectKind }) => {
-    const doc = createDocument(SIZE, SIZE);
-    doc.layers = [{
-      ...createRasterLayer("box", newCanvas(SIZE, SIZE)),
-      effects: [{ ...baseEffect(effect.kind), ...effect }],
-    }];
-    return doc;
+function layerWith(effect: Partial<LayerEffect> & { kind: LayerEffectKind }): Layer {
+  return {
+    ...createRasterLayer("box", newCanvas(SIZE, SIZE)),
+    effects: [{ ...baseEffect(effect.kind), ...effect }],
   };
+}
 
+test("the GPU path asks for a backdrop for every effect that needs one", () => {
+  // This used to assert the opposite — that the GPU path *declined* these
+  // documents, because it had no backdrop to offer. It has one now, so the
+  // question is no longer whether to give up but whether the right layers get
+  // one. A layer that needs a backdrop and is not offered one renders its
+  // effects against nothing, which is the same silent divergence wearing a
+  // different hat, so the check moved rather than went away.
   for (const kind of BACKDROP_READING_KINDS) {
-    assert.equal(
-      glCanRenderDocument(withEffect({ kind })),
-      false,
-      `${kind} reads the backdrop, which the GPU path does not have`,
-    );
+    assert.equal(layerNeedsBackdrop(layerWith({ kind })), true, `${kind} samples the backdrop`);
   }
 
-  // A blended effect has nothing to blend against there either.
-  assert.equal(glCanRenderDocument(withEffect({ kind: "inner-shadow", blendMode: "multiply" })), false);
+  // A blended effect has nothing to blend against without one either.
+  assert.equal(layerNeedsBackdrop(layerWith({ kind: "inner-shadow", blendMode: "multiply" })), true);
 
-  // Anything self-contained is fine, and a disabled effect never blocks.
-  assert.equal(glCanRenderDocument(withEffect({ kind: "color-overlay" })), true);
-  assert.equal(glCanRenderDocument(withEffect({ kind: "backdrop-blur", enabled: false })), true);
+  // Anything self-contained does not pay for the readback, and a disabled
+  // effect never asks for one.
+  assert.equal(layerNeedsBackdrop(layerWith({ kind: "color-overlay" })), false);
+  assert.equal(layerNeedsBackdrop(layerWith({ kind: "backdrop-blur", enabled: false })), false);
+  assert.equal(layerNeedsBackdrop(createRasterLayer("bare", newCanvas(SIZE, SIZE))), false);
+});
+
+test("effects no longer send the whole document back to the CPU renderer", () => {
+  // Every effect kind, all at once, on one layer: the GPU path has to accept
+  // it. Declining here is what made GPU export silently fall back for roughly
+  // half of real documents.
+  const doc = createDocument(SIZE, SIZE);
+  doc.layers = [{
+    ...createRasterLayer("box", newCanvas(SIZE, SIZE)),
+    effects: LAYER_EFFECT_KINDS.map((kind, index) => ({ ...baseEffect(kind), id: `e${index}`, kind })),
+  }];
+  assert.equal(glCanRenderDocument(doc), true);
+});
+
+test("an adjustment layer with custom blend passes still routes to the CPU", () => {
+  // The adjustment programs transform the composite in place, so they have no
+  // way to honour a stack of passes. That refusal is unrelated to effects and
+  // has to survive them being allowed through.
+  const doc = createDocument(SIZE, SIZE);
+  const adjustment: Layer = {
+    ...createRasterLayer("levels", newCanvas(1, 1)),
+    kind: "adjustment-levels",
+    levels: { inBlack: 0, inWhite: 1, gamma: 1, outBlack: 0, outWhite: 1 },
+  };
+  doc.layers = [adjustment];
+  assert.equal(glCanRenderDocument(doc), true, "a plain adjustment layer is fine");
+
+  doc.layers = [{
+    ...adjustment,
+    blendStack: [
+      { id: "p1", mode: "multiply", opacity: 1, enabled: true },
+      { id: "p2", mode: "screen", opacity: 0.5, enabled: true },
+    ],
+  }];
+  assert.equal(glCanRenderDocument(doc), false, "two passes cannot be honoured in place");
 });
 
 test("every backdrop-reading effect is listed as one", () => {

@@ -261,6 +261,85 @@ function uploadCanvasTex(
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 }
 
+/**
+ * Whether any of this layer's effects have to see what is beneath it.
+ *
+ * Two kinds do: the four that sample the backdrop by nature (Backdrop Blur,
+ * Refraction, Reflection, Contact Shadow), and any effect carrying a blend
+ * mode, which has nothing to blend against without one.
+ *
+ * Exported and pure because this is now the load-bearing predicate on this
+ * path. It used to be `glCanRenderDocument` deciding whether to give up on the
+ * whole document; getting that wrong dropped effects silently, and a
+ * source-text test failed to notice. The same risk lives here — a layer that
+ * needs a backdrop and is not offered one renders its effects against nothing
+ * — so it is testable without a WebGL context for the same reason.
+ */
+export function layerNeedsBackdrop(layer: Layer): boolean {
+  return !!layer.effects?.some((effect) => effect.enabled
+    && (effectNeedsBackdrop(effect) || resolvedEffectBlendMode(effect) !== "source-over"));
+}
+
+let backdropFloats: Float32Array | null = null;
+let backdropSurface: HTMLCanvasElement | null = null;
+
+/**
+ * Read the composite back out of the GPU as a 2D canvas.
+ *
+ * The effect pipeline is shared with the CPU renderer — deliberately, so the
+ * two cannot diverge — and it works on canvases. Handing it the composite is
+ * what lets Backdrop Blur, Refraction, Reflection, Contact Shadow and every
+ * blended effect run on this path at all; without it `glCanRenderDocument` had
+ * to decline the whole document and fall back.
+ *
+ * Three conversions happen here, and all three matter:
+ *   - GL's origin is bottom-left and the canvas's is top-left, so rows flip.
+ *   - The FBO holds premultiplied colour; ImageData is unpremultiplied.
+ *   - The FBO holds sRGB-encoded values (linearisation lives inside the blend
+ *     shader), so no transfer function is applied on the way out.
+ *
+ * This costs a full GPU sync, so it runs only for the layers that need it.
+ */
+function readCompositeBackdrop(
+  gl: WebGL2RenderingContext,
+  fbo: FBO,
+  width: number,
+  height: number,
+): HTMLCanvasElement {
+  const count = width * height * 4;
+  if (!backdropFloats || backdropFloats.length < count) backdropFloats = new Float32Array(count);
+  const floats = backdropFloats;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fb);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, floats);
+
+  if (!backdropSurface || backdropSurface.width !== width || backdropSurface.height !== height) {
+    backdropSurface = newCanvas(width, height);
+  }
+  const ctx = backdropSurface.getContext("2d")!;
+  const image = ctx.createImageData(width, height);
+  const data = image.data;
+  for (let y = 0; y < height; y += 1) {
+    const source = (height - 1 - y) * width * 4;
+    const destination = y * width * 4;
+    for (let x = 0; x < width; x += 1) {
+      const from = source + x * 4;
+      const to = destination + x * 4;
+      const alpha = floats[from + 3];
+      const unpremultiply = alpha > 0 ? 255 / alpha : 0;
+      data[to] = clamp255(floats[from] * unpremultiply);
+      data[to + 1] = clamp255(floats[from + 1] * unpremultiply);
+      data[to + 2] = clamp255(floats[from + 2] * unpremultiply);
+      data[to + 3] = clamp255(alpha * 255);
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+  return backdropSurface;
+}
+
+function clamp255(value: number) {
+  return value < 0 ? 0 : value > 255 ? 255 : value;
+}
+
 function canUploadPrecisionDirect(layer: Layer, doc: Document) {
   const t = layer.transform;
   return !!layer.surface && layer.surface.grid.width === doc.width && layer.surface.grid.height === doc.height &&
@@ -302,7 +381,11 @@ function uploadPrecisionTex(
 
 // Rasterize a layer's transformed content into a doc-sized canvas, so the GPU
 // can treat all layer kinds (raster/text/shape) uniformly as a source texture.
-function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
+function rasterizeLayer(
+  doc: Document,
+  layer: Layer,
+  backdrop: HTMLCanvasElement | null = null,
+): HTMLCanvasElement {
   const c = newCanvas(doc.width, doc.height);
   const ctx = c.getContext("2d")!;
   const content = newCanvas(doc.width, doc.height);
@@ -320,6 +403,7 @@ function rasterizeLayer(doc: Document, layer: Layer): HTMLCanvasElement {
     { x: 0, y: 0, width: doc.width, height: doc.height, outputWidth: doc.width, outputHeight: doc.height },
     { x: 1, y: 1 },
     doc.globalLight,
+    backdrop,
   );
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
@@ -404,17 +488,27 @@ function ensureLayerTex(
   c: Cache,
   doc: Document,
   layer: Layer,
+  backdrop: HTMLCanvasElement | null = null,
 ): WebGLTexture {
   const key = layer.id;
   const version = layerVersion(layer);
   const cached = c.layerTex.get(key);
   gpuTextureClock += 1;
-  if (cached && cached.version === version) {
+  // A backdrop-reading layer is a function of everything beneath it, which
+  // layerVersion knows nothing about, so caching it would pin the first frame's
+  // backdrop forever. These rasterize every frame and stay transient.
+  if (!backdrop && cached && cached.version === version) {
     cached.used = gpuTextureClock;
     gpuTextureHits += 1;
     return cached.tex;
   }
   gpuTextureMisses += 1;
+  if (backdrop) {
+    const tex = gl.createTexture()!;
+    uploadCanvasTex(gl, tex, rasterizeLayer(doc, layer, backdrop));
+    c.transientTex.add(tex);
+    return tex;
+  }
   const bytes = doc.width * doc.height * (canUploadPrecisionDirect(layer, doc) ? 8 : 4);
   const tex = cached?.tex ?? gl.createTexture()!;
   if (canUploadPrecisionDirect(layer, doc)) uploadPrecisionTex(gl, tex, doc, layer);
@@ -529,10 +623,19 @@ function drawFullscreen(gl: WebGL2RenderingContext) {
 }
 
 // Global switch for gamma-correct linear compositing (sRGB <-> linear around
-// blend math). Off by default to match legacy Photoshop pixel behavior; on
-// gives physically correct light mixing (especially visible in soft-light,
-// screen, and adjustment stacks).
-let linearCompositing = true;
+// blend math). On, it gives physically correct light mixing — most visible in
+// soft-light, screen, and adjustment stacks.
+//
+// Off by default, and the default is load-bearing rather than a taste: the CPU
+// renderer composites through canvas 2D, which is sRGB and has no linear mode,
+// so switching this on makes GPU export disagree with CPU export about what
+// the image looks like. It is not a subtle disagreement — a 25% white panel
+// over black comes out at 64 on the CPU and 137 here. The comment above this
+// line has always said "off by default"; the initialiser said `true`, and the
+// only reason that was survivable is that half the documents in the suite fell
+// back to the CPU path before the effects guard was lifted. Photoshop's own
+// "Blend RGB Colors Using Gamma 1.00" is off by default for the same reason.
+let linearCompositing = false;
 export function setLinearCompositing(on: boolean) { linearCompositing = on; }
 export function isLinearCompositing() { return linearCompositing; }
 
@@ -557,13 +660,10 @@ export function glCanRenderDocument(doc: Document): boolean {
       || !isNeutralBlendIf(resolvedBlendIf(layer));
   })) return false;
 
-  return !doc.layers.some((layer) => layer.effects?.some((effect) => {
-    if (!effect.enabled) return false;
-    // No backdrop here, so an effect that reads one renders as nothing.
-    if (effectNeedsBackdrop(effect)) return true;
-    // No backdrop means nothing for a blended effect to composite against.
-    return resolvedEffectBlendMode(effect) !== "source-over";
-  }));
+  // Effects no longer force a fallback. They run through the same pipeline the
+  // CPU renderer uses, and the composite is read back to serve the ones that
+  // sample what is beneath them — see readCompositeBackdrop.
+  return true;
 }
 
 export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = true, checkerboard = true): boolean {
@@ -670,7 +770,13 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       gl.uniform1f(c.adj.uniforms["u_vibrance"], layer.tone.vibrance);
       drawFullscreen(gl);
     } else {
-      const layerTex = ensureLayerTex(gl, c, doc, layer);
+      // `composite` holds everything already drawn beneath this layer, which is
+      // exactly what a backdrop-reading effect has to sample. Reading it back
+      // costs a GPU sync, so only the layers that need one pay for it.
+      const backdrop = layerNeedsBackdrop(layer)
+        ? readCompositeBackdrop(gl, composite, doc.width, doc.height)
+        : null;
+      const layerTex = ensureLayerTex(gl, c, doc, layer, backdrop);
       c.pinnedTex.add(layerTex);
       const maskTex = ensureMaskTex(gl, c, layer);
       if (maskTex) c.pinnedTex.add(maskTex);
