@@ -373,6 +373,25 @@ void main() {
 
 // Final blit: takes the float composite and writes to the display canvas
 // with a checkerboard behind transparent regions.
+// Readback pass: turn the float composite into exactly the bytes ImageData
+// wants, so the CPU side is a memcpy instead of a per-pixel loop.
+//
+// Three things happen here that used to happen in JavaScript over every pixel:
+// the row flip (GL's origin is bottom-left), the unpremultiply, and the
+// quantise to 8 bits. Doing them in the shader also cuts the transfer from
+// four floats a pixel to four bytes.
+export const READBACK_FS = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+out vec4 outColor;
+uniform sampler2D u_src;
+void main() {
+  vec4 premultiplied = texture(u_src, vec2(v_uv.x, 1.0 - v_uv.y));
+  float alpha = premultiplied.a;
+  vec3 straight = alpha > 0.0 ? premultiplied.rgb / alpha : vec3(0.0);
+  outColor = vec4(clamp(straight, 0.0, 1.0), clamp(alpha, 0.0, 1.0));
+}`;
+
 export const BLIT_FS = `#version 300 es
 precision highp float;
 in vec2 v_uv;

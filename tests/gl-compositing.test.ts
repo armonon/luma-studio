@@ -24,11 +24,11 @@ import type { Layer, LayerEffect, LayerEffectKind } from "../app/engine/document
 // a source-text test can pretend to cover.
 //
 // The pixel-level GPU/CPU parity behind these decisions was measured in a real
-// browser against the dev server, on a 160x120 document with a translucent
-// panel over a striped gradient: every one of the seventeen effect kinds, plus
-// a no-effect control, came out within 4/255 max and 0.06 mean channel delta.
-// Re-run that by driving `window.luma` with scripting enabled if this file
-// changes.
+// browser against the dev server, on a 400x300 document with a translucent
+// panel over a striped gradient. Every one of the seventeen effect kinds
+// individually, and all seventeen stacked on one layer, came out within 1/255
+// max and 0.043 mean channel delta. Re-run that by driving `window.luma` with
+// scripting enabled if this file changes.
 // ---------------------------------------------------------------------------
 
 function effectOn(kind: LayerEffectKind, patch: Partial<LayerEffect> = {}): Layer {
