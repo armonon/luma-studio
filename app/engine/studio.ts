@@ -84,6 +84,8 @@ import {
 } from "./renderer";
 import { bumpBitmapVersion, gpuTextureCacheStats, isGLSupported, rasterizeLayer, renderGL } from "./gl-renderer";
 import { nativeCanUseSurfaceDirectly, nativeFlattenRefusal, tileFromContext } from "./native-flatten";
+import { documentSizeRefusal, exceedsBrowserCanvas, fitsBrowserCanvas } from "./large-documents";
+import { currentEdition } from "./edition";
 import {
   SelectionMode,
   RefineSelectionParams,
@@ -973,6 +975,8 @@ export class Studio {
   }
 
   resetDocument(width: number, height: number) {
+    const refusal = documentSizeRefusal(width, height, currentEdition());
+    if (refusal) throw new Error(refusal);
     const next = createDocument(width, height);
     this.installDocument(next, "Untitled");
     this.history = this.createSessionHistory();
@@ -1444,6 +1448,12 @@ export class Studio {
     width = Math.max(1, Math.min(32768, Math.round(width)));
     height = Math.max(1, Math.min(32768, Math.round(height)));
     if (width === this.doc.width && height === this.doc.height) return false;
+    // Only sizes past the ceiling can be refused — documentSizeRefusal returns
+    // null for anything that fits — so shrinking a large document back under it
+    // stays possible in every edition. A document opened on the desktop and
+    // reopened on the web must not be permanently unresizable.
+    const refusal = documentSizeRefusal(width, height, currentEdition());
+    if (refusal) throw new Error(refusal);
     const before = cloneDocument(this.doc);
     const sx = width / this.doc.width;
     const sy = height / this.doc.height;
@@ -1699,8 +1709,17 @@ export class Studio {
   async exportArtboard(id: string, type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92) {
     const artboard = this.doc.artboards?.find((candidate) => candidate.id === id);
     if (!artboard) throw new Error("Artboard not found.");
-    if (artboard.width > 16_384 || artboard.height > 16_384 || artboard.width * artboard.height > 64_000_000) {
-      throw new Error("This artboard exceeds the browser export surface limit.");
+    // An artboard past the canvas ceiling streams band by band, the same way a
+    // document does. It used to throw, which meant a large document could hold
+    // an artboard that could never be exported out of it.
+    if (exceedsBrowserCanvas(artboard.width, artboard.height)) {
+      if (type !== "image/png") {
+        throw new Error("Artboards past the canvas ceiling export as PNG; JPEG and WebP have no streaming encoder.");
+      }
+      const { exportTiledPng } = await import("./png-stream");
+      return exportTiledPng(this.doc, {
+        region: { x: artboard.x, y: artboard.y, width: artboard.width, height: artboard.height },
+      });
     }
     const output = newCanvas(artboard.width, artboard.height);
     renderViewport(this.doc, output, {
@@ -1921,8 +1940,7 @@ export class Studio {
   }
 
   addBlankRaster(name = "Layer") {
-    const browserCanvasSafe = this.doc.width <= 16384 && this.doc.height <= 16384 &&
-      this.doc.width * this.doc.height <= 64_000_000;
+    const browserCanvasSafe = fitsBrowserCanvas(this.doc.width, this.doc.height);
     const bitmap = browserCanvasSafe ? newCanvas(this.doc.width, this.doc.height) : undefined;
     const layer = createRasterLayer(name, bitmap);
     layer.surface = bitmap
@@ -3768,8 +3786,7 @@ export class Studio {
 
   // --- export ---
   async exportImage(type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92): Promise<Blob> {
-    const browserCanvasSafe = this.doc.width <= 16384 && this.doc.height <= 16384 &&
-      this.doc.width * this.doc.height <= 64_000_000;
+    const browserCanvasSafe = fitsBrowserCanvas(this.doc.width, this.doc.height);
     if (type === "image/png" && !browserCanvasSafe) {
       const { exportTiledPng } = await import("./png-stream");
       return exportTiledPng(this.doc);

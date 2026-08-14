@@ -87,7 +87,17 @@ function collectCompressed(stream: ReadableStream<Uint8Array>) {
  */
 export async function exportTiledPng(
   doc: Document,
-  options: { tileWidth?: number; bandHeight?: number; halo?: number } = {},
+  options: {
+    tileWidth?: number;
+    bandHeight?: number;
+    halo?: number;
+    /**
+     * A sub-rectangle of the document to write, for artboard export. Omitted,
+     * the whole document is written. Bands and tiles are relative to it, so an
+     * artboard past the canvas ceiling streams exactly as a document does.
+     */
+    region?: { x: number; y: number; width: number; height: number };
+  } = {},
 ) {
   if (typeof CompressionStream === "undefined") {
     throw new Error("Streaming PNG export requires CompressionStream support");
@@ -98,19 +108,22 @@ export async function exportTiledPng(
   const tileWidth = Math.max(64, Math.min(3072, Math.round(options.tileWidth ?? 2048)));
   const bandHeight = Math.max(1, Math.min(64, Math.round(options.bandHeight ?? 16)));
   const halo = Math.max(0, Math.min(512, Math.round(options.halo ?? 256)));
+  const region = options.region ?? { x: 0, y: 0, width: doc.width, height: doc.height };
   const compressor = new CompressionStream("deflate");
   const writer = compressor.writable.getWriter();
   const compressed = collectCompressed(compressor.readable);
 
-  for (let bandY = 0; bandY < doc.height; bandY += bandHeight) {
-    const height = Math.min(bandHeight, doc.height - bandY);
+  for (let bandY = 0; bandY < region.height; bandY += bandHeight) {
+    const height = Math.min(bandHeight, region.height - bandY);
     const horizontalTiles: Array<{ x: number; width: number; data: Uint8ClampedArray }> = [];
-    for (let tileX = 0; tileX < doc.width; tileX += tileWidth) {
-      const width = Math.min(tileWidth, doc.width - tileX);
-      const renderLeft = Math.max(0, tileX - halo);
-      const renderTop = Math.max(0, bandY - halo);
-      const renderRight = Math.min(doc.width, tileX + width + halo);
-      const renderBottom = Math.min(doc.height, bandY + height + halo);
+    for (let tileX = 0; tileX < region.width; tileX += tileWidth) {
+      const width = Math.min(tileWidth, region.width - tileX);
+      // The halo is clamped to the document, not the region: an artboard's
+      // effects sample from the artwork around it, exactly as it previews.
+      const renderLeft = Math.max(0, region.x + tileX - halo);
+      const renderTop = Math.max(0, region.y + bandY - halo);
+      const renderRight = Math.min(doc.width, region.x + tileX + width + halo);
+      const renderBottom = Math.min(doc.height, region.y + bandY + height + halo);
       const renderWidth = renderRight - renderLeft;
       const renderHeight = renderBottom - renderTop;
       const canvas = newCanvas(renderWidth, renderHeight);
@@ -131,8 +144,8 @@ export async function exportTiledPng(
         proofing: false,
       });
       const data = canvas.getContext("2d")!.getImageData(
-        tileX - renderLeft,
-        bandY - renderTop,
+        region.x + tileX - renderLeft,
+        region.y + bandY - renderTop,
         width,
         height,
       ).data;
@@ -140,7 +153,7 @@ export async function exportTiledPng(
     }
 
     for (let row = 0; row < height; row += 1) {
-      const scanline = new Uint8Array(1 + doc.width * 4);
+      const scanline = new Uint8Array(1 + region.width * 4);
       scanline[0] = 0;
       for (const tile of horizontalTiles) {
         const sourceStart = row * tile.width * 4;
@@ -151,7 +164,7 @@ export async function exportTiledPng(
   }
   await writer.close();
   const idatGroups = await compressed;
-  const parts: BlobPart[] = [blobPart(PNG_SIGNATURE), ...chunk("IHDR", [ihdr(doc.width, doc.height)]).map(blobPart)];
+  const parts: BlobPart[] = [blobPart(PNG_SIGNATURE), ...chunk("IHDR", [ihdr(region.width, region.height)]).map(blobPart)];
   for (const group of idatGroups) parts.push(...chunk("IDAT", group.chunks).map(blobPart));
   parts.push(...chunk("IEND", []).map(blobPart));
   return new Blob(parts, { type: "image/png" });

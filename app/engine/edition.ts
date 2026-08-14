@@ -58,7 +58,7 @@ export const CAPABILITY_STATUS: Readonly<Record<Capability, CapabilityStatus>> =
   "gpu-export": "shipped",
   "on-device-models": "shipped",
   "filesystem-access": "shipped",
-  "large-documents": "planned",
+  "large-documents": "shipped",
   "native-raw": "planned",
   "plugin-install": "planned",
 };

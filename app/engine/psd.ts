@@ -59,6 +59,7 @@ import {
 import { drawLayerContentManaged } from "./precision-renderer";
 import { PrecisionTileSurface } from "./tile-store";
 import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
+import { exceedsBrowserCanvas } from "./large-documents";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
 // "multiply". Map to our canvas GlobalCompositeOperation names.
@@ -1671,7 +1672,7 @@ export function photoshopCompatibilityReport(
       });
     }
     if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.surface && !layer.bitmap &&
-        (doc.width > 16384 || doc.height > 16384 || doc.width * doc.height > 64_000_000)) {
+        exceedsBrowserCanvas(doc.width, doc.height)) {
       issues.push({
         code: "SPARSE_LAYER_REQUIRES_STREAMING_WRITER",
         severity: "error",
