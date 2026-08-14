@@ -156,3 +156,15 @@ export function menuCommands(menu: MenuSection[] = DESKTOP_MENU): StudioCommand[
 
 /** The event name the native menu emits on the window. */
 export const MENU_COMMAND_EVENT = "luma://menu-command";
+
+/**
+ * A document to open, by absolute path.
+ *
+ * Emitted for a file double-clicked in the Finder, one passed on the command
+ * line, and one chosen from Open Recent — all three are the same request, so
+ * they arrive the same way.
+ */
+export const OPEN_FILE_EVENT = "luma://open-file";
+
+/** How many entries the Open Recent submenu holds. Mirrored in main.rs. */
+export const MAX_RECENT_FILES = 10;

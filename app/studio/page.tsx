@@ -64,6 +64,7 @@ import {
   isNativeFilesystemAvailable,
   openNativeAiSignIn,
   openNativeFile,
+  readNativePath,
   saveNativeFile,
 } from "@/app/engine/native-files";
 import {
@@ -91,7 +92,8 @@ import {
   type LayerFocusState,
 } from "./layer-focus-model";
 import type { FocusCreateAction } from "./layer-focus-panel";
-import { listenForMenuCommands } from "../desktop/native-menu";
+import { listenForMenuCommands, listenForOpenFile, publishRecentFiles } from "../desktop/native-menu";
+import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/recent-files";
 import type { StudioCommand } from "../desktop/menu-model";
 import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
 import type { TransformCorner } from "./canvas-geometry";
@@ -337,6 +339,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [styleLayerId, setStyleLayerId] = useState<string | null>(null);
+  /**
+   * Open Recent. A ref rather than state: nothing in the React tree renders it
+   * — the native menu is the only consumer — so making it state would trigger
+   * a re-render of the whole studio every time a document opened.
+   */
+  const recentFilesRef = useRef<string[]>([]);
   const activeLayerIdRef = useRef<string | null>(null);
   const setActiveLayerId = useCallback((id: string | null) => {
     activeLayerIdRef.current = id;
@@ -1379,18 +1387,51 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
 
+  const importOpenedFile = async (opened: { name: string; data: Uint8Array }) => {
+    const bytes = opened.data.buffer.slice(
+      opened.data.byteOffset,
+      opened.data.byteOffset + opened.data.byteLength,
+    ) as ArrayBuffer;
+    const { mimeForFileName } = await import("./focus-import");
+    await importDocumentFile(new File([bytes], opened.name, { type: mimeForFileName(opened.name) }));
+  };
+
   const openNativeDocument = async () => {
     try {
       const opened = await openNativeFile();
       if (!opened) return;
-      const bytes = opened.data.buffer.slice(
-        opened.data.byteOffset,
-        opened.data.byteOffset + opened.data.byteLength,
-      ) as ArrayBuffer;
-      const { mimeForFileName } = await import("./focus-import");
-      await importDocumentFile(new File([bytes], opened.name, { type: mimeForFileName(opened.name) }));
+      await importOpenedFile(opened);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Native open failed");
+    }
+  };
+
+  /**
+   * Open a document the OS handed us: a double-clicked file, one from the
+   * command line, or an Open Recent pick. Only a successful open joins the
+   * recent list — a path that failed to parse must not persist as a suggestion.
+   */
+  const safeLocalStorage = () => {
+    try {
+      return typeof window === "undefined" ? null : window.localStorage;
+    } catch {
+      // Storage can be disabled outright; recents are a convenience, not a
+      // reason to fail an open.
+      return null;
+    }
+  };
+
+  const openDocumentPath = async (path: string) => {
+    try {
+      const opened = await readNativePath(path);
+      if (!opened) return;
+      await importOpenedFile(opened);
+      const next = withRecentFile(recentFilesRef.current, path);
+      recentFilesRef.current = next;
+      saveRecentFiles(safeLocalStorage(), next);
+      publishRecentFiles(next);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : `${path} could not be opened`);
     }
   };
 
@@ -1879,6 +1920,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       case "zoom-actual": setView((v) => ({ ...v, zoom: 1 })); return;
     }
   };
+
+  // Restore Open Recent and hand it to the native menu, once.
+  useEffect(() => {
+    if (!desktop) return;
+    const stored = loadRecentFiles(safeLocalStorage());
+    recentFilesRef.current = stored;
+    publishRecentFiles(stored);
+  }, [desktop]);
+
+  // A double-clicked document, one from the command line, and an Open Recent
+  // pick all arrive on the same event.
+  useEffect(() => {
+    if (!desktop) return;
+    return listenForOpenFile((path) => { void openDocumentPath(path); });
+  });
 
   // The native menu bar lives in the Tauri process, so its clicks arrive as an
   // event rather than a DOM interaction. Web builds never see one.

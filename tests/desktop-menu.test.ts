@@ -1,10 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { asStudioCommand, listenForMenuCommands } from "../app/desktop/native-menu.ts";
+import {
+  asStudioCommand,
+  listenForMenuCommands,
+  listenForOpenFile,
+  publishRecentFiles,
+} from "../app/desktop/native-menu.ts";
+import {
+  loadRecentFiles,
+  saveRecentFiles,
+  withRecentFile,
+} from "../app/desktop/recent-files.ts";
 import {
   DESKTOP_MENU,
+  MAX_RECENT_FILES,
   MENU_COMMAND_EVENT,
+  OPEN_FILE_EVENT,
   menuCommands,
 } from "../app/desktop/menu-model.ts";
 import type { StudioCommand } from "../app/desktop/menu-model.ts";
@@ -52,10 +64,43 @@ test("labels and accelerators match between the model and the native menu", () =
   }
 });
 
-test("the event name is the same string on both sides", () => {
-  // The frontend listens for this and Rust emits it. A typo on either side is
-  // a menu that silently does nothing at all.
+test("the event names are the same strings on both sides", () => {
+  // The frontend listens for these and Rust emits them. A typo on either side
+  // is a menu, or a double-clicked document, that silently does nothing.
   assert.match(rust, new RegExp(`MENU_COMMAND_EVENT: &str = "${MENU_COMMAND_EVENT}"`));
+  assert.match(rust, new RegExp(`OPEN_FILE_EVENT: &str = "${OPEN_FILE_EVENT}"`));
+});
+
+test("the recent-file cap is the same number on both sides", () => {
+  // Rust truncates the list it is given and TypeScript truncates before
+  // sending. Disagreeing means the menu quietly holds fewer than the app
+  // remembers, or the app persists entries the menu will never show.
+  assert.match(rust, new RegExp(`MAX_RECENT_FILES: usize = ${MAX_RECENT_FILES};`));
+});
+
+test("recent-file menu ids are namespaced away from the fixed commands", () => {
+  // A path is not a command. Without a prefix a document called "undo" would
+  // be indistinguishable from the Undo item.
+  const prefix = /RECENT_FILE_PREFIX: &str = "([^"]+)"/.exec(rust);
+  assert.ok(prefix, "the prefix constant is what keeps paths and commands apart");
+  assert.match(rust, new RegExp(`strip_prefix\\(RECENT_FILE_PREFIX\\)`),
+    "and the handler has to actually use it to route them");
+  for (const command of menuCommands()) {
+    assert.ok(!command.startsWith(prefix[1]), `${command} collides with the recent-file namespace`);
+  }
+});
+
+test("the file associations cover the formats the app can open", () => {
+  const config = JSON.parse(
+    readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+  ) as { bundle: { fileAssociations?: Array<{ ext: string[] }> } };
+  const associations = config.bundle.fileAssociations ?? [];
+  const extensions = new Set(associations.flatMap((entry) => entry.ext));
+  // Registering a type the app cannot open is worse than not registering it:
+  // the OS hands us the document and we fail in front of the user.
+  for (const ext of ["luma", "psd", "psb", "png", "jpg", "webp"]) {
+    assert.ok(extensions.has(ext), `${ext} should open in Luma but is not associated`);
+  }
 });
 
 test("no command id appears twice", () => {
@@ -115,7 +160,7 @@ type Listener = (message: { payload: unknown }) => void;
 
 /** Stand in for Tauri's global, with control over when `listen` resolves. */
 function fakeTauri() {
-  let handler: Listener | null = null;
+  const handlers = new Map<string, Listener>();
   let resolveListen: ((stop: () => void) => void) | null = null;
   let stopped = 0;
   const globalWindow = globalThis as unknown as { window?: unknown };
@@ -123,15 +168,15 @@ function fakeTauri() {
   globalWindow.window = {
     __TAURI__: {
       event: {
-        listen: (_event: string, incoming: Listener) => new Promise<() => void>((resolve) => {
-          handler = incoming;
+        listen: (event: string, incoming: Listener) => new Promise<() => void>((resolve) => {
+          handlers.set(event, incoming);
           resolveListen = resolve;
         }),
       },
     },
   };
   return {
-    fire: (payload: unknown) => handler?.({ payload }),
+    fire: (payload: unknown, event: string = MENU_COMMAND_EVENT) => handlers.get(event)?.({ payload }),
     settle: () => resolveListen?.(() => { stopped += 1; }),
     stopped: () => stopped,
     restore: () => { globalWindow.window = previous; },
@@ -207,6 +252,113 @@ test("outside Tauri the subscription is a no-op that still returns a teardown", 
     const stop = listenForMenuCommands(() => assert.fail("nothing should dispatch"));
     assert.equal(typeof stop, "function");
     stop();
+  } finally {
+    globalWindow.window = previous;
+  }
+});
+
+// --- open recent ------------------------------------------------------------
+
+test("opening a document moves it to the front without duplicating it", () => {
+  let list = withRecentFile([], "/a.psd");
+  list = withRecentFile(list, "/b.psd");
+  assert.deepEqual(list, ["/b.psd", "/a.psd"], "newest first");
+
+  list = withRecentFile(list, "/a.psd");
+  assert.deepEqual(list, ["/a.psd", "/b.psd"], "reopening moves it up rather than adding a second entry");
+});
+
+test("the recent list is capped, and the oldest falls off the end", () => {
+  let list: string[] = [];
+  for (let index = 0; index < MAX_RECENT_FILES + 5; index += 1) list = withRecentFile(list, `/doc-${index}.psd`);
+  assert.equal(list.length, MAX_RECENT_FILES);
+  assert.equal(list[0], `/doc-${MAX_RECENT_FILES + 4}.psd`, "the newest is first");
+  assert.ok(!list.includes("/doc-0.psd"), "the oldest has fallen off");
+});
+
+test("an empty path is not a document and never joins the list", () => {
+  assert.deepEqual(withRecentFile(["/a.psd"], ""), ["/a.psd"]);
+  assert.deepEqual(withRecentFile(["/a.psd"], "   "), ["/a.psd"]);
+});
+
+test("a stored list survives being garbage", () => {
+  // Written by an older build, or edited by hand. Recents are a convenience;
+  // none of this may throw on the way into the app.
+  const read = (raw: string | null) => loadRecentFiles({ getItem: () => raw });
+  assert.deepEqual(read(null), []);
+  assert.deepEqual(read("not json"), []);
+  assert.deepEqual(read('{"not":"an array"}'), []);
+  assert.deepEqual(read('["/a.psd", 42, null, "", "/b.psd"]'), ["/a.psd", "/b.psd"],
+    "the strings survive and the rest is dropped");
+  assert.equal(read(JSON.stringify(Array.from({ length: 50 }, (_, i) => `/d${i}`))).length, MAX_RECENT_FILES);
+});
+
+test("storage that refuses to co-operate does not break opening a document", () => {
+  const hostile = {
+    getItem: () => { throw new Error("disabled"); },
+    setItem: () => { throw new Error("quota"); },
+  };
+  assert.deepEqual(loadRecentFiles(hostile), []);
+  assert.doesNotThrow(() => saveRecentFiles(hostile, ["/a.psd"]));
+  // No storage at all is the headless and web-SSR case.
+  assert.deepEqual(loadRecentFiles(null), []);
+  assert.doesNotThrow(() => saveRecentFiles(null, ["/a.psd"]));
+});
+
+test("a file the OS asks us to open arrives as a path", () => {
+  const tauri = fakeTauri();
+  try {
+    const opened: string[] = [];
+    listenForOpenFile((path) => opened.push(path));
+    tauri.fire("/Users/someone/Artwork.psd", OPEN_FILE_EVENT);
+    // A payload that is not a usable path is dropped rather than opened.
+    tauri.fire("", OPEN_FILE_EVENT);
+    tauri.fire(42, OPEN_FILE_EVENT);
+    assert.deepEqual(opened, ["/Users/someone/Artwork.psd"]);
+  } finally {
+    tauri.restore();
+  }
+});
+
+test("menu commands and opened files do not arrive on each other's channel", () => {
+  // Both are subscriptions on the same bus. Crossing them would make every
+  // Open Recent pick look like an unknown command, and silently do nothing.
+  const tauri = fakeTauri();
+  try {
+    const commands: string[] = [];
+    const opened: string[] = [];
+    listenForMenuCommands((command) => commands.push(command));
+    listenForOpenFile((path) => opened.push(path));
+    tauri.fire("undo", MENU_COMMAND_EVENT);
+    tauri.fire("/tmp/a.psd", OPEN_FILE_EVENT);
+    assert.deepEqual(commands, ["undo"]);
+    assert.deepEqual(opened, ["/tmp/a.psd"]);
+  } finally {
+    tauri.restore();
+  }
+});
+
+test("publishing the recent list outside Tauri is a silent no-op", () => {
+  const globalWindow = globalThis as unknown as { window?: unknown };
+  const previous = globalWindow.window;
+  globalWindow.window = {};
+  try {
+    assert.doesNotThrow(() => publishRecentFiles(["/a.psd"]));
+  } finally {
+    globalWindow.window = previous;
+  }
+});
+
+test("a rejected publish does not surface as an unhandled rejection", () => {
+  // It fires while someone is opening a document; a failed menu rebuild must
+  // not become a crash in the middle of that.
+  const globalWindow = globalThis as unknown as { window?: unknown };
+  const previous = globalWindow.window;
+  globalWindow.window = {
+    __TAURI__: { core: { invoke: () => Promise.reject(new Error("no menu")) } },
+  };
+  try {
+    assert.doesNotThrow(() => publishRecentFiles(["/a.psd"]));
   } finally {
     globalWindow.window = previous;
   }

@@ -3,7 +3,9 @@ name = "luma-studio"
 version = "0.1.0"
 description = "Luma Studio — pro edition"
 edition = "2021"
-rust-version = "1.77"
+# 1.77.2 is what tauri-plugin-window-state 2.x asks for; the bump is a patch
+# release of the same minor and every toolchain that had 1.77 has 1.77.2.
+rust-version = "1.77.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -11,6 +13,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+# Remembers window size, position and maximised state between launches.
+tauri-plugin-window-state = "2"
 # The pro edition's imaging core. Linked here so the desktop binary carries
 # the native f32/parallel engine rather than driving the browser compositor.
 luma-core = { path = "../crates/luma-core" }

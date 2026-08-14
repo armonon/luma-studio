@@ -18,6 +18,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Mirrors MENU_COMMAND_EVENT in app/desktop/menu-model.ts.
 const MENU_COMMAND_EVENT: &str = "luma://menu-command";
 
+/// Mirrors OPEN_FILE_EVENT in app/desktop/menu-model.ts.
+const OPEN_FILE_EVENT: &str = "luma://open-file";
+
+/// The most recent files, newest first. Rebuilt into the File menu on demand.
+static RECENT_FILES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Cap on the Open Recent submenu. Long enough to be useful, short enough that
+/// the menu stays a menu.
+const MAX_RECENT_FILES: usize = 10;
+
+/// Recent-file menu ids carry their path after this prefix, so the handler can
+/// tell them apart from the fixed commands without a second lookup table.
+const RECENT_FILE_PREFIX: &str = "recent:";
+
 const NATIVE_TILE_MAGIC: &[u8; 4] = b"LUM1";
 const MAX_NATIVE_TILE_PIXELS: usize = 2048 * 2048;
 const MAX_NATIVE_TILE_LAYERS: usize = 128;
@@ -183,14 +197,41 @@ async fn open_native_file(app: tauri::AppHandle) -> Result<Response, String> {
     if metadata.len() > MAX_NATIVE_FILE_BYTES as u64 {
         return Err(format!("Selected file exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
     }
-    let data = std::fs::read(&path).map_err(|error| format!("Unable to read selected file: {error}"))?;
+    read_framed_file(&path)
+}
+
+/// Read a file and frame it as `[name length][name][bytes]`.
+///
+/// Shared by the dialog and by open-by-path so the two cannot come to disagree
+/// about the size limit or the wire shape.
+fn read_framed_file(path: &std::path::Path) -> Result<Response, String> {
+    let metadata = std::fs::metadata(path).map_err(|error| format!("Unable to inspect file: {error}"))?;
+    if metadata.len() > MAX_NATIVE_FILE_BYTES as u64 {
+        return Err(format!("File exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
+    }
+    let data = std::fs::read(path).map_err(|error| format!("Unable to read file: {error}"))?;
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("Untitled").as_bytes();
-    let name_length = u32::try_from(name.len()).map_err(|_| "Selected file name is too long")?;
+    let name_length = u32::try_from(name.len()).map_err(|_| "File name is too long")?;
     let mut response = Vec::with_capacity(4 + name.len() + data.len());
     response.extend_from_slice(&name_length.to_le_bytes());
     response.extend_from_slice(name);
     response.extend_from_slice(&data);
     Ok(Response::new(response))
+}
+
+/// Read a document the OS asked us to open, by absolute path.
+///
+/// Unlike the dialog, nothing here has been through a file picker, so the path
+/// is whatever the OS or an Open Recent entry supplied. It has to be a file
+/// that exists — a stale recent entry pointing at a deleted document must fail
+/// with a message rather than opening something unexpected.
+#[tauri::command]
+async fn read_native_path(path: String) -> Result<Response, String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_file() {
+        return Err("That document is no longer where it was.".into());
+    }
+    read_framed_file(&path)
 }
 
 #[tauri::command]
@@ -241,6 +282,24 @@ fn open_ai_sign_in(app: tauri::AppHandle) -> Result<(), String> {
 
 /// Diagnostics for the native core, surfaced so the edition system can report
 /// what the desktop build actually has rather than assuming.
+/// Replace the Open Recent list and rebuild the menu around it.
+///
+/// The frontend owns the list — it knows which opens succeeded, and it already
+/// persists preferences — so this takes the whole list rather than trying to
+/// track it here. Paths are truncated for display only; the full path is what
+/// travels back when an item is chosen.
+#[tauri::command]
+fn set_recent_files(app: tauri::AppHandle, files: Vec<String>) -> Result<(), String> {
+    {
+        let mut recent = RECENT_FILES.lock().map_err(|_| "recent files lock poisoned")?;
+        recent.clear();
+        recent.extend(files.into_iter().take(MAX_RECENT_FILES));
+    }
+    let menu = build_menu(&app).map_err(|error| error.to_string())?;
+    app.set_menu(menu).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn core_info() -> serde_json::Value {
     serde_json::json!({
@@ -277,8 +336,35 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .quit()
         .build()?;
 
+    // Open Recent is built from RECENT_FILES rather than declared in the model,
+    // because its items are paths rather than commands. Choosing one emits the
+    // open-file event, the same one a double-clicked document arrives on.
+    let recent = RECENT_FILES.lock().map_err(|_| tauri::Error::FailedToReceiveMessage)?;
+    let mut recent_menu = SubmenuBuilder::new(app, "Open Recent");
+    for path in recent.iter() {
+        let label = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path.as_str());
+        recent_menu = recent_menu.item(&MenuItem::with_id(
+            app,
+            format!("{RECENT_FILE_PREFIX}{path}"),
+            label,
+            true,
+            None::<&str>,
+        )?);
+    }
+    if recent.is_empty() {
+        recent_menu = recent_menu.item(&MenuItem::with_id(
+            app, "recent-empty", "No Recent Documents", false, None::<&str>,
+        )?);
+    }
+    drop(recent);
+    let recent_submenu = recent_menu.build()?;
+
     let file = SubmenuBuilder::new(app, "File")
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&recent_submenu)
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
         .separator()
         .item(&item("export", "Export…", Some("CmdOrCtrl+E"))?)
@@ -340,12 +426,16 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Restores window size, position and maximised state between launches.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             core_info,
             composite_native_tile,
             open_native_file,
             save_native_file,
             open_ai_sign_in,
+            set_recent_files,
+            read_native_path,
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;
@@ -356,10 +446,31 @@ fn main() {
         // across. Keeping the behaviour on the TypeScript side is what lets
         // one implementation serve the menu and the keyboard listener.
         .on_menu_event(|app, event| {
-            let _ = app.emit(MENU_COMMAND_EVENT, event.id().0.as_str());
+            let id = event.id().0.as_str();
+            if let Some(path) = id.strip_prefix(RECENT_FILE_PREFIX) {
+                let _ = app.emit(OPEN_FILE_EVENT, path);
+            } else {
+                let _ = app.emit(MENU_COMMAND_EVENT, id);
+            }
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start Luma Studio");
+        .build(tauri::generate_context!())
+        .expect("failed to start Luma Studio")
+        // Documents opened from the Finder or the shell arrive here rather than
+        // as arguments — on macOS the OS delivers them after launch, and for an
+        // already-running instance there is no argv to read at all. The
+        // frontend decides what to do with the path; this only relays it.
+        .run(|app, event| {
+            if let tauri::RunEvent::Opened { urls } = event {
+                for url in urls {
+                    let path = url
+                        .to_file_path()
+                        .ok()
+                        .and_then(|path| path.to_str().map(str::to_owned))
+                        .unwrap_or_else(|| url.to_string());
+                    let _ = app.emit(OPEN_FILE_EVENT, path);
+                }
+            }
+        });
 }
 
 #[cfg(test)]

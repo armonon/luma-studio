@@ -15,7 +15,20 @@ export function isNativeFilesystemAvailable() {
 
 export async function openNativeFile(invoke = systemInvoke()) {
   if (!invoke) return null;
-  const response = await invoke<ArrayBuffer | Uint8Array>("open_native_file");
+  return decodeFramedFile(await invoke<ArrayBuffer | Uint8Array>("open_native_file"));
+}
+
+/**
+ * Read a document by absolute path, for a file the OS asked us to open.
+ *
+ * Same frame as the dialog; the difference is only where the path came from.
+ */
+export async function readNativePath(path: string, invoke = systemInvoke()) {
+  if (!invoke) return null;
+  return decodeFramedFile(await invoke<ArrayBuffer | Uint8Array>("read_native_path", { path }));
+}
+
+function decodeFramedFile(response: ArrayBuffer | Uint8Array) {
   const bytes = response instanceof Uint8Array ? response : new Uint8Array(response);
   if (bytes.byteLength < 4) throw new Error("Native open response is truncated");
   const nameLength = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);

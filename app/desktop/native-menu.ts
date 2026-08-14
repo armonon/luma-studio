@@ -1,4 +1,4 @@
-import { MENU_COMMAND_EVENT, menuCommands } from "./menu-model";
+import { MENU_COMMAND_EVENT, OPEN_FILE_EVENT, menuCommands } from "./menu-model";
 import type { StudioCommand } from "./menu-model";
 
 type Unlisten = () => void;
@@ -11,6 +11,7 @@ type TauriWindow = Window & {
         handler: (message: { payload: unknown }) => void,
       ) => Promise<Unlisten>;
     };
+    core?: { invoke?: (command: string, payload?: unknown) => Promise<unknown> };
   };
 };
 
@@ -41,15 +42,21 @@ export function asStudioCommand(value: unknown): StudioCommand | null {
  * that keeps firing into a dead component.
  */
 export function listenForMenuCommands(dispatch: (command: StudioCommand) => void): Unlisten {
+  return subscribe(MENU_COMMAND_EVENT, (payload) => {
+    const command = asStudioCommand(payload);
+    if (command) dispatch(command);
+  });
+}
+
+function subscribe(event: string, handle: (payload: unknown) => void): Unlisten {
   const listen = (window as TauriWindow).__TAURI__?.event?.listen;
   if (!listen) return () => {};
 
   let cancelled = false;
   let unlisten: Unlisten | null = null;
 
-  void listen(MENU_COMMAND_EVENT, (message) => {
-    const command = asStudioCommand(message.payload);
-    if (command) dispatch(command);
+  void listen(event, (message) => {
+    handle(message.payload);
   }).then((stop) => {
     if (cancelled) stop();
     else unlisten = stop;
@@ -63,4 +70,26 @@ export function listenForMenuCommands(dispatch: (command: StudioCommand) => void
     unlisten?.();
     unlisten = null;
   };
+}
+
+/**
+ * Subscribe to documents the OS wants opened.
+ *
+ * A file double-clicked in the Finder, one passed on the command line, and one
+ * chosen from Open Recent all arrive here — they are the same request, and
+ * routing them through one channel is what stops Open Recent growing its own
+ * half-working open path.
+ */
+export function listenForOpenFile(open: (path: string) => void): Unlisten {
+  return subscribe(OPEN_FILE_EVENT, (payload) => {
+    if (typeof payload === "string" && payload) open(payload);
+  });
+}
+
+/** Hand the native menu the Open Recent list so it can rebuild the submenu. */
+export function publishRecentFiles(files: readonly string[]) {
+  const invoke = (window as TauriWindow).__TAURI__?.core?.invoke;
+  // Outside Tauri there is no menu to update, and a rejected invoke must not
+  // surface as an unhandled rejection while someone is opening a file.
+  void invoke?.("set_recent_files", { files: [...files] })?.catch(() => {});
 }

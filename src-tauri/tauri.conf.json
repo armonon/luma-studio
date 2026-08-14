@@ -38,6 +38,38 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all"
+    "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": [
+          "luma"
+        ],
+        "name": "Luma Document",
+        "description": "Luma Studio document",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "psd",
+          "psb"
+        ],
+        "name": "Photoshop Document",
+        "description": "Adobe Photoshop document",
+        "role": "Editor"
+      },
+      {
+        "ext": [
+          "png",
+          "jpg",
+          "jpeg",
+          "webp",
+          "tif",
+          "tiff"
+        ],
+        "name": "Image",
+        "description": "Raster image",
+        "role": "Viewer"
+      }
+    ]
   }
 }
