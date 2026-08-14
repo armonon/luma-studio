@@ -90,3 +90,9 @@ jobs:
       # entire browser<->Rust bridge was unverified.
       - name: Test
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      # crates/luma-core has been linted since it was added; the Tauri shell
+      # never was, and it now carries the menu, the file-open routing and the
+      # recent-files store rather than just a window.
+      - name: Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
