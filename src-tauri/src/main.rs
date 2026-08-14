@@ -10,9 +10,13 @@
 use luma_core::{composite_layer, BlendMode, LayerOptions, Surface};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri_plugin_dialog::DialogExt;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
+use tauri::{Emitter, Manager};
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Mirrors MENU_COMMAND_EVENT in app/desktop/menu-model.ts.
+const MENU_COMMAND_EVENT: &str = "luma://menu-command";
 
 const NATIVE_TILE_MAGIC: &[u8; 4] = b"LUM1";
 const MAX_NATIVE_TILE_PIXELS: usize = 2048 * 2048;
@@ -246,6 +250,93 @@ fn core_info() -> serde_json::Value {
     })
 }
 
+/// The application menu.
+///
+/// `app/desktop/menu-model.ts` is the canonical definition and
+/// `tests/desktop-menu.test.ts` asserts this file agrees with it, item for
+/// item. Two hand-maintained lists would drift, and a menu entry wired on one
+/// side only is a dead entry the user still sees.
+///
+/// Every id here reaches a real studio command. Nothing is laid out because
+/// Photoshop has it; an item Luma cannot perform is absent rather than present
+/// and inert.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let item = |id: &str, label: &str, accelerator: Option<&str>| {
+        MenuItem::with_id(app, id, label, true, accelerator)
+    };
+
+    let app_menu = SubmenuBuilder::new(app, "Luma Studio")
+        .about(None)
+        .separator()
+        .services()
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let file = SubmenuBuilder::new(app, "File")
+        .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
+        .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
+        .separator()
+        .item(&item("export", "Export…", Some("CmdOrCtrl+E"))?)
+        .separator()
+        .close_window()
+        .build()?;
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&item("undo", "Undo", Some("CmdOrCtrl+Z"))?)
+        .item(&item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?)
+        .separator()
+        // The text roles are what make copy and paste work inside the studio's
+        // own inputs; they never reach the engine.
+        .cut()
+        .copy()
+        .paste()
+        .separator()
+        .item(&item("history", "Version History…", None)?)
+        .build()?;
+
+    let layer = SubmenuBuilder::new(app, "Layer")
+        .item(&item("new-layer", "New Layer", Some("CmdOrCtrl+Shift+N"))?)
+        .item(&item("group-layer", "Group Layer", Some("CmdOrCtrl+G"))?)
+        .item(&item("delete-layer", "Delete Layer", None)?)
+        .separator()
+        .item(&item("bring-forward", "Bring Forward", Some("CmdOrCtrl+]"))?)
+        .item(&item("send-backward", "Send Backward", Some("CmdOrCtrl+["))?)
+        .separator()
+        .item(&item("layer-style", "Layer Style…", None)?)
+        .separator()
+        .item(&item("curves", "New Curves Adjustment", None)?)
+        .item(&item("levels", "New Levels Adjustment", None)?)
+        .build()?;
+
+    let select = SubmenuBuilder::new(app, "Select")
+        .item(&item("select-all", "All", Some("CmdOrCtrl+A"))?)
+        .item(&item("deselect", "Deselect", Some("CmdOrCtrl+D"))?)
+        .item(&item("invert-selection", "Inverse", Some("CmdOrCtrl+Shift+I"))?)
+        .separator()
+        .item(&item("select-subject", "Subject", None)?)
+        .build()?;
+
+    let view = SubmenuBuilder::new(app, "View")
+        .item(&item("zoom-in", "Zoom In", Some("CmdOrCtrl+Plus"))?)
+        .item(&item("zoom-out", "Zoom Out", Some("CmdOrCtrl+-"))?)
+        .separator()
+        .item(&item("zoom-fit", "Fit on Screen", Some("CmdOrCtrl+0"))?)
+        .item(&item("zoom-actual", "Actual Size", Some("CmdOrCtrl+1"))?)
+        .separator()
+        .fullscreen()
+        .minimize()
+        .build()?;
+
+    MenuBuilder::new(app)
+        .items(&[&app_menu, &file, &edit, &layer, &select, &view])
+        .build()
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -256,6 +347,17 @@ fn main() {
             save_native_file,
             open_ai_sign_in,
         ])
+        .setup(|app| {
+            let menu = build_menu(app.handle())?;
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        // The frontend owns what a command means; this only carries the id
+        // across. Keeping the behaviour on the TypeScript side is what lets
+        // one implementation serve the menu and the keyboard listener.
+        .on_menu_event(|app, event| {
+            let _ = app.emit(MENU_COMMAND_EVENT, event.id().0.as_str());
+        })
         .run(tauri::generate_context!())
         .expect("failed to start Luma Studio");
 }

@@ -91,6 +91,8 @@ import {
   type LayerFocusState,
 } from "./layer-focus-model";
 import type { FocusCreateAction } from "./layer-focus-panel";
+import { listenForMenuCommands } from "../desktop/native-menu";
+import type { StudioCommand } from "../desktop/menu-model";
 import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
 import type { TransformCorner } from "./canvas-geometry";
 
@@ -1813,13 +1815,79 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     });
   };
 
-  const runStudioCommand = (command: string) => {
-    if (command === "select-subject") { activateTool("sel-sam", "select"); focusInspector("ai"); void runNeuralSubject(); return; }
-    if (command === "curves" && studio) { const layer = studio.addCurvesLayer(); setActiveLayerId(layer.id); focusInspector("properties"); return; }
-    if (command === "levels" && studio) { const layer = studio.addLevelsLayer(); setActiveLayerId(layer.id); focusInspector("properties"); return; }
-    if (command === "history") { setShowHistory(true); return; }
-    if (command === "export") setShowExportMenu(true);
+  /**
+   * One implementation behind both the tool palette and the desktop menu bar.
+   *
+   * The switch is exhaustive over StudioCommand on purpose: adding an entry to
+   * app/desktop/menu-model.ts without handling it here is a type error rather
+   * than a menu item that quietly does nothing.
+   */
+  const runStudioCommand = (command: StudioCommand) => {
+    switch (command) {
+      case "open": requestDocumentOpen(); return;
+      case "save": void saveProject(); return;
+      case "export": setShowExportMenu(true); return;
+
+      case "undo": studio?.undo(); forceUpdate(); return;
+      case "redo": studio?.redo(); forceUpdate(); return;
+      case "history": setShowHistory(true); return;
+
+      case "select-all": studio?.selectAll(); return;
+      case "deselect": studio?.deselect(); return;
+      case "invert-selection": studio?.invertSelectionArea(); return;
+      case "select-subject":
+        activateTool("sel-sam", "select");
+        focusInspector("ai");
+        void runNeuralSubject();
+        return;
+
+      case "new-layer": addBlank(); return;
+      case "group-layer":
+        if (studio && activeLayerId) studio.groupLayer(activeLayerId);
+        forceUpdate();
+        return;
+      case "delete-layer": removeActive(); return;
+      case "bring-forward":
+        if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1);
+        forceUpdate();
+        return;
+      case "send-backward":
+        if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1);
+        forceUpdate();
+        return;
+      case "layer-style":
+        if (activeLayerId) setStyleLayerId(activeLayerId);
+        return;
+      case "curves":
+        if (studio) {
+          const layer = studio.addCurvesLayer();
+          setActiveLayerId(layer.id);
+          focusInspector("properties");
+        }
+        return;
+      case "levels":
+        if (studio) {
+          const layer = studio.addLevelsLayer();
+          setActiveLayerId(layer.id);
+          focusInspector("properties");
+        }
+        return;
+
+      case "zoom-in": setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return;
+      case "zoom-out": setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return;
+      case "zoom-fit": setView({ zoom: 1, panX: 0, panY: 0 }); return;
+      case "zoom-actual": setView((v) => ({ ...v, zoom: 1 })); return;
+    }
   };
+
+  // The native menu bar lives in the Tauri process, so its clicks arrive as an
+  // event rather than a DOM interaction. Web builds never see one.
+  useEffect(() => {
+    if (!desktop) return;
+    return listenForMenuCommands(runStudioCommand);
+    // runStudioCommand closes over studio and the active layer, so the
+    // listener is re-bound when those change rather than firing on stale ones.
+  });
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ToolIcon } from "./studio-icons";
+import type { StudioCommand } from "../desktop/menu-model";
 
 export type ToolPaletteGroup = {
   id: string;
@@ -25,7 +26,7 @@ export default function ToolPalette({
   groups: ToolPaletteGroup[];
   activeTool: string;
   onSelect: (tool: string, workspace: string) => void;
-  onCommand: (command: string) => void;
+  onCommand: (command: StudioCommand) => void;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -48,13 +49,15 @@ export default function ToolPalette({
       .filter((group) => group.tools.length > 0);
   }, [groups, query]);
 
-  const commands = [
+  const allCommands: { id: StudioCommand; icon: string; label: string; detail: string; shortcut: string }[] = [
     { id: "select-subject", icon: "sel-sam", label: "Select Subject", detail: "AI selection", shortcut: "" },
     { id: "curves", icon: "tone", label: "Curves Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "levels", icon: "tone", label: "Levels Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "history", icon: "content-move", label: "Version History", detail: "History branches", shortcut: "" },
     { id: "export", icon: "frame", label: "Export", detail: "Raster or Photoshop", shortcut: "⌘E" },
-  ].filter((command) => !query.trim() || `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  ];
+  const commands = allCommands.filter((command) => !query.trim()
+    || `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
   return (
     <div className="tool-palette-scrim" onPointerDown={onClose}>

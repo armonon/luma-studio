@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ToolPalette, { type ToolPaletteGroup } from "./tool-palette";
 import { CategoryIcon, ToolIcon } from "./studio-icons";
+import type { StudioCommand } from "../desktop/menu-model";
 
 type CategoryId = "move" | "paint" | "select" | "retouch" | "create" | "ai";
 
@@ -31,7 +32,7 @@ export default function ToolDock({
   activeTool: string;
   onSelect: (tool: string, workspace: string) => void;
   onAiSelect: () => void;
-  onCommand: (command: string) => void;
+  onCommand: (command: StudioCommand) => void;
 }) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [flyout, setFlyout] = useState<CategoryId | null>(null);

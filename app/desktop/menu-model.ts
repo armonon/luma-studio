@@ -1,0 +1,158 @@
+/**
+ * The desktop application menu.
+ *
+ * This is the canonical definition. The Rust side builds the real native menu
+ * from the same ids (see `src-tauri/src/main.rs`), and a test asserts the two
+ * agree — a menu item wired on one side and not the other is a dead entry, and
+ * a menu full of dead entries is worse than no menu at all.
+ *
+ * Every command here is backed by something that exists today. That constraint
+ * is the point: it would be easy to lay out Photoshop's whole menu bar and
+ * have two thirds of it do nothing, which is the same class of untruth as
+ * advertising an unbuilt capability. Items Luma cannot do yet are absent, not
+ * greyed out and hopeful.
+ */
+
+/** Everything the menu can ask the studio to do. */
+export type StudioCommand =
+  // File
+  | "open"
+  | "save"
+  | "export"
+  // Edit
+  | "undo"
+  | "redo"
+  | "history"
+  // Select
+  | "select-all"
+  | "deselect"
+  | "invert-selection"
+  | "select-subject"
+  // Layer
+  | "new-layer"
+  | "group-layer"
+  | "delete-layer"
+  | "bring-forward"
+  | "send-backward"
+  | "layer-style"
+  | "curves"
+  | "levels"
+  // View
+  | "zoom-in"
+  | "zoom-out"
+  | "zoom-fit"
+  | "zoom-actual";
+
+export type MenuEntry =
+  | { kind: "command"; id: StudioCommand; label: string; accelerator?: string }
+  | { kind: "separator" }
+  /**
+   * A menu item the window manager owns — quit, minimise, close, the macOS
+   * application menu's About and Services. Tauri builds these itself, so they
+   * carry no command id and never reach the studio.
+   */
+  | { kind: "predefined"; role: PredefinedRole; label?: string };
+
+export type PredefinedRole =
+  | "about" | "services" | "hide" | "hide-others" | "show-all" | "quit"
+  | "separator" | "close-window" | "minimize" | "fullscreen"
+  | "copy" | "cut" | "paste" | "select-all-text" | "undo-text" | "redo-text";
+
+export type MenuSection = { label: string; items: MenuEntry[] };
+
+/**
+ * Accelerators use Tauri's cross-platform `CmdOrCtrl` so one definition serves
+ * macOS and Windows. They deliberately match the shortcuts the studio already
+ * handles in its own key listener; the menu is a second way to reach the same
+ * command, not a competing binding.
+ */
+export const DESKTOP_MENU: MenuSection[] = [
+  {
+    label: "Luma Studio",
+    items: [
+      { kind: "predefined", role: "about" },
+      { kind: "separator" },
+      { kind: "predefined", role: "services" },
+      { kind: "separator" },
+      { kind: "predefined", role: "hide" },
+      { kind: "predefined", role: "hide-others" },
+      { kind: "predefined", role: "show-all" },
+      { kind: "separator" },
+      { kind: "predefined", role: "quit" },
+    ],
+  },
+  {
+    label: "File",
+    items: [
+      { kind: "command", id: "open", label: "Open…", accelerator: "CmdOrCtrl+O" },
+      { kind: "command", id: "save", label: "Save", accelerator: "CmdOrCtrl+S" },
+      { kind: "separator" },
+      { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+E" },
+      { kind: "separator" },
+      { kind: "predefined", role: "close-window" },
+    ],
+  },
+  {
+    label: "Edit",
+    items: [
+      { kind: "command", id: "undo", label: "Undo", accelerator: "CmdOrCtrl+Z" },
+      { kind: "command", id: "redo", label: "Redo", accelerator: "CmdOrCtrl+Shift+Z" },
+      { kind: "separator" },
+      // The text roles are what make copy and paste work inside the studio's
+      // own inputs; the studio never sees them.
+      { kind: "predefined", role: "cut" },
+      { kind: "predefined", role: "copy" },
+      { kind: "predefined", role: "paste" },
+      { kind: "separator" },
+      { kind: "command", id: "history", label: "Version History…" },
+    ],
+  },
+  {
+    label: "Layer",
+    items: [
+      { kind: "command", id: "new-layer", label: "New Layer", accelerator: "CmdOrCtrl+Shift+N" },
+      { kind: "command", id: "group-layer", label: "Group Layer", accelerator: "CmdOrCtrl+G" },
+      { kind: "command", id: "delete-layer", label: "Delete Layer" },
+      { kind: "separator" },
+      { kind: "command", id: "bring-forward", label: "Bring Forward", accelerator: "CmdOrCtrl+]" },
+      { kind: "command", id: "send-backward", label: "Send Backward", accelerator: "CmdOrCtrl+[" },
+      { kind: "separator" },
+      { kind: "command", id: "layer-style", label: "Layer Style…" },
+      { kind: "separator" },
+      { kind: "command", id: "curves", label: "New Curves Adjustment" },
+      { kind: "command", id: "levels", label: "New Levels Adjustment" },
+    ],
+  },
+  {
+    label: "Select",
+    items: [
+      { kind: "command", id: "select-all", label: "All", accelerator: "CmdOrCtrl+A" },
+      { kind: "command", id: "deselect", label: "Deselect", accelerator: "CmdOrCtrl+D" },
+      { kind: "command", id: "invert-selection", label: "Inverse", accelerator: "CmdOrCtrl+Shift+I" },
+      { kind: "separator" },
+      { kind: "command", id: "select-subject", label: "Subject" },
+    ],
+  },
+  {
+    label: "View",
+    items: [
+      { kind: "command", id: "zoom-in", label: "Zoom In", accelerator: "CmdOrCtrl+Plus" },
+      { kind: "command", id: "zoom-out", label: "Zoom Out", accelerator: "CmdOrCtrl+-" },
+      { kind: "separator" },
+      { kind: "command", id: "zoom-fit", label: "Fit on Screen", accelerator: "CmdOrCtrl+0" },
+      { kind: "command", id: "zoom-actual", label: "Actual Size", accelerator: "CmdOrCtrl+1" },
+      { kind: "separator" },
+      { kind: "predefined", role: "fullscreen" },
+      { kind: "predefined", role: "minimize" },
+    ],
+  },
+];
+
+/** Every command id the menu can emit, in menu order. */
+export function menuCommands(menu: MenuSection[] = DESKTOP_MENU): StudioCommand[] {
+  return menu.flatMap((section) =>
+    section.items.flatMap((item) => (item.kind === "command" ? [item.id] : [])));
+}
+
+/** The event name the native menu emits on the window. */
+export const MENU_COMMAND_EVENT = "luma://menu-command";
