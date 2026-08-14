@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { BLEND_LABELS, LAYER_EFFECT_KINDS } from "../app/engine/document.ts";
 import { normalizeAiOperation } from "../app/engine/ai-edit.ts";
 import { HISTORY_LIMIT } from "../app/engine/studio.ts";
+import { createDocument } from "../app/engine/document.ts";
+import { nativeFlattenRefusal } from "../app/engine/native-flatten.ts";
 
 // The marketing page makes concrete, checkable claims. When the engine changes
 // underneath them they become false silently, which is exactly how "10 creative
@@ -114,12 +116,20 @@ test("the page does not claim the native compositor runs outside export", () => 
 });
 
 test("flattenNative really is gated to export and sRGB", () => {
-  // Pins the claim to the implementation rather than to today's wording.
+  // The sRGB gate is asserted behaviourally rather than by looking for the
+  // comparison in flattenNative's body — it moved into nativeFlattenRefusal
+  // when the native path was widened, and a positional check would have called
+  // that a broken claim rather than a moved one.
+  const wide = createDocument(8, 8);
+  wide.colorSpace = "display-p3";
+  assert.equal(nativeFlattenRefusal(wide), "color-space", "a wide-gamut document must not go native");
+  assert.equal(nativeFlattenRefusal(createDocument(8, 8)), null, "a plain sRGB document may");
+
   const studioSrc = readFileSync(new URL("../app/engine/studio.ts", import.meta.url), "utf8");
   const fn = /async flattenNative\(\)[\s\S]*?\n  \}/.exec(studioSrc);
   assert.ok(fn, "flattenNative not found — the claim above may be stale");
-  assert.match(fn[0], /colorSpace !== "srgb"/, "expected an sRGB-only guard");
   assert.match(fn[0], /isNativeCoreAvailable\(\)/, "expected a native-availability guard");
+  assert.match(fn[0], /nativeFlattenRefusal\(/, "expected the refusal gate to be consulted");
   // Only exportImage may call it; a viewport caller would invalidate the copy.
   const callers = [...studioSrc.matchAll(/flattenNative\(\)/g)].length;
   assert.ok(callers >= 2, "expected a definition plus at least one call site");

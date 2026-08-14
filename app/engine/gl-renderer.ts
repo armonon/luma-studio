@@ -11,6 +11,7 @@ import {
   resolvedBlendPasses,
   resolvedEffectBlendMode,
   resolvedFillOpacity,
+  rasterizeVectorMask,
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
@@ -401,7 +402,16 @@ function uploadPrecisionTex(
 
 // Rasterize a layer's transformed content into a doc-sized canvas, so the GPU
 // can treat all layer kinds (raster/text/shape) uniformly as a source texture.
-function rasterizeLayer(
+/**
+ * A layer's finished appearance: content, filters, effects, clipping — all of
+ * it — on one document-sized canvas.
+ *
+ * Exported because the native compositor needs exactly the same thing. Both
+ * back ends composite *pixels*; everything that happens to a layer before it
+ * becomes pixels is the browser engine's job, and having one function do it is
+ * what stops the GPU and native paths drifting from the CPU renderer.
+ */
+export function rasterizeLayer(
   doc: Document,
   layer: Layer,
   backdrop: HTMLCanvasElement | null = null,
@@ -412,6 +422,25 @@ function rasterizeLayer(
   const contentCtx = content.getContext("2d")!;
   drawLayerContentManaged(contentCtx, layer);
   applySmartFilters(content, layer.filters);
+
+  // Masks are applied here, in the CPU renderer's order, rather than left to
+  // the caller. "Layer Mask Hides Effects" is off by default, which means the
+  // mask shapes the *pixels* and the shadow still falls outside it — masking
+  // the finished result instead gives the "on" behaviour. Both accelerated
+  // paths used to mask after the style unconditionally, so every masked layer
+  // with an effect exported differently from how it previewed.
+  const maskHidesEffects = layer.maskHidesEffects ?? false;
+  const vectorMask = layer.vectorMask
+    ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
+    : null;
+  const vectorHidesEffects = layer.vectorMaskHidesEffects ?? false;
+  const clipTo = (target: CanvasRenderingContext2D, mask: HTMLCanvasElement) => {
+    target.globalCompositeOperation = "destination-in";
+    target.drawImage(mask, 0, 0);
+    target.globalCompositeOperation = "source-over";
+  };
+  if (layer.mask && !maskHidesEffects) clipTo(contentCtx, layer.mask);
+  if (vectorMask && !vectorHidesEffects) clipTo(contentCtx, vectorMask);
   // Shared with the CPU renderer so GPU export cannot diverge from CPU export.
   // Effects are unscaled here: this rasterizes at document resolution.
   composeLayerWithEffects(
@@ -425,6 +454,9 @@ function rasterizeLayer(
     doc.globalLight,
     backdrop,
   );
+  if (layer.mask && maskHidesEffects) clipTo(ctx, layer.mask);
+  if (vectorMask && vectorHidesEffects) clipTo(ctx, vectorMask);
+
   if (layer.clipping) {
     const base = findClippingBase(doc, layer);
     if (base) {
@@ -798,7 +830,10 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
         : null;
       const layerTex = ensureLayerTex(gl, c, doc, layer, backdrop);
       c.pinnedTex.add(layerTex);
-      const maskTex = ensureMaskTex(gl, c, layer);
+      // Only the direct-upload path leaves the mask outstanding; a rasterized
+      // layer has it baked in already, and binding it here would square the
+      // coverage at every soft edge.
+      const maskTex = canUploadPrecisionDirect(layer, doc) ? ensureMaskTex(gl, c, layer) : null;
       if (maskTex) c.pinnedTex.add(maskTex);
       const blendIf = resolvedBlendIf(layer);
       const blendIfChannels = (["gray", "red", "green", "blue"] as const).map((channel) => blendIf.channels[channel]);

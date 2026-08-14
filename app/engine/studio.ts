@@ -82,7 +82,8 @@ import {
   viewportRenderPerformanceStats,
   type FocusRenderOptions,
 } from "./renderer";
-import { bumpBitmapVersion, gpuTextureCacheStats, isGLSupported, renderGL } from "./gl-renderer";
+import { bumpBitmapVersion, gpuTextureCacheStats, isGLSupported, rasterizeLayer, renderGL } from "./gl-renderer";
+import { nativeCanUseSurfaceDirectly, nativeFlattenRefusal, tileFromContext } from "./native-flatten";
 import {
   SelectionMode,
   RefineSelectionParams,
@@ -3799,46 +3800,67 @@ export class Studio {
   exportPNG(): Promise<Blob> { return this.exportImage("image/png"); }
 
   /**
-   * Use the Rust f32 compositor for export when the current document can be
-   * represented without flattening vector, adjustment, transform, effect, or
-   * Blend If semantics. Unsupported documents fall back to the portable path.
+   * Flatten through the Rust f32 compositor.
+   *
+   * Layers whose stored pixels are already what the compositor should see go
+   * across as precision surfaces — full float, no canvas round trip. Everything
+   * else is rendered through the shared pipeline first, so transforms, smart
+   * filters, self-contained effects, vector masks and clipping are honoured
+   * rather than refused. `nativeFlattenRefusal` says what is still out of
+   * reach and why.
+   *
+   * Returns null when the native core is absent as well as when the document
+   * is refused; callers fall back to the portable renderer either way.
    */
   async flattenNative(): Promise<HTMLCanvasElement | null> {
-    if (!isNativeCoreAvailable() || this.doc.colorSpace !== "srgb") return null;
-    const layers = this.doc.layers.filter((layer) => layer.visible && layer.opacity > 0);
-    if (layers.some((layer) =>
-      (layer.kind !== "raster" && layer.kind !== "smart-object")
-      || !layer.surface
-      || layer.parentId
-      || layer.clipping
-      || layer.filters?.some((filter) => filter.enabled)
-      || layer.effects?.some((effect) => effect.enabled)
-      || !isNeutralBlendIf(resolvedBlendIf(layer))
-      || layer.transform.tx !== 0
-      || layer.transform.ty !== 0
-      || layer.transform.sx !== 1
-      || layer.transform.sy !== 1
-      || layer.transform.rotation !== 0
-    )) return null;
+    if (!isNativeCoreAvailable()) return null;
+    if (nativeFlattenRefusal(this.doc) !== null) return null;
 
+    const layers = this.doc.layers.filter((layer) => layer.visible && layer.opacity > 0);
     const output = newCanvas(this.doc.width, this.doc.height);
     if (!layers.length) return output;
-    const reference = layers[0].surface!;
-    if (layers.some((layer) => {
-      const grid = layer.surface!.grid;
-      return grid.width !== reference.grid.width
-        || grid.height !== reference.grid.height
-        || grid.tileSize !== reference.grid.tileSize;
-    })) return null;
+
+    // One grid drives the tiling. A layer that cannot supply the reference
+    // grid is rasterized instead, so a mismatch no longer sinks the document.
+    const reference = layers.find((layer) => nativeCanUseSurfaceDirectly(layer, this.doc))?.surface
+      ?? this.surfaceFromCanvas(newCanvas(this.doc.width, this.doc.height));
+
+    // Rasterizing is per layer, not per tile: doing it inside the tile loop
+    // would re-render every layer once per tile.
+    const rendered = new Map<string, CanvasRenderingContext2D>();
+    const sources = layers.map((layer) => {
+      const direct = nativeCanUseSurfaceDirectly(layer, this.doc)
+        && layer.surface!.grid.width === reference.grid.width
+        && layer.surface!.grid.height === reference.grid.height
+        && layer.surface!.grid.tileSize === reference.grid.tileSize;
+      if (!direct && !rendered.has(layer.id)) {
+        rendered.set(layer.id, rasterizeLayer(this.doc, layer).getContext("2d", { willReadFrequently: true })!);
+      }
+      return { layer, direct };
+    });
 
     const outputContext = output.getContext("2d")!;
     const addresses = reference.grid.tilesIntersecting({ x: 0, y: 0, width: this.doc.width, height: this.doc.height });
     for (const address of addresses) {
       const maskCache = new Map<string, Float32Array>();
-      const nativeLayers = layers.flatMap((layer) => {
-        const pixels = layer.surface!.tileToWorkingFloat32(address.key);
+      const nativeLayers = sources.flatMap(({ layer, direct }) => {
+        // Display sRGB, not the raw working buffer: the working space is
+        // linear light, and luma-core is being asked to blend in sRGB so the
+        // result matches the portable renderer. Feeding it linear values and
+        // writing them into an 8-bit canvas as if they were sRGB is what made
+        // every native export come out too dark.
+        //
+        // Unpremultiplied, because composite_pixel takes straight alpha and
+        // multiplies coverage in itself.
+        const pixels = direct
+          ? layer.surface!.tileToFloat32Display(address.key, false)
+          : tileFromContext(rendered.get(layer.id)!, address);
         let maskAlpha: Float32Array | undefined;
-        if (layer.mask) {
+        // Only the direct path leaves the mask outstanding. A rasterized layer
+        // has it baked in — in the CPU renderer's order, which decides whether
+        // effects fall outside it — so applying it again would square the
+        // coverage at every soft edge.
+        if (layer.mask && direct) {
           maskAlpha = maskCache.get(layer.id);
           if (!maskAlpha) {
             const mask = layer.mask.getContext("2d")!
@@ -3848,6 +3870,9 @@ export class Studio {
             maskCache.set(layer.id, maskAlpha);
           }
         }
+        // Fill opacity is applied inside the effect pipeline when a layer is
+        // rasterized, so folding it in again here would apply it twice.
+        const fill = direct ? resolvedFillOpacity(layer) : 1;
         return resolvedBlendPasses(layer)
           .filter((pass) => pass.enabled && pass.opacity > 0)
           .reverse()
@@ -3855,7 +3880,7 @@ export class Studio {
             pixels,
             maskAlpha,
             mode: pass.mode,
-            opacity: layer.opacity * resolvedFillOpacity(layer) * pass.opacity,
+            opacity: layer.opacity * fill * pass.opacity,
             linear: false,
           }));
       });
