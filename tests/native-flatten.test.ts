@@ -428,3 +428,24 @@ test("a mask lets the shadow fall outside it, the way the CPU renderer does", as
   });
   assert.ok(worst <= 3, `native and portable disagree by ${worst}`);
 });
+
+test("fill opacity survives a rasterized layer that has no effects at all", async () => {
+  // The with-effects case is covered above. This is the commoner one: a plain
+  // transformed layer never enters the effect loop, so if the no-effect early
+  // return did not carry fill opacity it would be dropped on this path only.
+  const worst = await nativeAgainstPortable((studio) => {
+    const bottom = studio.addBlankRaster("bottom");
+    paint(studio, bottom, (context) => {
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, 64, 48);
+    });
+    const faded = studio.addBlankRaster("faded");
+    paint(studio, faded, (context) => {
+      context.fillStyle = "#000000";
+      context.fillRect(0, 0, 64, 48);
+    });
+    faded.fillOpacity = 0.35;
+    studio.updateTransform(faded.id, { tx: 4, ty: 3, sx: 1, sy: 1, rotation: 0 });
+  });
+  assert.ok(worst <= 3, `native and portable disagree by ${worst}`);
+});

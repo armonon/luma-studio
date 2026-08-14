@@ -108,7 +108,23 @@ export async function exportTiledPng(
   const tileWidth = Math.max(64, Math.min(3072, Math.round(options.tileWidth ?? 2048)));
   const bandHeight = Math.max(1, Math.min(64, Math.round(options.bandHeight ?? 16)));
   const halo = Math.max(0, Math.min(512, Math.round(options.halo ?? 256)));
-  const region = options.region ?? { x: 0, y: 0, width: doc.width, height: doc.height };
+  // The region keeps the size it asked for even where it hangs off the
+  // document — an artboard partly outside the canvas exports with transparent
+  // padding, which is what Photoshop does and what the artboard is *for*.
+  // Reading past the edge yields transparent pixels, so the scanlines are still
+  // complete. Only the origin and the extent are sanitised, so a region that
+  // starts outside the document cannot produce a zero-width render canvas.
+  const requested = options.region ?? { x: 0, y: 0, width: doc.width, height: doc.height };
+  const region = {
+    // The origin is not clamped: an artboard may sit above or left of the
+    // canvas origin as well as past its far edge, and the tile loop pads
+    // whichever sides the document does not cover. Only the extent is
+    // sanitised, because a zero-sized PNG is not a PNG.
+    x: Math.round(requested.x),
+    y: Math.round(requested.y),
+    width: Math.max(1, Math.round(requested.width)),
+    height: Math.max(1, Math.round(requested.height)),
+  };
   const compressor = new CompressionStream("deflate");
   const writer = compressor.writable.getWriter();
   const compressed = collectCompressed(compressor.readable);
@@ -118,12 +134,30 @@ export async function exportTiledPng(
     const horizontalTiles: Array<{ x: number; width: number; data: Uint8ClampedArray }> = [];
     for (let tileX = 0; tileX < region.width; tileX += tileWidth) {
       const width = Math.min(tileWidth, region.width - tileX);
+      // Where this tile sits in the document, and how much of it the document
+      // actually covers. An artboard may hang off the canvas, and reading past
+      // the edge of a canvas throws rather than padding, so the part that does
+      // not exist is left as the transparent the buffer starts out as.
+      const tileLeft = region.x + tileX;
+      const tileTop = region.y + bandY;
+      const visibleLeft = Math.max(0, tileLeft);
+      const visibleTop = Math.max(0, tileTop);
+      const visibleRight = Math.min(doc.width, tileLeft + width);
+      const visibleBottom = Math.min(doc.height, tileTop + height);
+      const data = new Uint8ClampedArray(width * height * 4);
+      if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) {
+        horizontalTiles.push({ x: tileX, width, data });
+        continue;
+      }
+      const visibleWidth = visibleRight - visibleLeft;
+      const visibleHeight = visibleBottom - visibleTop;
+
       // The halo is clamped to the document, not the region: an artboard's
       // effects sample from the artwork around it, exactly as it previews.
-      const renderLeft = Math.max(0, region.x + tileX - halo);
-      const renderTop = Math.max(0, region.y + bandY - halo);
-      const renderRight = Math.min(doc.width, region.x + tileX + width + halo);
-      const renderBottom = Math.min(doc.height, region.y + bandY + height + halo);
+      const renderLeft = Math.max(0, visibleLeft - halo);
+      const renderTop = Math.max(0, visibleTop - halo);
+      const renderRight = Math.min(doc.width, visibleRight + halo);
+      const renderBottom = Math.min(doc.height, visibleBottom + halo);
       const renderWidth = renderRight - renderLeft;
       const renderHeight = renderBottom - renderTop;
       const canvas = newCanvas(renderWidth, renderHeight);
@@ -143,12 +177,21 @@ export async function exportTiledPng(
         selectionOverlay: false,
         proofing: false,
       });
-      const data = canvas.getContext("2d")!.getImageData(
-        region.x + tileX - renderLeft,
-        region.y + bandY - renderTop,
-        width,
-        height,
+      const visible = canvas.getContext("2d")!.getImageData(
+        visibleLeft - renderLeft,
+        visibleTop - renderTop,
+        visibleWidth,
+        visibleHeight,
       ).data;
+      // Blit the covered part into the tile at its own offset, so the padding
+      // ends up on the side the document runs out on.
+      const offsetX = visibleLeft - tileLeft;
+      const offsetY = visibleTop - tileTop;
+      for (let row = 0; row < visibleHeight; row += 1) {
+        const from = row * visibleWidth * 4;
+        const to = ((row + offsetY) * width + offsetX) * 4;
+        data.set(visible.subarray(from, from + visibleWidth * 4), to);
+      }
       horizontalTiles.push({ x: tileX, width, data });
     }
 

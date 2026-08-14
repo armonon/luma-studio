@@ -94,6 +94,44 @@ async function pngSize(blob: Blob) {
   return { width: header.getUint32(16), height: header.getUint32(20) };
 }
 
+/**
+ * Decode one of our own PNGs far enough to read pixels.
+ *
+ * Not a general decoder: exportTiledPng writes 8-bit RGBA with filter 0 on
+ * every scanline, so undoing the filter is dropping the leading byte per row.
+ * Worth the twenty lines — comparing whole files can only say "these differ",
+ * and most of what can go wrong here is artwork landing in the wrong place.
+ */
+async function decodePng(blob: Blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(bytes.buffer);
+  const { width, height } = await pngSize(blob);
+  const idat: Uint8Array[] = [];
+  let offset = 8;
+  while (offset < bytes.length) {
+    const length = view.getUint32(offset);
+    const type = String.fromCharCode(...bytes.subarray(offset + 4, offset + 8));
+    if (type === "IDAT") idat.push(bytes.subarray(offset + 8, offset + 8 + length));
+    offset += 12 + length;
+  }
+  const merged = new Uint8Array(idat.reduce((total, part) => total + part.length, 0));
+  let cursor = 0;
+  for (const part of idat) { merged.set(part, cursor); cursor += part.length; }
+
+  const stream = new Blob([merged]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const raw = new Uint8Array(await new Response(stream).arrayBuffer());
+  const pixels = new Uint8Array(width * height * 4);
+  for (let row = 0; row < height; row += 1) {
+    const from = row * (1 + width * 4) + 1;
+    pixels.set(raw.subarray(from, from + width * 4), row * width * 4);
+  }
+  return {
+    width,
+    height,
+    at: (x: number, y: number) => Array.from(pixels.subarray((y * width + x) * 4, (y * width + x) * 4 + 4)),
+  };
+}
+
 test("an artboard past the ceiling streams instead of throwing", async () => {
   // It used to throw outright, which meant a large document could hold an
   // artboard that could never be exported out of it.
@@ -154,4 +192,62 @@ test("a streamed region reads from where the region actually is", async () => {
   const a = new Uint8Array(await topLeft.arrayBuffer());
   const b = new Uint8Array(await elsewhere.arrayBuffer());
   assert.notDeepEqual(a, b, "two different regions of a gradient must not encode identically");
+});
+
+test("an artboard hanging off the canvas pads instead of failing", async () => {
+  // Photoshop exports the whole artboard rect with transparent padding where it
+  // leaves the canvas, and that is what an artboard is for. The risk is the
+  // other way round: a region whose origin sits outside the document would give
+  // the renderer a zero-width canvas to allocate.
+  const studio = new Studio(300, 200, newCanvas(8, 8));
+  studio.addBlankRaster("art");
+  const { exportTiledPng } = await import("../app/engine/png-stream.ts");
+
+  const overhang = await exportTiledPng(studio.doc, { region: { x: 250, y: 150, width: 200, height: 200 } });
+  assert.deepEqual(await pngSize(overhang), { width: 200, height: 200 },
+    "the file keeps the size the artboard asked for");
+
+  // Entirely outside, and a degenerate size: both have to produce a file rather
+  // than throw on an impossible canvas.
+  const outside = await exportTiledPng(studio.doc, { region: { x: 900, y: 900, width: 32, height: 32 } });
+  assert.deepEqual(await pngSize(outside), { width: 32, height: 32 });
+  const degenerate = await exportTiledPng(studio.doc, { region: { x: 10, y: 10, width: 0, height: -5 } });
+  assert.deepEqual(await pngSize(degenerate), { width: 1, height: 1 });
+});
+
+test("an artboard above or left of the canvas origin pads on that side", async () => {
+  // Artboards are positioned freely, so a negative origin is ordinary rather
+  // than a mistake. The covered part has to land at its own offset inside the
+  // tile, or the padding ends up on the wrong side and the artwork shifts.
+  const studio = new Studio(300, 200, newCanvas(8, 8));
+  const layer = studio.addBlankRaster("art");
+  const context = layer.bitmap!.getContext("2d")!;
+  context.fillStyle = "#ff0000";
+  context.fillRect(0, 0, 300, 200);
+  (studio as unknown as { syncLayerSurface(l: typeof layer): void }).syncLayerSurface(layer);
+
+  const { exportTiledPng } = await import("../app/engine/png-stream.ts");
+  const negative = await decodePng(
+    await exportTiledPng(studio.doc, { region: { x: -40, y: -30, width: 120, height: 100 } }),
+  );
+  assert.equal(negative.width, 120);
+  assert.equal(negative.height, 100);
+
+  // Blitting at the wrong offset produces a correctly sized file either way, so
+  // this has to look at where the artwork actually landed. The canvas covers
+  // the region from (40, 30) inward; everything before that is off-canvas.
+  assert.deepEqual(negative.at(10, 10), [0, 0, 0, 0], "above and left of the canvas is transparent");
+  assert.deepEqual(negative.at(39, 50), [0, 0, 0, 0], "still outside one pixel short of the edge");
+  assert.deepEqual(negative.at(41, 31), [255, 0, 0, 255], "and the artwork starts exactly where the canvas does");
+  assert.deepEqual(negative.at(119, 99), [255, 0, 0, 255], "through to the far corner, which is inside the canvas");
+});
+
+test("a document too large to flatten says so rather than failing on an allocation", () => {
+  // flatten() is one canvas, so it cannot serve a document past the ceiling.
+  // That was unreachable while large documents were not really open; it is
+  // reachable now, and the AI edit path goes through it.
+  const studio = new Studio(BIG.width, BIG.height, newCanvas(8, 8));
+  assert.throws(() => studio.flatten(), /too large to flatten/);
+  // An ordinary document is unaffected.
+  assert.doesNotThrow(() => new Studio(64, 48, newCanvas(8, 8)).flatten());
 });

@@ -1929,21 +1929,28 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     publishRecentFiles(stored);
   }, [desktop]);
 
-  // A double-clicked document, one from the command line, and an Open Recent
-  // pick all arrive on the same event.
+  // Both desktop handlers close over the studio and the active layer, so they
+  // are new functions on every render. Held in refs rather than in the
+  // subscription's dependencies: Tauri's `listen` is an async IPC round trip,
+  // and re-subscribing per render meant one of those per pointer move during a
+  // brush stroke — with a window between teardown and re-attach where a menu
+  // click would land on nothing at all.
+  const latestCommand = useRef(runStudioCommand);
+  const latestOpenPath = useRef(openDocumentPath);
   useEffect(() => {
-    if (!desktop) return;
-    return listenForOpenFile((path) => { void openDocumentPath(path); });
+    latestCommand.current = runStudioCommand;
+    latestOpenPath.current = openDocumentPath;
   });
 
   // The native menu bar lives in the Tauri process, so its clicks arrive as an
-  // event rather than a DOM interaction. Web builds never see one.
+  // event rather than a DOM interaction — as does a double-clicked document,
+  // one from the command line, and an Open Recent pick. Web builds see none.
   useEffect(() => {
     if (!desktop) return;
-    return listenForMenuCommands(runStudioCommand);
-    // runStudioCommand closes over studio and the active layer, so the
-    // listener is re-bound when those change rather than firing on stale ones.
-  });
+    const stopMenu = listenForMenuCommands((command) => latestCommand.current(command));
+    const stopOpen = listenForOpenFile((path) => { void latestOpenPath.current(path); });
+    return () => { stopMenu(); stopOpen(); };
+  }, [desktop]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

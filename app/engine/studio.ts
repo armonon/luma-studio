@@ -3837,10 +3837,15 @@ export class Studio {
     const output = newCanvas(this.doc.width, this.doc.height);
     if (!layers.length) return output;
 
-    // One grid drives the tiling. A layer that cannot supply the reference
-    // grid is rasterized instead, so a mismatch no longer sinks the document.
+    // One grid drives the tiling. A layer that cannot supply the reference grid
+    // is rasterized instead, so a mismatch no longer sinks the document.
+    //
+    // The fallback builds a bare grid rather than a surface from a canvas: only
+    // the tile addresses are wanted, and allocating a document-sized canvas to
+    // get them would cost a full RGBA buffer for nothing — and would fail
+    // outright on a document past the canvas ceiling.
     const reference = layers.find((layer) => nativeCanUseSurfaceDirectly(layer, this.doc))?.surface
-      ?? this.surfaceFromCanvas(newCanvas(this.doc.width, this.doc.height));
+      ?? new PrecisionTileSurface(this.doc.width, this.doc.height, pixelFormatForDepth(this.doc.bitDepth), this.doc.colorSpace);
 
     // Rasterizing is per layer, not per tile: doing it inside the tile loop
     // would re-render every layer once per tile.
@@ -3920,8 +3925,21 @@ export class Studio {
     return output;
   }
 
-  // Rasterize the entire document into a fresh canvas without the checkerboard.
+  /**
+   * Rasterize the entire document into a fresh canvas, without the
+   * checkerboard.
+   *
+   * One canvas, so it cannot serve a document past the canvas ceiling. That
+   * used to be unreachable because large documents were never really open;
+   * now they are, so the limit is stated here rather than surfacing as a
+   * failed allocation deep inside the caller.
+   */
   flatten(): HTMLCanvasElement {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) {
+      throw new Error(
+        "This document is too large to flatten into a single image. Export a PNG, or an artboard, instead.",
+      );
+    }
     const c = newCanvas(this.doc.width, this.doc.height);
     if (!this.useGL || !renderGL(this.doc, c, false, false)) renderClean(this.doc, c);
     return c;
