@@ -97,6 +97,12 @@ import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/rec
 import type { StudioCommand } from "../desktop/menu-model";
 import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
 import type { TransformCorner } from "./canvas-geometry";
+import {
+  planCanvasGesture,
+  resolveSelectionMode,
+  type CanvasDragDraft,
+  type SelectionCombineMode,
+} from "./canvas-gesture";
 
 const ExportPopover = lazy(() => import("./export-popover"));
 const ToolDock = lazy(() => import("./tool-dock"));
@@ -113,7 +119,6 @@ const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ defau
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
-type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect";
 type Tool =
   | "move"
   | "brush"
@@ -167,7 +172,7 @@ type Tool =
   | "straighten"
   | "content-move"
   | "perspective-warp"
-  | "puppet-warp"
+  | "radial-warp"
   | "eyedropper"
   | "color-sampler"
   | "ruler";
@@ -249,7 +254,7 @@ const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, str
     ["straighten", "／", "Straighten", "S"],
     ["content-move", "⇥", "Content-aware move", "M"],
     ["perspective-warp", "◇", "Perspective warp", "W"],
-    ["puppet-warp", "⌘", "Puppet warp", "P"],
+    ["radial-warp", "⌘", "Radial warp", "P"],
   ],
   measure: [
     ["eyedropper", "⌁", "Eyedropper", "I"],
@@ -449,17 +454,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
 
   // Draft state for pending vector/marquee shapes.
-  type Drag = {
-    x0: number; y0: number; x1: number; y1: number;
-    kind: "sel-rect" | "sel-ellipse" | "rect" | "ellipse" | "triangle" | "polygon" | "line" | "custom-shape" | "frame" | "paragraph-text" | "sel-lasso" | "move-layer" | "gradient" | "crop" | "straighten" | "content-move" | "puppet-warp" | "ruler";
-    path?: Array<{ x: number; y: number }>;
-    moveStart?: { tx: number; ty: number };
-  };
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const dragRef = useRef<Drag | null>(null);
-  const setDragBoth = (d: Drag | null) => { dragRef.current = d; setDrag(d); };
+  const [drag, setDrag] = useState<CanvasDragDraft | null>(null);
+  const dragRef = useRef<CanvasDragDraft | null>(null);
+  const setDragBoth = (d: CanvasDragDraft | null) => { dragRef.current = d; setDrag(d); };
   const resolvedSelectionMode = useCallback((event: { shiftKey: boolean; altKey: boolean }): SelectionCombineMode => (
-    event.shiftKey ? "add" : event.altKey ? "subtract" : selectionMode
+    resolveSelectionMode(selectionMode, event)
   ), [selectionMode]);
 
   // Free-transform drag state (handles overlay).
@@ -812,7 +811,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const wandTool = activeTool === "sel-wand" || activeTool === "sel-quick";
   const pointSelectionTool = activeTool === "sel-polygon" || activeTool === "sel-magnetic";
   const vectorDragTool = ["rect", "ellipse", "triangle", "polygon", "line", "custom-shape", "frame", "paragraph-text"].includes(activeTool);
-  const transformDragTool = ["gradient", "crop", "straighten", "content-move", "puppet-warp", "ruler"].includes(activeTool);
+  const transformDragTool = ["gradient", "crop", "straighten", "content-move", "radial-warp", "ruler"].includes(activeTool);
   const quadTool = activeTool === "perspective-crop" || activeTool === "perspective-warp";
   const moveTool = activeTool === "move" || activeTool === "path-select";
 
@@ -950,7 +949,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (marqueeTool || vectorDragTool || transformDragTool) {
-      setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: activeTool as Drag["kind"] });
+      setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: activeTool as CanvasDragDraft["kind"] });
       return;
     }
     if (lassoTool) {
@@ -1164,7 +1163,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!d) return;
     const p = eventToDoc(e);
     const nextPath = d.kind === "sel-lasso" && d.path ? [...d.path, { x: p.x, y: p.y }] : d.path;
-    const next: Drag = { ...d, x1: p.x, y1: p.y, path: nextPath };
+    const next: CanvasDragDraft = { ...d, x1: p.x, y1: p.y, path: nextPath };
     if (d.kind === "move-layer" && activeLayer && d.moveStart) {
       const dx = p.x - d.x0;
       const dy = p.y - d.y0;
@@ -1200,29 +1199,73 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     const d = dragRef.current;
     if (!d) return;
-    const x = Math.min(d.x0, d.x1);
-    const y = Math.min(d.y0, d.y1);
-    const w = Math.abs(d.x1 - d.x0);
-    const h = Math.abs(d.y1 - d.y0);
-    const mode = resolvedSelectionMode(e);
-    if (d.kind === "sel-rect" && w > 2 && h > 2) studio.selectRect(x, y, w, h, mode, feather);
-    else if (d.kind === "sel-ellipse" && w > 2 && h > 2) studio.selectEllipse(x, y, w, h, mode, feather);
-    else if (d.kind === "sel-lasso" && d.path && d.path.length > 4) studio.selectLasso(d.path, mode, feather);
-    else if (d.kind === "rect" && w > 2 && h > 2) studio.addShapeLayer({ kind: "rect", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
-    else if (d.kind === "ellipse" && w > 2 && h > 2) studio.addShapeLayer({ kind: "ellipse", x, y, w, h, fill: brushColor, stroke: "#000", strokeWidth: 0, radius: 0 });
-    else if (["triangle", "polygon", "line", "custom-shape"].includes(d.kind) && w > 2 && h > 2) {
-      void import("./focus-import").then(({ geometricPath }) => studio.addPathLayer(geometricPath(d.kind as "triangle" | "polygon" | "line" | "custom-shape", x, y, w, h, brushColor)));
-    }
-    else if (d.kind === "frame" && w > 2 && h > 2) studio.addFrame(x, y, w, h, e.shiftKey);
-    else if (d.kind === "paragraph-text" && w > 8 && h > 8) studio.addTextLayer(textDraft, { x, y, layout: "paragraph", boxWidth: w, boxHeight: h, color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` });
-    else if (d.kind === "gradient" && activeLayer?.kind === "raster") studio.gradientFill(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, brushColor, secondaryColor, gradientType);
-    else if (d.kind === "crop" && w > 2 && h > 2) studio.cropRect(x, y, w, h);
-    else if (d.kind === "straighten") studio.straightenDocument(-Math.atan2(d.y1 - d.y0, d.x1 - d.x0));
-    else if (d.kind === "content-move" && activeLayer?.kind === "raster") studio.moveSelectionContent(activeLayer.id, d.x1 - d.x0, d.y1 - d.y0);
-    else if (d.kind === "puppet-warp" && activeLayer?.kind === "raster") studio.radialWarpLayer(activeLayer.id, { x: d.x0, y: d.y0 }, { x: d.x1, y: d.y1 }, warpRadius);
-    else if (d.kind === "ruler") setMeasurement({ start: { x: d.x0, y: d.y0 }, end: { x: d.x1, y: d.y1 } });
-    else if (d.kind === "move-layer" && activeLayer) {
+    if (d.kind === "move-layer" && activeLayer) {
       studio.updateTransform(activeLayer.id, { tx: activeLayer.transform.tx, ty: activeLayer.transform.ty });
+    } else {
+      const intent = planCanvasGesture(d, {
+        preferredSelectionMode: selectionMode,
+        modifiers: e,
+        feather,
+        activeRasterLayerId: activeLayer?.kind === "raster" ? activeLayer.id : null,
+        brushColor,
+        secondaryColor,
+        gradientType,
+        text: textDraft,
+        textSize,
+        warpRadius,
+      });
+      if (intent?.kind === "select-rect") {
+        studio.selectRect(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.mode, intent.feather);
+      } else if (intent?.kind === "select-ellipse") {
+        studio.selectEllipse(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.mode, intent.feather);
+      } else if (intent?.kind === "select-lasso") {
+        studio.selectLasso(intent.path, intent.mode, intent.feather);
+      } else if (intent?.kind === "shape") {
+        studio.addShapeLayer({
+          kind: intent.shape,
+          x: intent.bounds.x,
+          y: intent.bounds.y,
+          w: intent.bounds.width,
+          h: intent.bounds.height,
+          fill: intent.fill,
+          stroke: "#000",
+          strokeWidth: 0,
+          radius: 0,
+        });
+      } else if (intent?.kind === "path-shape") {
+        void import("./focus-import").then(({ geometricPath }) => studio.addPathLayer(geometricPath(
+          intent.shape,
+          intent.bounds.x,
+          intent.bounds.y,
+          intent.bounds.width,
+          intent.bounds.height,
+          intent.fill,
+        )));
+      } else if (intent?.kind === "frame") {
+        studio.addFrame(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.shifted);
+      } else if (intent?.kind === "paragraph-text") {
+        studio.addTextLayer(intent.text, {
+          x: intent.bounds.x,
+          y: intent.bounds.y,
+          layout: "paragraph",
+          boxWidth: intent.bounds.width,
+          boxHeight: intent.bounds.height,
+          color: intent.color,
+          font: intent.font,
+        });
+      } else if (intent?.kind === "gradient") {
+        studio.gradientFill(intent.layerId, intent.from, intent.to, intent.startColor, intent.endColor, intent.gradientType);
+      } else if (intent?.kind === "crop") {
+        studio.cropRect(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height);
+      } else if (intent?.kind === "straighten") {
+        studio.straightenDocument(intent.radians);
+      } else if (intent?.kind === "content-move") {
+        studio.moveSelectionContent(intent.layerId, intent.deltaX, intent.deltaY);
+      } else if (intent?.kind === "radial-warp") {
+        studio.radialWarpLayer(intent.layerId, intent.from, intent.to, intent.radius);
+      } else if (intent?.kind === "measurement") {
+        setMeasurement({ start: intent.start, end: intent.end });
+      }
     }
     setDragBoth(null);
   };
@@ -3412,7 +3455,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <p style={{ margin: 0, opacity: 0.72 }}>
                     {quadTool ? `Place four corners in order · ${pointDraft.length}/4` : activeTool === "content-move" ? "Make a selection, then drag it to a new position." : activeTool === "crop" ? "Drag the retained crop rectangle." : "Drag directly on the document."}
                   </p>
-                  {(activeTool === "puppet-warp" || activeTool === "liquify") && <label style={{ display: "flex", gap: 8, alignItems: "center" }}><span>Influence</span><input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} /><output>{warpRadius}px</output></label>}
+                  {(activeTool === "radial-warp" || activeTool === "liquify") && <label style={{ display: "flex", gap: 8, alignItems: "center" }}><span>Influence</span><input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} /><output>{warpRadius}px</output></label>}
                   {pointDraft.length > 0 && <button onClick={() => setPointDraft([])}>Clear points</button>}
                   {activeLayer && (
                     <>

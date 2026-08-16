@@ -93,7 +93,7 @@ const toolIcons: Record<string, LucideIcon> = {
   straighten: Ruler,
   "content-move": Move,
   "perspective-warp": Grid2X2,
-  "puppet-warp": Focus,
+  "radial-warp": Focus,
   eyedropper: Pipette,
   "color-sampler": Palette,
   ruler: Ruler,

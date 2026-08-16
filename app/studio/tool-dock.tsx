@@ -8,7 +8,7 @@ import type { StudioCommand } from "../desktop/menu-model";
 type CategoryId = "move" | "paint" | "select" | "retouch" | "create" | "ai";
 
 const categories: ReadonlyArray<{ id: CategoryId; label: string; tools: readonly string[] }> = [
-  { id: "move", label: "Move", tools: ["move", "crop", "perspective-crop", "straighten", "content-move", "perspective-warp", "puppet-warp", "ruler"] },
+  { id: "move", label: "Move", tools: ["move", "crop", "perspective-crop", "straighten", "content-move", "perspective-warp", "radial-warp", "ruler"] },
   { id: "paint", label: "Paint", tools: ["brush", "capture-brush", "pencil", "mixer", "erase", "gradient", "pattern", "fill", "mask-add", "mask-remove"] },
   { id: "select", label: "Select", tools: ["sel-rect", "sel-ellipse", "sel-lasso", "sel-polygon", "sel-magnetic", "sel-quick", "sel-wand"] },
   { id: "retouch", label: "Retouch", tools: ["heal", "clone", "spot-heal", "patch", "remove", "dodge", "burn", "blur-brush", "sharpen-brush", "smudge", "sponge", "liquify"] },

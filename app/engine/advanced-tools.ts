@@ -173,7 +173,7 @@ export function warpToQuadrilateral(source: PixelBuffer, width: number, height: 
   return { width, height, data: output };
 }
 
-/** Local radial deformation used by puppet-warp and liquify-style gestures. */
+/** Local radial deformation used by radial-warp and liquify-style gestures. */
 export function radialWarp(source: PixelBuffer, from: Point, to: Point, radius: number): PixelBuffer {
   const output = new Uint8ClampedArray(source.data.length);
   const safeRadius = Math.max(1, radius);

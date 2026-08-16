@@ -1261,7 +1261,7 @@ export class Studio {
     return true;
   }
 
-  radialWarpLayer(layerId: string, from: Point, to: Point, radius: number, label = "Puppet warp") {
+  radialWarpLayer(layerId: string, from: Point, to: Point, radius: number, label = "Radial warp") {
     const layer = this.findLayer(layerId);
     if (!layer?.bitmap || layer.locked) return false;
     const before = [snapshotLayer(layer)];
