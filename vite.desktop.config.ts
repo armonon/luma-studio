@@ -14,11 +14,14 @@ export default defineConfig({
   },
   define: {
     "process.env": JSON.stringify({ NEXT_PUBLIC_LUMA_EDITION: "pro" }),
+    __LUMA_NATIVE_DESKTOP__: "true",
   },
   build: {
     outDir: "../dist-desktop",
     emptyOutDir: true,
     target: "es2022",
-    sourcemap: true,
+    // Release diagnostics use native crash reporting and source revisions;
+    // shipping 5+ MB of browser source maps only bloats the desktop payload.
+    sourcemap: false,
   },
 });

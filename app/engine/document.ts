@@ -1,6 +1,7 @@
 import type { PrecisionTileSurface } from "./tile-store";
 import type { RawDevelopSettings } from "./raw-develop";
 import type { AiEditQuality, AiOperationControls, AiSelectionGuide } from "./ai-edit";
+import { cloneProAdjustment, type ProAdjustmentParams } from "./pro-adjustments";
 
 export type BlendMode =
   | "source-over"
@@ -245,6 +246,7 @@ export type LayerKind =
   | "adjustment-curves"
   | "adjustment-levels"
   | "adjustment-hsl"
+  | "adjustment-pro"
   | "text"
   | "shape"
   | "path";
@@ -545,9 +547,23 @@ export type ShapeStyle = {
   radius: number; // rect corner radius
 };
 
+export type SmartFilterKind =
+  | "blur"
+  | "sharpen"
+  | "high-pass"
+  | "motion-blur"
+  | "surface-blur"
+  | "median"
+  | "dust-scratches"
+  | "maximum"
+  | "minimum"
+  | "invert"
+  | "desaturate"
+  | "hue";
+
 export type SmartFilter = {
   id: string;
-  kind: "blur" | "sharpen" | "invert" | "desaturate" | "hue";
+  kind: SmartFilterKind;
   enabled: boolean;
   opacity: number;
   params: Record<string, number>;
@@ -565,19 +581,21 @@ export type AiProvenance = {
   requestId?: string;
   inputSha256?: string;
   maskSha256?: string;
+  referenceSha256?: string;
   parameters?: {
     quality: AiEditQuality;
     size: string;
     variationIndex?: number;
     controls?: AiOperationControls;
     selection?: AiSelectionGuide;
+    identityReferenceLayerId?: string;
   };
 };
 
 export type SourceProvenance = {
   originalName: string;
   format: string;
-  mode: "decoded" | "embedded-raw-preview" | "dng-cfa-developed";
+  mode: "decoded" | "embedded-raw-preview" | "dng-cfa-developed" | "camera-raw-developed";
   originalBytes?: number;
   colorProfile?: {
     id: string;
@@ -599,10 +617,11 @@ export type SourceProvenance = {
 export type RawLayerSource = {
   original: Uint8Array;
   settings: RawDevelopSettings;
-  decoder: "luma-dng-tiff-v1";
+  decoder: "luma-dng-tiff-v1" | "luma-camera-tiff-v1";
   boundary: "classic-tiff-uncompressed-bayer" | "bigtiff-uncompressed-bayer" | "tiff-lossless-jpeg-bayer";
   matrixSource: "forward-matrix-1" | "color-matrix-1" | "assumed-camera-rgb";
   sensor: {
+    format?: string;
     bitsPerSample: number;
     dngVersion?: string;
     warnings: string[];
@@ -1007,6 +1026,8 @@ export type Layer = {
   transform: Transform;
   parentId?: string;
   locked?: boolean;
+  /** Marks the single layer used as a persistent AI identity/product reference. */
+  identityReference?: boolean;
   clipping?: boolean;
   filters?: SmartFilter[];
   ai?: AiProvenance;
@@ -1066,6 +1087,7 @@ export type Layer = {
   curves?: Curves;
   levels?: LevelsParams;
   hsl?: HslParams;
+  proAdjustment?: ProAdjustmentParams;
   text?: TextStyle;
   shape?: ShapeStyle;
   path?: PathStyle;
@@ -1166,6 +1188,15 @@ export type CapturedBrushAsset = {
   /** Diameter in document pixels when sampled, before storage downsampling. */
   sourceDiameter: number;
   createdAt: string;
+  /** Optional document-space source retained by a Living Source Brush. */
+  liveSource?: {
+    mode: "merged" | "layer";
+    layerId?: string;
+    centerX: number;
+    centerY: number;
+    radius: number;
+    live: boolean;
+  };
 };
 
 export const MAX_CAPTURED_BRUSHES = 32;
@@ -1430,6 +1461,19 @@ export function createHslLayer(name: string, hsl: HslParams = { ...NEUTRAL_HSL }
     blend: "source-over",
     transform: { ...IDENTITY_TRANSFORM },
     hsl,
+  };
+}
+
+export function createProAdjustmentLayer(name: string, proAdjustment: ProAdjustmentParams): Layer {
+  return {
+    id: nextId("pro-adjustment"),
+    name,
+    kind: "adjustment-pro",
+    visible: true,
+    opacity: 1,
+    blend: "source-over",
+    transform: { ...IDENTITY_TRANSFORM },
+    proAdjustment: cloneProAdjustment(proAdjustment),
   };
 }
 

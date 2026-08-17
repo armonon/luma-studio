@@ -14,7 +14,7 @@
     "windows": [
       {
         "title": "Luma Studio",
-        "url": "index.html?build=compact-inspector-v24",
+        "url": "index.html?build=graphite-workspace-v25",
         "width": 1440,
         "height": 900,
         "minWidth": 1160,
@@ -28,7 +28,7 @@
           "y": 18
         },
         "acceptFirstMouse": true,
-        "theme": "Light",
+        "theme": "Dark",
         "dragDropEnabled": false
       }
     ],

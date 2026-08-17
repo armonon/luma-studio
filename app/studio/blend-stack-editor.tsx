@@ -16,6 +16,7 @@ import {
   type Layer,
 } from "@/app/engine/document";
 import { isNeutralBlendIf } from "@/app/engine/blend";
+import { BLEND_RECIPES } from "@/app/engine/blend-recipes";
 
 export default function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   const passes = resolvedBlendPasses(layer);
@@ -37,10 +38,21 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
   return (
     <div className="blend-stack-editor">
       <div className="blend-stack-heading">
-        <span><strong>Blending</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} modes</small></span>
+        <span><strong>Blend Graph</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} passes</small></span>
         <button type="button" onClick={() => studio.addBlendPass(layer.id)} disabled={passes.length >= MAX_LAYER_BLEND_PASSES} title="Add another blend pass">＋ Add blend mode</button>
       </div>
-      <p>Pass 1 is applied first. Every pass blends this layer again with its own mode and opacity.</p>
+      <p>Stack repeatable compositing passes, or start with a tuned recipe.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 4, margin: "0 0 8px" }}>
+        {BLEND_RECIPES.map((recipe) => (
+          <button
+            key={recipe.id}
+            type="button"
+            title={recipe.description}
+            onClick={() => studio.applyBlendRecipe(layer.id, recipe.id)}
+            style={{ padding: "6px 2px", fontSize: 9, overflow: "hidden", textOverflow: "ellipsis" }}
+          >{recipe.label}</button>
+        ))}
+      </div>
       <div className="blend-pass-list">
         {passes.map((pass, index) => (
           <div

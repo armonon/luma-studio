@@ -2,6 +2,7 @@ import {
   Document,
   Layer,
   SmartFilter,
+  SmartFilterKind,
   inverseAffineForLayerTransform,
   newCanvas,
   transformPoint,
@@ -13,6 +14,46 @@ export type FilterRegion = {
   width: number;
   height: number;
 };
+
+export type SmartFilterSpec = {
+  label: string;
+  category: "Blur" | "Sharpen" | "Noise" | "Other";
+  defaults: Record<string, number>;
+};
+
+/**
+ * One catalogue drives the UI, actions, overscan planner and renderer. Keeping
+ * defaults here prevents a filter from looking different depending on which
+ * surface created it.
+ */
+export const SMART_FILTER_SPECS: Record<SmartFilterKind, SmartFilterSpec> = {
+  blur: { label: "Gaussian Blur", category: "Blur", defaults: { radius: 8 } },
+  "motion-blur": { label: "Motion Blur", category: "Blur", defaults: { radius: 16, angle: 0 } },
+  "surface-blur": { label: "Surface Blur", category: "Blur", defaults: { radius: 5, threshold: 24 } },
+  sharpen: { label: "Unsharp Mask", category: "Sharpen", defaults: { radius: 2, amount: 0.6 } },
+  "high-pass": { label: "High Pass", category: "Sharpen", defaults: { radius: 4 } },
+  median: { label: "Median", category: "Noise", defaults: { radius: 2 } },
+  "dust-scratches": { label: "Dust & Scratches", category: "Noise", defaults: { radius: 2, threshold: 18 } },
+  maximum: { label: "Maximum", category: "Other", defaults: { radius: 2 } },
+  minimum: { label: "Minimum", category: "Other", defaults: { radius: 2 } },
+  invert: { label: "Invert", category: "Other", defaults: {} },
+  desaturate: { label: "Desaturate", category: "Other", defaults: { amount: 1 } },
+  hue: { label: "Hue Rotate", category: "Other", defaults: { degrees: 45 } },
+};
+
+export const SMART_FILTER_KINDS = Object.keys(SMART_FILTER_SPECS) as SmartFilterKind[];
+
+export function smartFilterInfluenceRadius(filter: Pick<SmartFilter, "kind" | "params">, displayScale = 1) {
+  const defaults = SMART_FILTER_SPECS[filter.kind].defaults;
+  const radius = Math.max(0, (filter.params.radius ?? defaults.radius ?? 0) * displayScale);
+  if (filter.kind === "blur" || filter.kind === "sharpen" || filter.kind === "high-pass") {
+    return gaussianInfluenceRadius(radius);
+  }
+  if (["motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum"].includes(filter.kind)) {
+    return Math.ceil(radius);
+  }
+  return 0;
+}
 
 function snapNearInteger(value: number) {
   const integer = Math.round(value);
@@ -236,6 +277,149 @@ export function unsharpMask(
   }, gaussianInfluenceRadius(radius));
 }
 
+/** Edge detail isolated around middle gray, suitable for Overlay/Soft Light. */
+export function highPass(doc: Document, layer: Layer, radius: number) {
+  if (radius <= 0) return;
+  applyPixelFilter(doc, layer, (src) => {
+    const blur = boxBlur3(new ImageData(new Uint8ClampedArray(src.data), src.width, src.height), radius);
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    for (let i = 0; i < src.data.length; i += 4) {
+      out.data[i] = clamp(128 + src.data[i] - blur.data[i]);
+      out.data[i + 1] = clamp(128 + src.data[i + 1] - blur.data[i + 1]);
+      out.data[i + 2] = clamp(128 + src.data[i + 2] - blur.data[i + 2]);
+      out.data[i + 3] = src.data[i + 3];
+    }
+    return out;
+  }, gaussianInfluenceRadius(radius));
+}
+
+function pixelIndex(width: number, height: number, x: number, y: number) {
+  return (Math.max(0, Math.min(height - 1, y)) * width + Math.max(0, Math.min(width - 1, x))) * 4;
+}
+
+export function motionBlur(doc: Document, layer: Layer, radius: number, angleDegrees: number) {
+  const r = Math.max(1, Math.min(96, Math.round(radius)));
+  const radians = angleDegrees * Math.PI / 180;
+  const dx = Math.cos(radians);
+  const dy = Math.sin(radians);
+  applyPixelFilter(doc, layer, (src) => {
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    const samples = Math.min(65, r * 2 + 1);
+    for (let y = 0; y < src.height; y += 1) {
+      for (let x = 0; x < src.width; x += 1) {
+        const target = (y * src.width + x) * 4;
+        const sums = [0, 0, 0, 0];
+        for (let sample = 0; sample < samples; sample += 1) {
+          const distance = samples === 1 ? 0 : -r + sample * (r * 2 / (samples - 1));
+          const source = pixelIndex(src.width, src.height, Math.round(x + dx * distance), Math.round(y + dy * distance));
+          for (let channel = 0; channel < 4; channel += 1) sums[channel] += src.data[source + channel];
+        }
+        for (let channel = 0; channel < 4; channel += 1) out.data[target + channel] = sums[channel] / samples;
+      }
+    }
+    return out;
+  }, r);
+}
+
+type NeighborhoodMode = "median" | "maximum" | "minimum";
+
+function neighborhoodFilter(src: ImageData, radius: number, mode: NeighborhoodMode) {
+  const r = Math.max(1, Math.min(12, Math.round(radius)));
+  const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+  const values: number[][] = [[], [], [], []];
+  for (let y = 0; y < src.height; y += 1) {
+    for (let x = 0; x < src.width; x += 1) {
+      for (const channel of values) channel.length = 0;
+      for (let yy = y - r; yy <= y + r; yy += 1) {
+        for (let xx = x - r; xx <= x + r; xx += 1) {
+          const source = pixelIndex(src.width, src.height, xx, yy);
+          for (let channel = 0; channel < 4; channel += 1) values[channel].push(src.data[source + channel]);
+        }
+      }
+      const target = (y * src.width + x) * 4;
+      for (let channel = 0; channel < 3; channel += 1) {
+        if (mode === "maximum") out.data[target + channel] = Math.max(...values[channel]);
+        else if (mode === "minimum") out.data[target + channel] = Math.min(...values[channel]);
+        else {
+          values[channel].sort((a, b) => a - b);
+          out.data[target + channel] = values[channel][Math.floor(values[channel].length / 2)];
+        }
+      }
+      out.data[target + 3] = src.data[target + 3];
+    }
+  }
+  return out;
+}
+
+export function medianFilter(doc: Document, layer: Layer, radius: number) {
+  applyPixelFilter(doc, layer, (src) => neighborhoodFilter(src, radius, "median"), Math.ceil(radius));
+}
+
+export function maximumFilter(doc: Document, layer: Layer, radius: number) {
+  applyPixelFilter(doc, layer, (src) => neighborhoodFilter(src, radius, "maximum"), Math.ceil(radius));
+}
+
+export function minimumFilter(doc: Document, layer: Layer, radius: number) {
+  applyPixelFilter(doc, layer, (src) => neighborhoodFilter(src, radius, "minimum"), Math.ceil(radius));
+}
+
+export function dustAndScratches(doc: Document, layer: Layer, radius: number, threshold: number) {
+  applyPixelFilter(doc, layer, (src) => {
+    const median = neighborhoodFilter(src, radius, "median");
+    const out = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
+    const limit = Math.max(0, Math.min(255, threshold));
+    for (let i = 0; i < src.data.length; i += 4) {
+      const difference = Math.max(
+        Math.abs(src.data[i] - median.data[i]),
+        Math.abs(src.data[i + 1] - median.data[i + 1]),
+        Math.abs(src.data[i + 2] - median.data[i + 2]),
+      );
+      if (difference <= limit) continue;
+      out.data[i] = median.data[i];
+      out.data[i + 1] = median.data[i + 1];
+      out.data[i + 2] = median.data[i + 2];
+    }
+    return out;
+  }, Math.ceil(radius));
+}
+
+/** Edge-aware blur: only neighbours within the RGB distance threshold mix. */
+export function surfaceBlur(doc: Document, layer: Layer, radius: number, threshold: number) {
+  const r = Math.max(1, Math.min(12, Math.round(radius)));
+  const limit = Math.max(0, Math.min(255, threshold));
+  applyPixelFilter(doc, layer, (src) => {
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    for (let y = 0; y < src.height; y += 1) {
+      for (let x = 0; x < src.width; x += 1) {
+        const target = (y * src.width + x) * 4;
+        const sums = [0, 0, 0];
+        let weight = 0;
+        for (let yy = y - r; yy <= y + r; yy += 1) {
+          for (let xx = x - r; xx <= x + r; xx += 1) {
+            const source = pixelIndex(src.width, src.height, xx, yy);
+            const difference = Math.max(
+              Math.abs(src.data[target] - src.data[source]),
+              Math.abs(src.data[target + 1] - src.data[source + 1]),
+              Math.abs(src.data[target + 2] - src.data[source + 2]),
+            );
+            if (difference > limit) continue;
+            const sampleWeight = 1 - difference / Math.max(1, limit + 1);
+            sums[0] += src.data[source] * sampleWeight;
+            sums[1] += src.data[source + 1] * sampleWeight;
+            sums[2] += src.data[source + 2] * sampleWeight;
+            weight += sampleWeight;
+          }
+        }
+        out.data[target] = sums[0] / Math.max(1, weight);
+        out.data[target + 1] = sums[1] / Math.max(1, weight);
+        out.data[target + 2] = sums[2] / Math.max(1, weight);
+        out.data[target + 3] = src.data[target + 3];
+      }
+    }
+    return out;
+  }, r);
+}
+
 export function invertColors(doc: Document, layer: Layer) {
   applyPixelFilter(doc, layer, (src) => {
     const out = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
@@ -308,15 +492,23 @@ export function applySmartFilters(
   for (const filter of filters) {
     if (!filter.enabled || filter.opacity <= 0) continue;
     const before = filter.opacity < 1 ? new Uint8ClampedArray(source.getContext("2d")!.getImageData(0, 0, source.width, source.height).data) : null;
+    const defaults = SMART_FILTER_SPECS[filter.kind].defaults;
     const radius = Math.max(
       0,
       Math.min(
         Math.max(1, Math.min(source.width, source.height) / 4),
-        (filter.params.radius ?? (filter.kind === "blur" ? 8 : 2)) * displayScale,
+        (filter.params.radius ?? defaults.radius ?? 0) * displayScale,
       ),
     );
     if (filter.kind === "blur") gaussianBlur(doc, layer, radius);
     else if (filter.kind === "sharpen") unsharpMask(doc, layer, radius, filter.params.amount ?? 0.6);
+    else if (filter.kind === "high-pass") highPass(doc, layer, radius);
+    else if (filter.kind === "motion-blur") motionBlur(doc, layer, radius, filter.params.angle ?? 0);
+    else if (filter.kind === "surface-blur") surfaceBlur(doc, layer, radius, filter.params.threshold ?? 24);
+    else if (filter.kind === "median") medianFilter(doc, layer, radius);
+    else if (filter.kind === "dust-scratches") dustAndScratches(doc, layer, radius, filter.params.threshold ?? 18);
+    else if (filter.kind === "maximum") maximumFilter(doc, layer, radius);
+    else if (filter.kind === "minimum") minimumFilter(doc, layer, radius);
     else if (filter.kind === "invert") invertColors(doc, layer);
     else if (filter.kind === "desaturate") desaturate(doc, layer, filter.params.amount ?? 1);
     else if (filter.kind === "hue") hueRotate(doc, layer, filter.params.degrees ?? 45);

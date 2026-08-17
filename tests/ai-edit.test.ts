@@ -97,6 +97,24 @@ test("variation orchestration is ordered, bounded to two requests, and carries p
   assert.deepEqual(results.map((result) => result.model), Array(4).fill("gpt-image-2"));
 });
 
+test("Identity Lock sends a separately digested reference image and prompt guidance", async () => {
+  const requests: FormData[] = [];
+  await runAiEditVariations({
+    image: new Blob(["source"], { type: "image/png" }),
+    reference: new Blob(["identity"], { type: "image/png" }),
+    operation: "relight",
+    prompt: "Warm studio light",
+    fetcher: async (_input, init) => {
+      requests.push(init?.body as FormData);
+      return new Response(new Blob(["result"]), { headers: { "content-type": "image/png" } });
+    },
+  });
+  assert.ok(requests[0]?.get("reference") instanceof Blob);
+  assert.match(String(requests[0]?.get("referenceDigest")), /^[a-f0-9]{64}$/);
+  const config = normalizeAiEditConfig({ operation: "relight", prompt: "Warm studio light" });
+  assert.match(buildAiEditPrompt(config, false, true), /second supplied image as an identity/);
+});
+
 test("AI and local semantic work can be cancelled before expensive work starts", async () => {
   const controller = new AbortController();
   controller.abort();

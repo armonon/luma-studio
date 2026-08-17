@@ -49,6 +49,29 @@ test("generated document-space fills are inverse-mapped into transformed layers"
   studio.dispose();
 });
 
+test("selected fill and clear use transformed layer space and bounded history patches", () => {
+  const studio = new Studio(512, 384, testCanvas(512, 384));
+  const layer = studio.addBlankRaster("bounded fill");
+  layer.transform = { tx: 20, ty: 10, sx: 2, sy: 2, rotation: 0 };
+  studio.selectRect(40, 30, 12, 10);
+  const beforeFill = studio.historyState().bytes;
+
+  studio.fillLayer(layer.id, "#ff0000");
+  assert.deepEqual(pixelAt(layer.bitmap!, 11, 11), { r: 255, g: 0, b: 0, a: 255 });
+  assert.deepEqual(pixelAt(layer.bitmap!, 9, 11), { r: 0, g: 0, b: 0, a: 0 });
+  assert.ok(studio.historyState().bytes - beforeFill < 10_000, "history must scale with the 6×5 layer-space selection");
+
+  studio.clearPixels(layer.id);
+  assert.equal(pixelAt(layer.bitmap!, 11, 11).a, 0);
+  studio.undo();
+  assert.equal(pixelAt(layer.bitmap!, 11, 11).a, 255);
+  studio.undo();
+  assert.equal(pixelAt(layer.bitmap!, 11, 11).a, 0);
+  studio.redo();
+  assert.equal(pixelAt(layer.bitmap!, 11, 11).a, 255);
+  studio.dispose();
+});
+
 test("straightening composes a document-space rotation around the canvas center", () => {
   const rotated = rotateLayerTransformAround(
     { tx: 2, ty: 3, sx: 1.5, sy: 0.75, rotation: 0.25 },

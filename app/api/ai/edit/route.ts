@@ -119,12 +119,16 @@ export async function POST(request: Request) {
   const incoming = await request.formData();
   const image = incoming.get("image");
   const mask = incoming.get("mask");
+  const reference = incoming.get("reference");
   const promptValue = incoming.get("prompt");
   const operationValue = incoming.get("operation");
   if (!(image instanceof File) || image.size === 0) return fail("An image is required.", 400);
   if (image.size > MAX_UPLOAD_BYTES) return fail("The image exceeds the 50 MB edit limit.", 413);
   if (mask !== null && !(mask instanceof File)) return fail("The mask must be an image file.", 400);
   if (mask instanceof File && mask.size > MAX_UPLOAD_BYTES) return fail("The mask exceeds the 50 MB edit limit.", 413);
+  if (reference !== null && !(reference instanceof File)) return fail("The identity reference must be an image file.", 400);
+  if (reference instanceof File && reference.size > MAX_UPLOAD_BYTES) return fail("The identity reference exceeds the 50 MB edit limit.", 413);
+  if (reference instanceof File && reference.size > 0 && reference.type !== "image/png") return fail("The identity reference must be a PNG image.", 400);
   if (mask instanceof File && mask.size > 0 && mask.type !== "image/png") {
     return fail("The edit mask must be a PNG with an alpha channel.", 400);
   }
@@ -158,6 +162,7 @@ export async function POST(request: Request) {
       variationIndex: Number(incoming.get("variationIndex") ?? 0),
       sourceDigest,
       maskDigest,
+      referenceDigest: incoming.get("referenceDigest"),
     });
   } catch (cause) {
     return fail(cause instanceof Error ? cause.message : "Invalid AI edit controls.", 400);
@@ -166,8 +171,9 @@ export async function POST(request: Request) {
   const body = new FormData();
   body.append("model", MODEL);
   body.append("image[]", image, "source.png");
+  if (reference instanceof File && reference.size > 0) body.append("image[]", reference, "identity-reference.png");
   if (mask instanceof File && mask.size > 0) body.append("mask", mask, "mask.png");
-  body.append("prompt", buildAiEditPrompt(config, mask instanceof File && mask.size > 0));
+  body.append("prompt", buildAiEditPrompt(config, mask instanceof File && mask.size > 0, reference instanceof File && reference.size > 0));
   body.append("quality", config.quality);
   body.append("size", config.size);
   body.append("output_format", "png");

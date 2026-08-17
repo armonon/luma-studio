@@ -1,6 +1,7 @@
 import {
   Document,
   Layer,
+  NEUTRAL_TONE,
   ToneParams,
   applyCurvesToImageData,
   applyHslToImageData,
@@ -13,9 +14,10 @@ import {
   resolvedFillOpacity,
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
-import { applySmartFilters } from "./filters";
+import { applySmartFilters, smartFilterInfluenceRadius } from "./filters";
 import { compositeBlendStack } from "./blend";
-import { composeLayerWithEffects, documentNeedsFullBackdrop, layerEffectReach } from "./layer-effects";
+import { isNeutralBlendIf } from "./blend";
+import { composeLayerWithEffects, FULL_BACKDROP_KINDS, layerEffectReach } from "./layer-effects";
 import { getDisplayCtx } from "./gl-renderer";
 import { softProofDisplayRgb } from "./color";
 import { DEFAULT_TILE_SIZE } from "./tile-store";
@@ -26,6 +28,7 @@ import {
   SRGB_PROFILE,
   createProofingTransform,
 } from "./color-management";
+import { applyProAdjustmentToImageData } from "./pro-adjustments";
 
 type Scratch = {
   a: HTMLCanvasElement;
@@ -140,6 +143,27 @@ function prepareLayers(doc: Document): PreparedLayers {
   return prepared;
 }
 
+const preparedLayerCache = new WeakMap<Document, { revision: number; layers: PreparedLayers }>();
+let preparedLayerCacheHits = 0;
+let preparedLayerCacheMisses = 0;
+
+function preparedLayersFor(doc: Document, hierarchyRevision?: number) {
+  if (hierarchyRevision === undefined) return prepareLayers(doc);
+  const cached = preparedLayerCache.get(doc);
+  if (cached?.revision === hierarchyRevision) {
+    preparedLayerCacheHits += 1;
+    return cached.layers;
+  }
+  preparedLayerCacheMisses += 1;
+  const layers = prepareLayers(doc);
+  preparedLayerCache.set(doc, { revision: hierarchyRevision, layers });
+  return layers;
+}
+
+export function rendererLayerPlanningStats() {
+  return { hits: preparedLayerCacheHits, misses: preparedLayerCacheMisses };
+}
+
 function clearContext(ctx: CanvasRenderingContext2D, width: number, height: number) {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -224,6 +248,9 @@ export type RenderOptions = {
   proofing?: boolean;
   /** Stable document-content revision. Enables bounded viewport tile reuse. */
   cacheRevision?: number;
+  /** Changes only when layer order or parentage changes. Avoids O(layer-count)
+   * hierarchy rebuilding on brush, pan, zoom, and selection frames. */
+  hierarchyRevision?: number;
   /** Document-space regions changed since the last frame on this target. */
   dirtyRegions?: readonly PixelRect[];
   /** Non-destructive channel inspection; omitted for the RGB composite. */
@@ -601,7 +628,9 @@ function renderLayerSequence(
       }
       continue;
     }
-    if (layer.kind === "adjustment-tone" && layer.tone) {
+    if (layer.kind === "adjustment-tone" && layer.tone && isNoOpToneAdjustment(layer)) {
+      continue;
+    } else if (layer.kind === "adjustment-tone" && layer.tone) {
       drawAdjustment(composite, s, doc, layer, frame);
     } else if (layer.kind === "adjustment-curves" && layer.curves) {
       drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyCurvesToImageData(img, layer.curves!));
@@ -609,6 +638,15 @@ function renderLayerSequence(
       drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyLevelsToImageData(img, layer.levels!));
     } else if (layer.kind === "adjustment-hsl" && layer.hsl) {
       drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyHslToImageData(img, layer.hsl!));
+    } else if (layer.kind === "adjustment-pro" && layer.proAdjustment) {
+      drawPixelAdjustment(composite, s, doc, layer, frame, (img) => applyProAdjustmentToImageData(img, layer.proAdjustment!, {
+        originX: frame.x,
+        originY: frame.y,
+        scaleX: frame.outputWidth / frame.width,
+        scaleY: frame.outputHeight / frame.height,
+        documentWidth: doc.width,
+        documentHeight: doc.height,
+      }));
     } else {
       // Blend Clipped Layers as Group: the base and everything clipped to it
       // composite into one buffer and blend once, so the group's blend mode
@@ -648,6 +686,21 @@ function renderLayerSequence(
       }
     }
   }
+}
+
+function isNoOpToneAdjustment(layer: Layer) {
+  const tone = layer.tone;
+  if (!tone || Object.keys(NEUTRAL_TONE).some((key) => tone[key as keyof ToneParams] !== 0)) return false;
+  const passes = resolvedBlendPasses(layer);
+  return !layer.mask
+    && !layer.vectorMask
+    && !layer.clipping
+    && !layer.effects?.some((effect) => effect.enabled)
+    && isNeutralBlendIf(resolvedBlendIf(layer))
+    && passes.length === 1
+    && passes[0].enabled
+    && passes[0].mode === "source-over"
+    && passes[0].opacity === 1;
 }
 
 function groupIsPassThrough(layer: Layer) {
@@ -704,25 +757,39 @@ export function renderViewport(
   let preparedLayers: PreparedLayers | null = null;
   // Resolve lazily so a frame served entirely from the tile cache never walks
   // the layer hierarchy. Misses still share one prepared hierarchy per frame.
-  const getPreparedLayers = () => (preparedLayers ??= prepareLayers(doc));
+  const getPreparedLayers = () => (preparedLayers ??= preparedLayersFor(doc, options.hierarchyRevision));
 
   // A reflection samples the whole backdrop, and no tile margin covers that.
   // One tile the size of the viewport is the honest answer: it costs the tile
   // cache, and it is the only way the effect can be right.
-  const tilePixels = documentNeedsFullBackdrop(doc.layers)
+  const layerPlan = viewportLayerPlan(doc.layers, viewport.zoom);
+  const tilePixels = layerPlan.fullBackdrop
     ? Math.max(viewport.outputWidth, viewport.outputHeight, 1)
     : DEFAULT_TILE_SIZE;
-  const overscan = renderOverscanPixels(doc, viewport.zoom);
+  const overscan = layerPlan.overscan;
   const scaleX = viewport.outputWidth / viewport.width;
   const scaleY = viewport.outputHeight / viewport.height;
   const totalTiles = Math.ceil(viewport.outputWidth / tilePixels) * Math.ceil(viewport.outputHeight / tilePixels);
   const dirtyTileKeys = options.dirtyRegions?.length
     ? viewportTileKeysForDirtyRegions(viewport, options.dirtyRegions, overscan, tilePixels)
     : null;
-  // Selection ants animate independently of document pixels, so selection
-  // frames currently use a full redraw. Dirty rendering is safe only when the
-  // target still contains the exact same viewport from the preceding frame.
-  const partial = !resized && sameViewport && !doc.selection && !!dirtyTileKeys;
+  if (dirtyTileKeys && doc.selection) {
+    // The target canvas also carries marching ants. Repaint the tiles under
+    // the complete selection bounds so the old ant phase is erased before the
+    // current outline is drawn; content edits elsewhere remain incremental.
+    const bounds = doc.selection.bounds;
+    const selectionTiles = viewportTileKeysForDirtyRegions(viewport, [{
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.w,
+      height: bounds.h,
+    }], 4, tilePixels);
+    for (const key of selectionTiles) dirtyTileKeys.add(key);
+  }
+  // Dirty rendering is safe only when the target still contains the exact
+  // same viewport from the preceding frame. Selection-only animation requests
+  // have no dirty regions and continue to redraw from cached composite tiles.
+  const partial = !resized && sameViewport && !!dirtyTileKeys;
 
   if (!partial) {
     clearContext(out, viewport.outputWidth, viewport.outputHeight);
@@ -791,17 +858,17 @@ export function renderClean(doc: Document, target: HTMLCanvasElement) {
   render(doc, target, { checkerboard: false, selectionOverlay: false, proofing: false });
 }
 
-function renderOverscanPixels(doc: Document, displayScale: number) {
+export function viewportLayerPlan(layers: ReadonlyArray<Layer>, displayScale: number) {
   let extent = 2;
-  for (const layer of doc.layers) {
+  let fullBackdrop = false;
+  for (const layer of layers) {
     for (const filter of layer.filters ?? []) {
       if (!filter.enabled) continue;
-      if (filter.kind === "blur" || filter.kind === "sharpen") {
-        extent = Math.max(extent, (filter.params.radius ?? 8) * displayScale * 3);
-      }
+      extent = Math.max(extent, smartFilterInfluenceRadius(filter, displayScale));
     }
     for (const effect of layer.effects ?? []) {
       if (!effect.enabled) continue;
+      if (FULL_BACKDROP_KINDS.includes(effect.kind)) fullBackdrop = true;
       // Every effect that can paint outside the layer silhouette has to widen
       // the overscan, or it gets clipped at tile boundaries.
       const reach = layerEffectReach(effect);
@@ -810,7 +877,10 @@ function renderOverscanPixels(doc: Document, displayScale: number) {
   }
   // Bounded so a runaway radius cannot make every tile enormous, but high
   // enough for a heavy backdrop blur, whose seams are plainly visible.
-  return Math.max(2, Math.min(192, Math.ceil(extent)));
+  return {
+    fullBackdrop,
+    overscan: Math.max(2, Math.min(192, Math.ceil(extent))),
+  };
 }
 
 function applySoftProof(ctx: CanvasRenderingContext2D, doc: Document, width: number, height: number) {

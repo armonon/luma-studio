@@ -21,6 +21,33 @@ export type ViewportLimits = {
   maxPixels?: number;
 };
 
+const VIEWPORT_EPSILON = 1e-7;
+
+/**
+ * ResizeObserver and layout effects can report the same viewport more than
+ * once. Ignore floating-point noise only; backing-store or device-scale
+ * changes must always create a new plan.
+ */
+export function sameDisplayViewport(
+  current: DisplayViewport | null,
+  next: DisplayViewport,
+) {
+  if (!current) return false;
+  if (
+    current.outputWidth !== next.outputWidth
+    || current.outputHeight !== next.outputHeight
+  ) return false;
+  return (
+    Math.abs(current.x - next.x) <= VIEWPORT_EPSILON
+    && Math.abs(current.y - next.y) <= VIEWPORT_EPSILON
+    && Math.abs(current.width - next.width) <= VIEWPORT_EPSILON
+    && Math.abs(current.height - next.height) <= VIEWPORT_EPSILON
+    && Math.abs(current.zoom - next.zoom) <= VIEWPORT_EPSILON
+    && Math.abs(current.cssScale - next.cssScale) <= VIEWPORT_EPSILON
+    && Math.abs(current.devicePixelRatio - next.devicePixelRatio) <= VIEWPORT_EPSILON
+  );
+}
+
 const DEFAULT_MAX_DIMENSION = 4096;
 const DEFAULT_MAX_PIXELS = 12_000_000;
 

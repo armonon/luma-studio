@@ -15,6 +15,7 @@ import {
   deepClonePath,
 } from "./history-payload";
 import type { LayerSnapshot } from "./studio";
+import { cloneProAdjustment } from "./pro-adjustments";
 
 // Apply a single snapshot's fields to the given layer, in place. Returns
 // whether the layer bitmap or mask changed — the caller can use this to decide
@@ -40,6 +41,7 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
   if (snap.curves) layer.curves = cloneCurves(snap.curves);
   if (snap.levels) layer.levels = { ...snap.levels };
   if (snap.hsl) layer.hsl = { ...snap.hsl };
+  if (snap.proAdjustment) layer.proAdjustment = cloneProAdjustment(snap.proAdjustment);
   if (snap.path) layer.path = deepClonePath(snap.path);
   if (snap.parentId !== undefined) layer.parentId = snap.parentId ?? undefined;
   if (snap.locked !== undefined) layer.locked = snap.locked;

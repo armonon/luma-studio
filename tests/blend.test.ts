@@ -9,6 +9,8 @@ import {
   resolvedFillOpacity,
 } from "../app/engine/document.ts";
 import { GL_BLEND_ORDER } from "../app/engine/gl-shaders.ts";
+import { Studio } from "../app/engine/studio.ts";
+import { pixelAt, testCanvas } from "./canvas-harness.ts";
 
 const round = (values: readonly number[]) => values.map((value) => Number(value.toFixed(4)));
 
@@ -81,4 +83,51 @@ test("fill opacity defaults to full and clamps imported values", () => {
   assert.equal(resolvedFillOpacity({}), 1);
   assert.equal(resolvedFillOpacity({ fillOpacity: -2 }), 0);
   assert.equal(resolvedFillOpacity({ fillOpacity: 4 }), 1);
+});
+
+test("live Space Deck opacity previews commit as one undo step", () => {
+  const studio = new Studio(16, 16, testCanvas(16, 16));
+  const layer = studio.addBlankRaster("Paint");
+  studio.addBlendPass(layer.id, "screen");
+  const pass = resolvedBlendPasses(layer).find((candidate) => candidate.mode === "screen")!;
+  const historyBefore = studio.historyLabels().length;
+
+  studio.liveUpdateBlendPass(layer.id, pass.id, { opacity: 0.8 });
+  studio.liveUpdateBlendPass(layer.id, pass.id, { opacity: 0.5 });
+  studio.liveUpdateBlendPass(layer.id, pass.id, { opacity: 0.35 });
+  assert.equal(studio.historyLabels().length, historyBefore);
+  assert.equal(resolvedBlendPasses(layer).find((candidate) => candidate.id === pass.id)?.opacity, 0.35);
+
+  studio.commitBlendPass(layer.id, pass.id, { opacity: 0.35 });
+  assert.equal(studio.historyLabels().length, historyBefore + 1);
+  studio.undo();
+  assert.equal(resolvedBlendPasses(layer).find((candidate) => candidate.id === pass.id)?.opacity, 1);
+});
+
+test("Blend Graph recipes replace the graph in one undoable operation", () => {
+  const studio = new Studio(8, 8, testCanvas(8, 8));
+  const layer = studio.addBlankRaster("Graph");
+  assert.equal(studio.applyBlendRecipe(layer.id, "cinematic"), true);
+  assert.deepEqual(resolvedBlendPasses(layer).map(({ mode, opacity }) => [mode, opacity]), [
+    ["soft-light", 0.55], ["color", 0.38], ["screen", 0.12],
+  ]);
+  studio.undo();
+  assert.equal(resolvedBlendPasses(layer).length, 1);
+  studio.dispose();
+});
+
+test("Branch Mixer restores the current branch and adds the alternate version as a layer", () => {
+  const studio = new Studio(8, 8, testCanvas(8, 8));
+  const layer = studio.addBlankRaster("Base");
+  studio.fillLayer(layer.id, "#ef2038");
+  const redNode = studio.historyState().nodes.find((node) => node.label.includes("#ef2038"))!;
+  studio.undo();
+  studio.fillLayer(layer.id, "#175ee8");
+  const result = studio.mixHistoryBranch(redNode.id, 0.6, "soft-light");
+  assert.ok(result.layer?.name.startsWith("Branch Mix"));
+  assert.equal(result.layer?.opacity, 0.6);
+  assert.equal(result.layer?.blend, "soft-light");
+  assert.ok(pixelAt(result.layer!.bitmap!, 4, 4).r > 200);
+  assert.ok(pixelAt(studio.doc.layers.at(-1)!.bitmap!, 4, 4).b > 200);
+  studio.dispose();
 });

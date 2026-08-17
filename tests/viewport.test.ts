@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   calculateDisplayViewport,
   documentPointToViewport,
+  sameDisplayViewport,
   viewportPointToDocument,
 } from "../app/engine/viewport";
 
@@ -55,4 +56,21 @@ test("backing-store allocation is capped independently of document dimensions", 
   assert.ok(viewport.outputWidth * viewport.outputHeight <= 12_000_000);
   assert.ok(Number.isFinite(viewport.x));
   assert.ok(Number.isFinite(viewport.y));
+});
+
+test("viewport equality suppresses duplicate plans without swallowing real navigation", () => {
+  const first = calculateDisplayViewport(
+    6000,
+    4000,
+    1200,
+    800,
+    { zoom: 1.5, panX: 40, panY: -20 },
+    2,
+  );
+  assert.equal(sameDisplayViewport(first, { ...first }), true);
+  assert.equal(sameDisplayViewport(first, { ...first, x: first.x + 1e-8 }), true);
+  assert.equal(sameDisplayViewport(first, { ...first, x: first.x + 0.01 }), false);
+  assert.equal(sameDisplayViewport(first, { ...first, outputWidth: first.outputWidth + 1 }), false);
+  assert.equal(sameDisplayViewport(first, { ...first, devicePixelRatio: 1 }), false);
+  assert.equal(sameDisplayViewport(null, first), false);
 });

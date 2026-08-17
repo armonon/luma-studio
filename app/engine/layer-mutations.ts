@@ -3,9 +3,10 @@
 // layer-kind gate, and label — perfect for a single generic helper.
 
 import { Curves, HslParams, Layer, LayerKind, LevelsParams, ToneParams, cloneCurves } from "./document";
+import { cloneProAdjustment, type ProAdjustmentParams } from "./pro-adjustments";
 import type { LayerSnapshot } from "./studio";
 
-export type AdjustmentKind = "tone" | "curves" | "levels" | "hsl";
+export type AdjustmentKind = "tone" | "curves" | "levels" | "hsl" | "proAdjustment";
 
 // Discriminated shape: for a given kind, params[kind] is the correct type.
 export type AdjustmentParams = {
@@ -13,6 +14,7 @@ export type AdjustmentParams = {
   curves: Curves;
   levels: LevelsParams;
   hsl: HslParams;
+  proAdjustment: ProAdjustmentParams;
 };
 
 const KIND_TO_LAYER_KIND: Record<AdjustmentKind, LayerKind> = {
@@ -20,6 +22,7 @@ const KIND_TO_LAYER_KIND: Record<AdjustmentKind, LayerKind> = {
   curves: "adjustment-curves",
   levels: "adjustment-levels",
   hsl: "adjustment-hsl",
+  proAdjustment: "adjustment-pro",
 };
 
 const LABELS: Record<AdjustmentKind, string> = {
@@ -27,6 +30,7 @@ const LABELS: Record<AdjustmentKind, string> = {
   curves: "Curves adjusted",
   levels: "Levels adjusted",
   hsl: "HSL adjusted",
+  proAdjustment: "Professional adjustment updated",
 };
 
 export function adjustmentLayerKind(kind: AdjustmentKind): LayerKind {
@@ -43,6 +47,7 @@ export function cloneAdjustmentParams<K extends AdjustmentKind>(
   params: AdjustmentParams[K],
 ): AdjustmentParams[K] {
   if (kind === "curves") return cloneCurves(params as Curves) as AdjustmentParams[K];
+  if (kind === "proAdjustment") return cloneProAdjustment(params as ProAdjustmentParams) as AdjustmentParams[K];
   return { ...(params as object) } as AdjustmentParams[K];
 }
 

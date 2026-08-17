@@ -21,6 +21,34 @@ const MENU_COMMAND_EVENT: &str = "luma://menu-command";
 /// Mirrors OPEN_FILE_EVENT in app/desktop/menu-model.ts.
 const OPEN_FILE_EVENT: &str = "luma://open-file";
 
+#[derive(Default)]
+struct OpenFileBridge {
+    frontend_ready: bool,
+    pending: Vec<String>,
+}
+
+impl OpenFileBridge {
+    fn route(&mut self, path: String) -> Option<String> {
+        if self.frontend_ready {
+            Some(path)
+        } else {
+            self.pending.push(path);
+            None
+        }
+    }
+
+    fn mark_ready_and_take_pending(&mut self) -> Vec<String> {
+        self.frontend_ready = true;
+        std::mem::take(&mut self.pending)
+    }
+}
+
+/// A macOS open-document event may arrive before the webview has mounted.
+/// The readiness bit and queue share one lock so draining cannot race an event
+/// into a permanently stranded queue.
+static OPEN_FILE_BRIDGE: std::sync::Mutex<OpenFileBridge> =
+    std::sync::Mutex::new(OpenFileBridge { frontend_ready: false, pending: Vec::new() });
+
 /// The most recent files, newest first. Rebuilt into the File menu on demand.
 static RECENT_FILES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -235,6 +263,24 @@ async fn read_native_path(path: String) -> Result<Response, String> {
 }
 
 #[tauri::command]
+fn take_pending_open_files() -> Result<Vec<String>, String> {
+    let mut bridge = OPEN_FILE_BRIDGE.lock().map_err(|_| "open-file bridge lock poisoned")?;
+    Ok(bridge.mark_ready_and_take_pending())
+}
+
+fn route_open_file(app: &tauri::AppHandle, path: String) {
+    let immediate = match OPEN_FILE_BRIDGE.lock() {
+        Ok(mut bridge) => bridge.route(path),
+        // A poisoned convenience queue must not make all future document opens
+        // inert. Emitting is the safest degradation once the process is alive.
+        Err(_) => Some(path),
+    };
+    if let Some(path) = immediate {
+        let _ = app.emit(OPEN_FILE_EVENT, path);
+    }
+}
+
+#[tauri::command]
 async fn save_native_file(app: tauri::AppHandle, request: Request<'_>) -> Result<bool, String> {
     let InvokeBody::Raw(payload) = request.body() else {
         return Err("native save requires a raw binary request".into());
@@ -436,6 +482,7 @@ fn main() {
             open_ai_sign_in,
             set_recent_files,
             read_native_path,
+            take_pending_open_files,
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;
@@ -448,7 +495,7 @@ fn main() {
         .on_menu_event(|app, event| {
             let id = event.id().0.as_str();
             if let Some(path) = id.strip_prefix(RECENT_FILE_PREFIX) {
-                let _ = app.emit(OPEN_FILE_EVENT, path);
+                route_open_file(app, path.to_owned());
             } else {
                 let _ = app.emit(MENU_COMMAND_EVENT, id);
             }
@@ -467,7 +514,7 @@ fn main() {
                         .ok()
                         .and_then(|path| path.to_str().map(str::to_owned))
                         .unwrap_or_else(|| url.to_string());
-                    let _ = app.emit(OPEN_FILE_EVENT, path);
+                    route_open_file(app, path);
                 }
             }
         });
@@ -559,5 +606,18 @@ mod tests {
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
         std::fs::remove_file(target).unwrap();
         std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn cold_launch_files_are_buffered_then_live_files_route_immediately() {
+        let mut bridge = OpenFileBridge::default();
+        assert_eq!(bridge.route("/tmp/first.psd".into()), None);
+        assert_eq!(bridge.route("/tmp/second.luma".into()), None);
+        assert_eq!(
+            bridge.mark_ready_and_take_pending(),
+            vec!["/tmp/first.psd", "/tmp/second.luma"],
+        );
+        assert!(bridge.pending.is_empty());
+        assert_eq!(bridge.route("/tmp/live.psb".into()), Some("/tmp/live.psb".into()));
     }
 }

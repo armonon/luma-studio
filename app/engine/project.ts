@@ -95,6 +95,8 @@ type SerializedHistoryEntry = {
   after: SerializedLayerSnapshot[];
   layersBefore?: SerializedLayer[];
   layersAfter?: SerializedLayer[];
+  layerOrderBefore?: string[];
+  layerOrderAfter?: string[];
   selectionBefore?: { asset: string; bounds: Selection["bounds"] } | null;
   selectionAfter?: { asset: string; bounds: Selection["bounds"] } | null;
   selectionTranslation?: SerializedSelectionTranslationPatch;
@@ -129,6 +131,16 @@ export type DecodedProject = {
   doc: Document;
   actions: Action[];
   history?: OperationHistory<HistoryEntry>;
+};
+
+export type DecodeLumaProjectOptions = {
+  /**
+   * Recovery only needs the last committed document state. Skipping history
+   * leaves its archived assets compressed inside the ZIP instead of inflating
+   * every undo snapshot during startup. Normal project opens still restore the
+   * complete history by default.
+   */
+  restoreHistory?: boolean;
 };
 
 type EncodeContext = {
@@ -425,12 +437,25 @@ async function deserializeDocument(
     }
     const id = preserveIds ? brush.id : nextId("captured-brush");
     if (preserveIds) reserveId(id);
+    const source = brush.liveSource;
+    const liveSource = source && source.live === true && (source.mode === "merged" || source.mode === "layer") &&
+      [source.centerX, source.centerY, source.radius].every(Number.isFinite) && source.radius > 0
+      ? {
+        mode: source.mode,
+        layerId: source.layerId ? (idMap?.get(source.layerId) ?? source.layerId) : undefined,
+        centerX: source.centerX,
+        centerY: source.centerY,
+        radius: source.radius,
+        live: true as const,
+      }
+      : undefined;
     return {
       id,
       name: brush.name.slice(0, 80),
       sourceDiameter: brush.sourceDiameter,
       createdAt: brush.createdAt,
       bitmap: await readCanvasAsset(zip, brush.bitmapAsset),
+      liveSource,
     };
   }));
   const doc: Document = {
@@ -573,6 +598,8 @@ async function serializeHistoryEntry(
   if (entry.layersAfter) {
     serialized.layersAfter = await Promise.all(entry.layersAfter.map((layer) => serializeLayer(layer, context)));
   }
+  if (entry.layerOrderBefore) serialized.layerOrderBefore = [...entry.layerOrderBefore];
+  if (entry.layerOrderAfter) serialized.layerOrderAfter = [...entry.layerOrderAfter];
   if ("selectionBefore" in entry) {
     serialized.selectionBefore = entry.selectionBefore
       ? {
@@ -639,6 +666,8 @@ async function deserializeHistoryEntry(
   if (source.layersAfter) {
     entry.layersAfter = await Promise.all(source.layersAfter.map((layer) => deserializeLayer(layer, zip, true)));
   }
+  if (source.layerOrderBefore) entry.layerOrderBefore = [...source.layerOrderBefore];
+  if (source.layerOrderAfter) entry.layerOrderAfter = [...source.layerOrderAfter];
   if ("selectionBefore" in source) {
     entry.selectionBefore = source.selectionBefore
       ? {
@@ -780,7 +809,10 @@ function assertManifest(value: unknown): asserts value is ProjectManifest {
   }
 }
 
-export async function decodeLumaProject(blob: Blob | ArrayBuffer | Uint8Array): Promise<DecodedProject> {
+export async function decodeLumaProject(
+  blob: Blob | ArrayBuffer | Uint8Array,
+  options: DecodeLumaProjectOptions = {},
+): Promise<DecodedProject> {
   const zip = await JSZip.loadAsync(blob);
   const manifestFile = zip.file("manifest.json");
   if (!manifestFile) throw new Error("Project manifest is missing");
@@ -791,7 +823,7 @@ export async function decodeLumaProject(blob: Blob | ArrayBuffer | Uint8Array): 
     name: manifest.name,
     doc: await deserializeDocument(manifest.document, zip, preserveIds),
     actions: Array.isArray(manifest.actions) ? manifest.actions : [],
-    history: manifest.version >= 2 && manifest.history
+    history: options.restoreHistory !== false && manifest.version >= 2 && manifest.history
       ? await deserializeHistory(manifest.history, zip)
       : undefined,
   };

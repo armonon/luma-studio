@@ -149,6 +149,27 @@ test("document brush capture renders only the sampled region for merged and laye
   studio.dispose();
 });
 
+test("Living Source Brush refreshes from its linked layer once content changes", () => {
+  const studio = new Studio(32, 32, testCanvas(32, 32));
+  const layer = studio.addBlankRaster("Living source");
+  const context = layer.bitmap!.getContext("2d")!;
+  context.fillStyle = "#e51d3f";
+  context.fillRect(8, 8, 16, 16);
+  layer.surface = PrecisionTileSurface.fromImageData(context.getImageData(0, 0, 32, 32));
+  const asset = studio.captureBrushFromDocument(16, 16, 5, { sourceLayerId: layer.id, live: true });
+  assert.ok(asset?.liveSource?.live);
+  const center = (5 * 10 + 5) * 4;
+  assert.ok(studio.capturedBrushTip(asset.id, "color")!.data[center] > 200);
+  context.fillStyle = "#164dea";
+  context.fillRect(8, 8, 16, 16);
+  layer.surface = PrecisionTileSurface.fromImageData(context.getImageData(0, 0, 32, 32));
+  assert.equal(studio.refreshCapturedBrush(asset.id), true);
+  const refreshed = studio.capturedBrushTip(asset.id, "material")!;
+  assert.ok(refreshed.data[center + 2] > 200);
+  assert.equal(refreshed.mode, "material");
+  studio.dispose();
+});
+
 test("captured brushes paint into precision layers with undo and redo", () => {
   const studio = new Studio(20, 20, testCanvas(20, 20));
   const layer = studio.addBlankRaster("Captured paint");

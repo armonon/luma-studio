@@ -2139,6 +2139,433 @@ button {
   .timeline-mini > div { height: 20px; }
 }
 
+/* 2026 desktop command surface. This last layer intentionally overrides the
+   earlier graphite treatment without affecting the browser edition. */
+html[data-luma-platform="desktop"] .spatial-studio {
+  padding: 8px;
+  background:
+    radial-gradient(ellipse at 2% 88%, rgba(19, 91, 212, 0.26), transparent 33%),
+    radial-gradient(ellipse at 82% -10%, rgba(72, 101, 158, 0.14), transparent 38%),
+    #03050a;
+}
+
+html[data-luma-platform="desktop"] .spatial-window {
+  grid-template-rows: 47px minmax(0, 1fr) 20px;
+  border-color: rgba(255, 255, 255, 0.17);
+  border-radius: 13px;
+  background: #090b0f;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.64), inset 0 1px rgba(255, 255, 255, 0.07);
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar.spatial-topbar {
+  height: 47px;
+  background: linear-gradient(180deg, rgba(24, 27, 33, 0.98), rgba(15, 17, 22, 0.98));
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace {
+  grid-template-columns: 54px minmax(0, 1fr) 316px;
+}
+
+html[data-luma-platform="desktop"] .spatial-toolbar {
+  padding: 8px 6px;
+  background: linear-gradient(90deg, #11141a, #0d1015);
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button,
+html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  flex-basis: 40px;
+  border-radius: 9px;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button.active {
+  background: linear-gradient(145deg, rgba(29, 145, 255, 0.28), rgba(8, 90, 190, 0.17));
+  box-shadow: inset 0 0 0 1px rgba(75, 169, 255, 0.2), 0 4px 12px rgba(0, 85, 190, 0.14);
+}
+
+html[data-luma-platform="desktop"] .spatial-canvas-stage::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  border: 1px solid rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 18px 45px rgba(0, 0, 0, 0.16), inset 0 -22px 60px rgba(0, 0, 0, 0.18);
+  content: "";
+  pointer-events: none;
+}
+
+html[data-luma-platform="desktop"][data-space-held="true"] .spatial-canvas-stage canvas {
+  cursor: grab !important;
+}
+
+html[data-luma-platform="desktop"][data-space-held="true"] .spatial-canvas-stage canvas:active {
+  cursor: grabbing !important;
+}
+
+html[data-luma-platform="desktop"] .virtual-layer-stack {
+  position: relative;
+  contain: strict;
+  overflow: auto !important;
+  scrollbar-gutter: stable;
+}
+
+html[data-luma-platform="desktop"] .virtual-layer-spacer,
+html[data-luma-platform="desktop"] .virtual-layer-window {
+  position: relative;
+  width: 100%;
+}
+
+html[data-luma-platform="desktop"] .virtual-layer-window {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+html[data-luma-platform="desktop"] .virtual-layer-stack .spatial-layer {
+  position: absolute;
+  left: 0;
+  margin: 0 !important;
+  padding-left: calc(7px + var(--layer-indent, 0px));
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: 38px minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target > .spatial-layer-thumb {
+  width: 36px;
+  height: 32px;
+  grid-column: auto;
+  border-radius: 6px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target strong {
+  overflow: hidden;
+  color: #e4e7ed;
+  font-size: 10px;
+  font-weight: 590;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target small {
+  color: #6d7480;
+  font-size: 7.5px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-target > button,
+html[data-luma-platform="desktop"] .desktop-empty-action {
+  height: 27px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 7px;
+  background: #191d24;
+  color: #9fc9f6;
+  cursor: pointer;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-buttons {
+  justify-content: stretch;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-buttons > button {
+  flex: 1;
+}
+
+html[data-luma-platform="desktop"] .desktop-empty-action {
+  margin-top: 12px;
+}
+
+html[data-luma-platform="desktop"] .desktop-space-hint {
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 0 11px;
+  border: 1px solid rgba(69, 155, 255, 0.15);
+  border-radius: 10px;
+  background: linear-gradient(120deg, rgba(18, 91, 170, 0.14), rgba(255, 255, 255, 0.025));
+}
+
+html[data-luma-platform="desktop"] .desktop-space-hint > kbd {
+  display: grid;
+  height: 25px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  border-bottom-color: rgba(255, 255, 255, 0.24);
+  border-radius: 6px;
+  background: #20252d;
+  color: #dbe9f8;
+  font-size: 7px;
+  box-shadow: 0 2px 0 #090b0e;
+}
+
+html[data-luma-platform="desktop"] .desktop-space-hint > span {
+  display: grid;
+  gap: 2px;
+}
+
+html[data-luma-platform="desktop"] .desktop-space-hint strong { color: #cdd9e7; font-size: 9px; }
+html[data-luma-platform="desktop"] .desktop-space-hint small { color: #707885; font-size: 7.5px; }
+
+html[data-luma-platform="desktop"] .space-deck {
+  position: absolute;
+  z-index: 40;
+  display: grid;
+  width: min(560px, calc(100% - 28px));
+  box-sizing: border-box;
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.19);
+  border-radius: 17px;
+  background:
+    linear-gradient(145deg, rgba(31, 36, 45, 0.93), rgba(12, 15, 21, 0.95)),
+    rgba(11, 14, 20, 0.92);
+  box-shadow: 0 28px 75px rgba(0, 0, 0, 0.68), inset 0 1px rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  color: #eef2f7;
+  pointer-events: auto;
+  backdrop-filter: blur(28px) saturate(1.25);
+  animation: space-deck-in 145ms cubic-bezier(0.2, 0.85, 0.2, 1) both;
+}
+
+@keyframes space-deck-in {
+  from { opacity: 0; transform: translateY(9px) scale(0.97); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+html[data-luma-platform="desktop"] .space-deck-header {
+  display: grid;
+  height: 26px;
+  grid-template-columns: minmax(0, 1fr) minmax(80px, auto) 24px 24px;
+  align-items: center;
+  gap: 9px;
+}
+
+html[data-luma-platform="desktop"] .space-deck-header > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+html[data-luma-platform="desktop"] .space-deck-header i { color: #58aaff; font-size: 10px; font-style: normal; }
+html[data-luma-platform="desktop"] .space-deck-header strong { font-size: 10px; font-weight: 650; }
+html[data-luma-platform="desktop"] .space-deck-header small {
+  padding: 3px 6px;
+  border-radius: 99px;
+  background: rgba(72, 157, 255, 0.12);
+  color: #75b5f7;
+  font-size: 7px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html[data-luma-platform="desktop"] .space-deck-target {
+  overflow: hidden;
+  color: #747c88;
+  font-size: 8px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-luma-platform="desktop"] .space-deck-header > button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #818995;
+  cursor: pointer;
+}
+
+html[data-luma-platform="desktop"] .space-deck-header > button:hover { background: rgba(255, 255, 255, 0.08); color: white; }
+html[data-luma-platform="desktop"] .space-deck-header > .space-deck-pin[aria-pressed="true"] {
+  background: rgba(45, 143, 246, 0.16);
+  color: #65b2ff;
+  box-shadow: inset 0 0 0 1px rgba(76, 165, 255, 0.24);
+}
+
+html[data-luma-platform="desktop"] .space-deck-features {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(142px, 1fr));
+  gap: 7px;
+}
+
+html[data-luma-platform="desktop"] .space-feature {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 58px;
+  padding: 9px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 10px;
+  background: linear-gradient(145deg, rgba(37, 43, 54, 0.72), rgba(14, 17, 23, 0.78));
+  color: #d9e0e9;
+}
+
+html[data-luma-platform="desktop"] .space-feature strong { font-size: 8px; font-weight: 650; }
+html[data-luma-platform="desktop"] .space-feature small { color: #737d8b; font-size: 6.5px; }
+
+html[data-luma-platform="desktop"] .space-feature-range {
+  display: grid;
+  align-content: center;
+  gap: 7px;
+}
+
+html[data-luma-platform="desktop"] .space-feature-range > span,
+html[data-luma-platform="desktop"] .space-feature-color > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+html[data-luma-platform="desktop"] .space-feature-range output {
+  color: #7eb9f4;
+  font-size: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-luma-platform="desktop"] .space-feature-range input {
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  accent-color: #3298ff;
+}
+
+html[data-luma-platform="desktop"] .space-feature-choice,
+html[data-luma-platform="desktop"] .space-feature-text {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+}
+
+html[data-luma-platform="desktop"] .space-feature-choice select,
+html[data-luma-platform="desktop"] .space-feature-text input {
+  width: 100%;
+  min-width: 0;
+  height: 25px;
+  box-sizing: border-box;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: #151a22;
+  color: #dce5ef;
+  font-size: 8px;
+}
+
+html[data-luma-platform="desktop"] .space-feature-text { grid-column: span 2; }
+
+html[data-luma-platform="desktop"] .space-feature-color {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+html[data-luma-platform="desktop"] .space-feature-color > span { display: grid; justify-content: initial; gap: 3px; }
+html[data-luma-platform="desktop"] .space-feature-color input {
+  width: 34px;
+  height: 30px;
+  padding: 1px;
+  border: 0;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+html[data-luma-platform="desktop"] button.space-feature-toggle,
+html[data-luma-platform="desktop"] button.space-feature-action {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+  cursor: pointer;
+}
+
+html[data-luma-platform="desktop"] button.space-feature-toggle > i,
+html[data-luma-platform="desktop"] button.space-feature-action > i {
+  color: #68adf3;
+  font-size: 13px;
+  font-style: normal;
+  text-align: center;
+}
+
+html[data-luma-platform="desktop"] button.space-feature-toggle > span,
+html[data-luma-platform="desktop"] button.space-feature-action > span { display: grid; min-width: 0; gap: 2px; }
+html[data-luma-platform="desktop"] button.space-feature-toggle.active {
+  border-color: rgba(67, 157, 255, 0.4);
+  background: rgba(38, 126, 221, 0.12);
+}
+html[data-luma-platform="desktop"] button.space-feature-action:hover,
+html[data-luma-platform="desktop"] button.space-feature-toggle:hover { border-color: rgba(67, 157, 255, 0.36); }
+html[data-luma-platform="desktop"] button.space-feature-action:disabled { cursor: default; opacity: 0.35; }
+
+html[data-luma-platform="desktop"] .space-deck-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+html[data-luma-platform="desktop"] .space-deck-actions > button {
+  display: grid;
+  min-width: 0;
+  height: 50px;
+  grid-template-columns: 16px 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.028);
+  color: #cbd2dc;
+  text-align: left;
+  cursor: pointer;
+}
+
+html[data-luma-platform="desktop"] .space-deck-actions > button:hover { border-color: rgba(67, 157, 255, 0.36); background: rgba(38, 126, 221, 0.1); }
+html[data-luma-platform="desktop"] .space-deck-actions kbd { color: #687382; font-size: 7px; }
+html[data-luma-platform="desktop"] .space-deck-actions i { color: #77b8fa; font-size: 13px; font-style: normal; text-align: center; }
+html[data-luma-platform="desktop"] .space-deck-actions span { display: grid; min-width: 0; gap: 2px; }
+html[data-luma-platform="desktop"] .space-deck-actions strong { overflow: hidden; font-size: 8px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
+html[data-luma-platform="desktop"] .space-deck-actions small { overflow: hidden; color: #6f7885; font-size: 6.5px; text-overflow: ellipsis; white-space: nowrap; }
+
+html[data-luma-platform="desktop"] .space-deck > footer {
+  display: flex;
+  justify-content: space-between;
+  color: #626b78;
+  font-size: 6.5px;
+}
+
+html[data-luma-platform="desktop"] .space-deck > footer kbd {
+  padding: 2px 4px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  color: #929ba8;
+  font-size: 6.5px;
+}
+
+@media (max-width: 1060px) {
+  html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 50px minmax(0, 1fr) 286px; }
+  html[data-luma-platform="desktop"] .space-deck { width: min(500px, calc(100% - 28px)); }
+  html[data-luma-platform="desktop"] .space-deck-actions small { display: none; }
+}
+
 /* Layer Focus — visual editing scope, intentionally separate from Layers. */
 .spatial-canvas-column {
   grid-template-rows: 44px 28px minmax(0, 1fr) 118px;
@@ -11078,4 +11505,891 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
 .layer-style-preset select {
   height: 26px;
   font-size: 8px;
+}
+
+/* Native graphite workspace — the desktop edition intentionally has its own
+   density and hierarchy instead of inheriting the brighter browser shell. */
+html[data-luma-platform="desktop"] body:has(.spatial-studio) {
+  min-width: 900px;
+  overflow: hidden;
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at 3% 65%, rgba(29, 88, 185, 0.28), transparent 34%),
+    radial-gradient(circle at 88% 0%, rgba(77, 72, 110, 0.15), transparent 36%),
+    #04060b;
+}
+
+html[data-luma-platform="desktop"] .spatial-studio {
+  --studio-bg: #080a0e;
+  --studio-surface: #111317;
+  --studio-surface-raised: #17191e;
+  --studio-surface-hover: #20242b;
+  --studio-line: rgba(255, 255, 255, 0.085);
+  --studio-line-strong: rgba(255, 255, 255, 0.15);
+  --studio-text: #e4e7ed;
+  --studio-text-muted: #989da8;
+  --studio-tertiary: #656b75;
+  --studio-accent: #087cf0;
+  --studio-accent-bright: #2995ff;
+  --studio-accent-soft: rgba(8, 124, 240, 0.2);
+  min-height: 100vh;
+  padding: 13px 12px 12px;
+  box-sizing: border-box;
+  background:
+    radial-gradient(circle at 0 70%, rgba(24, 91, 202, 0.26), transparent 26%),
+    linear-gradient(140deg, #05070c, #0d1018 58%, #07090e);
+  color: var(--studio-text);
+}
+
+html[data-luma-platform="desktop"] .spatial-window {
+  position: relative;
+  inset: auto;
+  width: 100%;
+  height: 100%;
+  grid-template-rows: 46px minmax(0, 1fr) 19px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 17px;
+  background: #090a0d;
+  box-shadow:
+    0 28px 70px rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.75),
+    inset 0 1px rgba(255, 255, 255, 0.08);
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar.spatial-topbar {
+  height: 46px;
+  grid-template-columns: minmax(145px, 0.7fr) minmax(160px, auto) minmax(360px, 1fr);
+  gap: 10px;
+  padding: 0 10px 0 82px;
+  border-bottom: 1px solid #25282e;
+  background: linear-gradient(180deg, #15171b, #101115);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+  color: #d9dce2;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-product-name {
+  color: #bfc3cb;
+  font-size: 10px;
+  font-weight: 590;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-project-title strong {
+  color: #d8dbe1;
+  font-size: 10px;
+  font-weight: 590;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-project-title span {
+  color: #606670;
+  font-size: 7px;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-header-button,
+html[data-luma-platform="desktop"] .studio-titlebar .studio-icon-button,
+html[data-luma-platform="desktop"] .studio-titlebar .spatial-export,
+html[data-luma-platform="desktop"] .studio-app-menu > summary {
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 6px;
+  background: #191b20;
+  color: #aeb3bd;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-icon-button,
+html[data-luma-platform="desktop"] .studio-app-menu > summary {
+  width: 28px;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .spatial-export {
+  min-width: 70px;
+  padding: 0 9px;
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #202329;
+  color: #d9dce2;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-header-button:hover,
+html[data-luma-platform="desktop"] .studio-titlebar .studio-icon-button:hover,
+html[data-luma-platform="desktop"] .studio-app-menu > summary:hover,
+html[data-luma-platform="desktop"] .studio-titlebar .spatial-export:hover {
+  border-color: rgba(63, 154, 255, 0.46);
+  background: #262a31;
+  color: white;
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-action-divider {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html[data-luma-platform="desktop"] .studio-titlebar .studio-zoom-readout {
+  color: #a3a8b1;
+}
+
+html[data-luma-platform="desktop"] .studio-app-menu > div {
+  border-color: var(--studio-line-strong);
+  background: rgba(24, 26, 31, 0.985);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.45);
+}
+
+html[data-luma-platform="desktop"] .studio-app-menu > div button {
+  color: #c6cad2;
+}
+
+html[data-luma-platform="desktop"] .studio-app-menu > div button:hover,
+html[data-luma-platform="desktop"] .studio-app-menu > div button.active {
+  background: rgba(8, 124, 240, 0.18);
+  color: #63adff;
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace {
+  grid-template-columns: 50px minmax(0, 1fr) 300px;
+  gap: 0;
+  padding: 0;
+  background: #08090c;
+}
+
+html[data-luma-platform="desktop"] .spatial-toolbar {
+  z-index: 18;
+  padding: 7px 4px 6px;
+  border-right: 1px solid #292c32;
+  background: linear-gradient(90deg, #111317, #0f1114);
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories {
+  gap: 2px;
+  overflow-y: auto;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button,
+html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
+  width: 38px;
+  height: 38px;
+  min-height: 38px;
+  flex: 0 0 38px;
+  grid-template-rows: 1fr;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #9da3ad;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button svg,
+html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 1.55;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button > span,
+html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger > span {
+  display: none;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button:hover {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #1c2026;
+  color: #e0e3e9;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > button.active {
+  border-color: rgba(43, 148, 255, 0.26);
+  background: rgba(8, 124, 240, 0.2);
+  color: #4ba3ff;
+  box-shadow: inset 2px 0 #1888f4;
+}
+
+html[data-luma-platform="desktop"] .primary-tool-categories > .tool-library-trigger {
+  margin-top: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+html[data-luma-platform="desktop"] .tool-family-menu,
+html[data-luma-platform="desktop"] .tool-palette {
+  border-color: var(--studio-line-strong);
+  background: rgba(18, 20, 25, 0.98);
+  color: #e2e5ea;
+  box-shadow: 0 24px 75px rgba(0, 0, 0, 0.52);
+}
+
+html[data-luma-platform="desktop"] .spatial-canvas-column,
+html[data-luma-platform="desktop"] .spatial-canvas-column[data-assets-open="false"] {
+  grid-template-rows: 38px minmax(0, 1fr);
+  background: #07080b;
+}
+
+html[data-luma-platform="desktop"] .spatial-document-tabs {
+  display: none;
+}
+
+html[data-luma-platform="desktop"] .studio-contextbar {
+  min-height: 38px;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid #292c32;
+  background: linear-gradient(180deg, #15171b, #101216);
+  color: #c5c9d0;
+}
+
+html[data-luma-platform="desktop"] .studio-context-identity {
+  min-width: 112px;
+  gap: 6px;
+  padding-right: 8px;
+  border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+html[data-luma-platform="desktop"] .studio-context-identity > span {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #1b1e24;
+  color: #53a7ff;
+}
+
+html[data-luma-platform="desktop"] .studio-context-identity strong {
+  color: #d6d9df;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .studio-context-identity small,
+html[data-luma-platform="desktop"] .studio-context-summary small {
+  display: none;
+}
+
+html[data-luma-platform="desktop"] .studio-context-summary span,
+html[data-luma-platform="desktop"] .context-range,
+html[data-luma-platform="desktop"] .context-select {
+  color: #969ca6;
+}
+
+html[data-luma-platform="desktop"] .context-range output {
+  color: #c5c9d0;
+}
+
+html[data-luma-platform="desktop"] .context-range input[type="range"],
+html[data-luma-platform="desktop"] .layer-controls input[type="range"],
+html[data-luma-platform="desktop"] .desktop-property-range input[type="range"] {
+  accent-color: #0b83fa;
+}
+
+html[data-luma-platform="desktop"] .context-segmented {
+  background: #0c0e12;
+}
+
+html[data-luma-platform="desktop"] .context-segmented button,
+html[data-luma-platform="desktop"] .studio-context-actions button {
+  color: #8f959f;
+}
+
+html[data-luma-platform="desktop"] .context-segmented button:hover,
+html[data-luma-platform="desktop"] .context-segmented button.active,
+html[data-luma-platform="desktop"] .studio-context-actions button:hover,
+html[data-luma-platform="desktop"] .studio-context-actions button.active {
+  background: #22262c;
+  color: #dfe2e8;
+  box-shadow: none;
+}
+
+html[data-luma-platform="desktop"] .spatial-canvas-stage,
+html[data-luma-platform="desktop"] .spatial-canvas {
+  background:
+    radial-gradient(circle at center, rgba(31, 35, 43, 0.5), transparent 60%),
+    #06070a;
+}
+
+html[data-luma-platform="desktop"] .spatial-canvas-stage {
+  min-height: 0;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.025);
+}
+
+html[data-luma-platform="desktop"] .document-overlay-plane {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 15px 38px rgba(0, 0, 0, 0.42);
+}
+
+html[data-luma-platform="desktop"] .canvas-status {
+  display: none;
+}
+
+html[data-luma-platform="desktop"] .desktop-radial-overlay {
+  position: absolute;
+  z-index: 15;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(241, 244, 249, 0.8);
+  border-radius: 50%;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72));
+  pointer-events: none;
+}
+
+html[data-luma-platform="desktop"] .desktop-radial-overlay::before,
+html[data-luma-platform="desktop"] .desktop-radial-overlay::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  background: rgba(255, 255, 255, 0.55);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+html[data-luma-platform="desktop"] .desktop-radial-overlay::before {
+  width: 22px;
+  height: 1px;
+}
+
+html[data-luma-platform="desktop"] .desktop-radial-overlay::after {
+  width: 1px;
+  height: 22px;
+}
+
+html[data-luma-platform="desktop"] .desktop-radial-overlay > b {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 13px;
+  height: 13px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
+html[data-luma-platform="desktop"] .radial-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid #3a3d43;
+  border-radius: 50%;
+  background: #f3f3f3;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+html[data-luma-platform="desktop"] .radial-handle-top { top: -5px; left: calc(50% - 5px); }
+html[data-luma-platform="desktop"] .radial-handle-right { top: calc(50% - 5px); right: -5px; }
+html[data-luma-platform="desktop"] .radial-handle-bottom { bottom: -5px; left: calc(50% - 5px); }
+html[data-luma-platform="desktop"] .radial-handle-left { top: calc(50% - 5px); left: -5px; }
+
+html[data-luma-platform="desktop"] .desktop-pass-deck {
+  position: absolute;
+  z-index: 22;
+  right: 24px;
+  bottom: 28px;
+  display: flex;
+  width: min(310px, 46%);
+  flex-direction: column;
+  align-items: stretch;
+  pointer-events: none;
+  perspective: 700px;
+  animation: desktop-pass-deck-in 150ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes desktop-pass-deck-in {
+  from {
+    opacity: 0;
+    transform: translate3d(18px, 24px, 0) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card {
+  position: relative;
+  display: grid;
+  height: 76px;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-rows: 18px 1fr;
+  align-content: center;
+  gap: 0;
+  margin-top: -17px;
+  padding: 13px 18px 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 12px;
+  background:
+    linear-gradient(105deg, rgba(12, 16, 24, 0.93), rgba(32, 39, 50, 0.76)),
+    url('/film-mountain.jpg') center 58% / cover;
+  color: #e8ebf0;
+  box-shadow: 0 11px 25px rgba(0, 0, 0, 0.5), inset 0 1px rgba(255, 255, 255, 0.1);
+  text-align: left;
+  transform: rotateX(-4deg) rotateZ(0.8deg);
+  transform-origin: center bottom;
+  pointer-events: auto;
+  cursor: pointer;
+  backdrop-filter: blur(18px) saturate(1.2);
+  transition: transform 150ms ease, border-color 150ms ease, filter 150ms ease;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card:first-child {
+  margin-top: 0;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card:nth-child(2) { transform: translateX(-7px) rotateX(-4deg) rotateZ(1deg); }
+html[data-luma-platform="desktop"] .desktop-pass-card:nth-child(3) { transform: translateX(-14px) rotateX(-4deg) rotateZ(1.15deg); }
+html[data-luma-platform="desktop"] .desktop-pass-card:nth-child(4) { transform: translateX(-21px) rotateX(-4deg) rotateZ(1.35deg); }
+
+html[data-luma-platform="desktop"] .desktop-pass-card::after {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(9, 12, 18, 0.92), rgba(17, 22, 30, 0.28));
+  content: "";
+  pointer-events: none;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card.tint-sky { background-position: center 16%; }
+html[data-luma-platform="desktop"] .desktop-pass-card.tint-stone { background-position: center 48%; }
+html[data-luma-platform="desktop"] .desktop-pass-card.tint-shadow { filter: brightness(0.7) saturate(0.7); }
+html[data-luma-platform="desktop"] .desktop-pass-card.tint-warm { filter: sepia(0.35) saturate(1.25); }
+
+html[data-luma-platform="desktop"] .desktop-pass-card:hover,
+html[data-luma-platform="desktop"] .desktop-pass-card.active {
+  border-color: rgba(77, 166, 255, 0.72);
+  filter: brightness(1.08);
+  transform: translateX(-8px) translateY(-3px) rotateX(0deg) rotateZ(0deg);
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card > span,
+html[data-luma-platform="desktop"] .desktop-pass-card > strong,
+html[data-luma-platform="desktop"] .desktop-pass-card > i {
+  position: relative;
+  z-index: 1;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card > span {
+  grid-column: 1;
+  color: #a3a9b4;
+  font-size: 8px;
+  font-weight: 620;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card > strong {
+  grid-column: 1;
+  color: #f2f4f7;
+  font-size: 17px;
+  font-style: italic;
+  font-weight: 430;
+  letter-spacing: -0.025em;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card > i {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
+  color: #aeb5c0;
+  font-size: 15px;
+  font-style: normal;
+  text-align: center;
+}
+
+html[data-luma-platform="desktop"] .desktop-pass-card.active > i {
+  color: #51a9ff;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid #2a2d33;
+  background: linear-gradient(180deg, #121418, #0d0f12);
+  color: #dfe2e7;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+html[data-luma-platform="desktop"] .inspector-tabs,
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .spatial-view-dock {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector > .glass-card {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
+  order: 1;
+  display: flex !important;
+  height: 57%;
+  min-height: 360px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-bottom: 1px solid #2a2d33;
+  background: transparent;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .desktop-properties-card {
+  order: 2;
+  display: block !important;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  background: transparent;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #d4d8df;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.065);
+  background: rgba(7, 8, 11, 0.17);
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header strong {
+  color: #e2e5e9;
+  font-size: 11px;
+  font-weight: 630;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header small {
+  color: #656b75;
+  font-size: 7px;
+  letter-spacing: 0.08em;
+}
+
+html[data-luma-platform="desktop"] .layers-card > header {
+  order: 1;
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-controls {
+  order: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.11);
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-controls > label {
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(24px, 1fr) 29px;
+  gap: 5px;
+  padding: 0;
+  color: #a6abb4;
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-controls > div:not(.blend-stack-editor),
+html[data-luma-platform="desktop"] .layers-card .layer-controls > button,
+html[data-luma-platform="desktop"] .layers-card .layer-controls > details {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .layers-card .blend-stack-editor {
+  grid-column: 1;
+  grid-row: 1;
+  display: block;
+  padding: 0;
+  border: 0;
+}
+
+html[data-luma-platform="desktop"] .layers-card .blend-stack-heading,
+html[data-luma-platform="desktop"] .layers-card .blend-stack-heading + p,
+html[data-luma-platform="desktop"] .layers-card .blend-pass-topline,
+html[data-luma-platform="desktop"] .layers-card .blend-pass > label,
+html[data-luma-platform="desktop"] .layers-card .blend-pass-list > .blend-pass:not(:first-child),
+html[data-luma-platform="desktop"] .layers-card .advanced-blending {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .layers-card .blend-pass-list,
+html[data-luma-platform="desktop"] .layers-card .blend-pass {
+  display: block;
+  padding: 0;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+html[data-luma-platform="desktop"] .layers-card .blend-pass select {
+  width: 100%;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 5px !important;
+  background: #1a1d22 !important;
+  color: #d6dae1 !important;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-stack {
+  order: 3;
+  min-height: 0;
+  max-height: none;
+  flex: 1 1 auto;
+  padding: 4px 5px 6px;
+  overflow: auto;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer {
+  display: grid;
+  width: 100%;
+  min-height: 43px;
+  grid-template-columns: 17px 37px minmax(0, 1fr);
+  gap: 7px;
+  margin: 1px 0 !important;
+  padding: 3px 7px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #d5d8de;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer:hover {
+  border-color: rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+html[data-luma-platform="desktop"] .spatial-layer.active {
+  border-color: rgba(34, 144, 255, 0.42);
+  background: linear-gradient(90deg, rgba(11, 102, 194, 0.55), rgba(13, 84, 157, 0.38));
+  box-shadow: inset 2px 0 #238df4;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer > i {
+  grid-column: 1;
+  grid-row: 1;
+  order: -1;
+  color: #aeb4be;
+  opacity: 0.8;
+  font-size: 10px;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer-thumb {
+  grid-column: 2;
+  width: 37px;
+  height: 32px;
+  border-color: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  background-image: linear-gradient(rgba(20, 24, 31, 0.18), rgba(20, 24, 31, 0.18)), url('/desert.jpg');
+  background-position: center;
+  background-size: cover;
+  color: transparent;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer .layer-name {
+  grid-column: 3;
+  min-width: 0;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer strong,
+html[data-luma-platform="desktop"] .spatial-layer .layer-name strong {
+  color: #daddE4;
+  font-size: 9.5px;
+  font-weight: 520;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer .layer-name small {
+  display: none;
+}
+
+html[data-luma-platform="desktop"] .layer-add-menu button {
+  color: #8f959f;
+}
+
+html[data-luma-platform="desktop"] .layers-card > header:hover .layer-add-menu button:nth-child(n + 3),
+html[data-luma-platform="desktop"] .layers-card > header:focus-within .layer-add-menu button:nth-child(n + 3) {
+  width: 24px;
+}
+
+html[data-luma-platform="desktop"] .desktop-properties-body {
+  display: grid;
+  gap: 0;
+  padding: 4px 12px 14px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch,
+html[data-luma-platform="desktop"] .desktop-property-row,
+html[data-luma-platform="desktop"] .desktop-property-range {
+  min-height: 48px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch > span {
+  display: grid;
+  gap: 2px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch strong {
+  color: #d6d9df;
+  font-size: 10px;
+  font-weight: 570;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch small {
+  color: #666c75;
+  font-size: 7.5px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch > button {
+  position: relative;
+  width: 30px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #393d44;
+  cursor: pointer;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch > button i {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform 140ms ease;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch > button.active {
+  background: #087cf0;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch > button.active i {
+  transform: translateX(13px);
+}
+
+html[data-luma-platform="desktop"] .desktop-property-range {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) 39px;
+  align-items: center;
+  gap: 7px;
+  color: #9ca2ac;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-range input {
+  width: 100%;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-range output {
+  color: #c9cdd4;
+  font-size: 8px;
+  text-align: right;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #9ca2ac;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-row > button {
+  height: 25px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  background: #191c21;
+  color: #8d939d;
+  font-size: 8px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-row > button.active {
+  border-color: rgba(41, 149, 255, 0.35);
+  color: #58aaff;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-layer strong {
+  max-width: 170px;
+  overflow: hidden;
+  color: #cfd3da;
+  font-size: 9px;
+  font-weight: 530;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-luma-platform="desktop"] .spatial-studio select,
+html[data-luma-platform="desktop"] .spatial-studio textarea,
+html[data-luma-platform="desktop"] .spatial-studio input:not([type="range"]):not([type="color"]),
+html[data-luma-platform="desktop"] .batch-modal select,
+html[data-luma-platform="desktop"] .layer-controls select {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+  background: #181b20 !important;
+  color: #d1d5dc !important;
+}
+
+html[data-luma-platform="desktop"] .desktop-statusbar {
+  height: 19px;
+  padding: 0 8px;
+  border-top: 1px solid #24272c;
+  background: #0f1114;
+  color: #656b74;
+  font-size: 7px;
+}
+
+html[data-luma-platform="desktop"] .desktop-status-brand {
+  color: #9197a0;
+}
+
+@media (max-height: 760px) {
+  html[data-luma-platform="desktop"] .spatial-window {
+    grid-template-rows: 43px minmax(0, 1fr) 18px;
+  }
+
+  html[data-luma-platform="desktop"] .studio-titlebar.spatial-topbar {
+    height: 43px;
+  }
+
+  html[data-luma-platform="desktop"] .primary-tool-categories > button,
+  html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
+    height: 34px;
+    min-height: 34px;
+    flex-basis: 34px;
+  }
+
+  html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
+    min-height: 320px;
+  }
+
+  html[data-luma-platform="desktop"] .desktop-pass-card {
+    height: 67px;
+  }
+}
+
+/* Final native-shell cascade: later legacy compatibility rules above must not
+   restore the older browser-like proportions. */
+html[data-luma-platform="desktop"] .spatial-studio { padding: 8px; }
+html[data-luma-platform="desktop"] .spatial-window {
+  grid-template-rows: 47px minmax(0, 1fr) 20px;
+  border-radius: 13px;
+}
+html[data-luma-platform="desktop"] .studio-titlebar.spatial-topbar { height: 47px; }
+html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 54px minmax(0, 1fr) 316px; }
+html[data-luma-platform="desktop"] .spatial-toolbar { padding: 8px 6px; }
+html[data-luma-platform="desktop"] .primary-tool-categories > button,
+html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  flex-basis: 40px;
+  border-radius: 9px;
+}
+
+@media (max-width: 1060px) {
+  html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 50px minmax(0, 1fr) 286px; }
 }

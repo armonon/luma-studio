@@ -314,6 +314,19 @@ test("lossless-JPEG DNG develops its CFA samples locally", () => {
   assert.equal(decodeDng(fixture.output, "compressed.dng").provenance.boundary, "tiff-lossless-jpeg-bayer");
 });
 
+test("standards-based TIFF CFA camera RAWs use the float sensor pipeline when compatible", () => {
+  const fixture = syntheticDng({ compression: 1 });
+  const result = ingestRaw(fixture.output, "compatible.nef");
+  assert.equal(result.kind, "developed-raw");
+  if (result.kind === "developed-raw") {
+    assert.equal(result.developed.provenance.format, "NEF");
+    assert.equal(result.developed.provenance.mode, "camera-raw-developed");
+    assert.equal(result.developed.provenance.decoder, "luma-camera-tiff-v1");
+    assert.ok(result.developed.metadata.warnings.some((warning) => warning.includes("TIFF CFA compatibility")));
+    assert.equal(result.developed.pixels.length, result.developed.width * result.developed.height * 4);
+  }
+});
+
 test("RAW ingestion falls back to an embedded preview and preserves typed decode failure", () => {
   const fixture = syntheticDng({ compression: 34892 });
   const jpeg = new Uint8Array(1400).fill(9);

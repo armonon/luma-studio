@@ -173,6 +173,7 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
     bitmap: capturedBrushBitmap,
     sourceDiameter: 96,
     createdAt: "2026-08-09T00:00:00.000Z",
+    liveSource: { mode: "layer", layerId: layer.id, centerX: 2, centerY: 3, radius: 48, live: true },
   }];
   doc.layerComps = [{
     id: "layer-comp-proof",
@@ -231,6 +232,8 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
       after: Uint8Array.from([4, 5, 6]),
       updateBitmap: false,
     }],
+    layerOrderBefore: [layer.id, "future-layer"],
+    layerOrderAfter: ["future-layer", layer.id],
   });
   layer.opacity = 0.8;
 
@@ -238,6 +241,10 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   const encodedZip = await JSZip.loadAsync(await blob.arrayBuffer());
   assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/precision/") && !path.endsWith("/")).length, 3);
   assert.equal(Object.keys(encodedZip.files).filter((path) => path.startsWith("assets/raw/") && !path.endsWith("/")).length, 1);
+  const recoveredState = await decodeLumaProject(await blob.arrayBuffer(), { restoreHistory: false });
+  assert.equal(recoveredState.history, undefined);
+  assert.equal(recoveredState.doc.layers[0].id, layer.id);
+  assert.equal(recoveredState.doc.layers[0].surface!.readPixel(0, 0)[0], 1.5);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
   assert.equal(LUMA_PROJECT_VERSION, 4);
@@ -258,6 +265,7 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.equal(decoded.doc.capturedBrushes?.[0].id, "captured-brush-proof");
   assert.equal(decoded.doc.capturedBrushes?.[0].name, "Project brush");
   assert.equal(decoded.doc.capturedBrushes?.[0].sourceDiameter, 96);
+  assert.deepEqual(decoded.doc.capturedBrushes?.[0].liveSource, doc.capturedBrushes?.[0].liveSource);
   assert.equal(decoded.doc.capturedBrushes?.[0].bitmap.getContext("2d")!.getImageData(0, 0, 1, 1).data[0], 230);
   assert.equal(decoded.doc.layerComps?.[0].name, "Hero");
   assert.equal(decoded.doc.layerComps?.[0].layers[0].layerId, layer.id);
@@ -289,6 +297,8 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.deepEqual(Array.from(coolPayload.surfacePatches?.[0].before ?? []), [1, 2, 3]);
   assert.deepEqual(Array.from(coolPayload.surfacePatches?.[0].after ?? []), [4, 5, 6]);
   assert.equal(coolPayload.surfacePatches?.[0].updateBitmap, false);
+  assert.deepEqual(coolPayload.layerOrderBefore, [layer.id, "future-layer"]);
+  assert.deepEqual(coolPayload.layerOrderAfter, ["future-layer", layer.id]);
 });
 
 test("legacy v1 projects remain readable and receive safe generated ids", async () => {

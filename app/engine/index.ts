@@ -50,6 +50,15 @@ export type {
 } from "./document";
 
 export type { ImageBrushMode, ImageBrushTip } from "./brush";
+export {
+  PRO_ADJUSTMENT_KINDS,
+  PRO_ADJUSTMENT_LABELS,
+  applyProAdjustmentToImageData,
+  defaultProAdjustment,
+} from "./pro-adjustments";
+export type { ProAdjustmentKind, ProAdjustmentParams } from "./pro-adjustments";
+export { BLEND_RECIPES, blendRecipePasses } from "./blend-recipes";
+export type { BlendRecipe, BlendRecipeId } from "./blend-recipes";
 
 // ---------- controller ----------
 export { LUMA_API_VERSION, Studio, isCompatibleApiVersion } from "./studio";
@@ -102,6 +111,7 @@ export type { OperationHistorySnapshot, OperationNode } from "./operation-histor
 export { exportPsd, importPsd } from "./psd";
 export {
   DNG_DECODED_EXTENSIONS,
+  TIFF_CFA_SENSOR_EXTENSIONS,
   RAW_EXTENSIONS,
   ingestRaw,
   rawExtension,

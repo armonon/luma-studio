@@ -29,6 +29,7 @@ export type AiEditConfig = {
   variationIndex: number;
   sourceDigest?: string;
   maskDigest?: string;
+  referenceDigest?: string;
 };
 
 export type AiEditProvenance = {
@@ -142,6 +143,7 @@ export function normalizeAiEditConfig(input: {
   variationIndex?: unknown;
   sourceDigest?: unknown;
   maskDigest?: unknown;
+  referenceDigest?: unknown;
 }): AiEditConfig {
   const operation = normalizeAiOperation(input.operation);
   const prompt = typeof input.prompt === "string" ? input.prompt.trim() : "";
@@ -175,6 +177,7 @@ export function normalizeAiEditConfig(input: {
     variationIndex,
     ...(typeof input.sourceDigest === "string" ? { sourceDigest: input.sourceDigest.slice(0, 128) } : {}),
     ...(typeof input.maskDigest === "string" ? { maskDigest: input.maskDigest.slice(0, 128) } : {}),
+    ...(typeof input.referenceDigest === "string" ? { referenceDigest: input.referenceDigest.slice(0, 128) } : {}),
   };
 }
 
@@ -182,7 +185,7 @@ function controlLevel(value: number) {
   return value >= 0.8 ? "strongly" : value >= 0.45 ? "moderately" : "lightly";
 }
 
-export function buildAiEditPrompt(config: AiEditConfig, hasMask: boolean) {
+export function buildAiEditPrompt(config: AiEditConfig, hasMask: boolean, hasReference = false) {
   let instruction: string;
   const controls = config.controls;
   switch (controls.operation) {
@@ -209,7 +212,10 @@ export function buildAiEditPrompt(config: AiEditConfig, hasMask: boolean) {
   const maskInstruction = hasMask ?
     "Treat the supplied alpha mask as editing guidance: change the transparent guided region and preserve the opaque region as closely as possible." :
     "Preserve all content the request does not explicitly ask to change.";
-  return `${instruction}\n${maskInstruction}\n\nUser direction: ${config.prompt}`;
+  const referenceInstruction = hasReference
+    ? "Use the second supplied image as an identity and product reference. Preserve its distinguishing facial, shape, material, logo, and proportion details; do not copy its background."
+    : "";
+  return `${instruction}\n${maskInstruction}${referenceInstruction ? `\n${referenceInstruction}` : ""}\n\nUser direction: ${config.prompt}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -353,6 +359,7 @@ export async function runAiEditVariations(options: {
   endpoint?: string;
   image: Blob;
   mask?: Blob;
+  reference?: Blob;
   operation: AiEditOperation;
   prompt: string;
   controls?: unknown;
@@ -372,9 +379,10 @@ export async function runAiEditVariations(options: {
     throw new Error("AI edit variations must be an integer between 1 and 4");
   }
   if (options.signal?.aborted) throw new AiEditCancelledError();
-  const [sourceDigest, maskDigest] = await Promise.all([
+  const [sourceDigest, maskDigest, referenceDigest] = await Promise.all([
     digestBlob(options.image),
     options.mask ? digestBlob(options.mask) : Promise.resolve(undefined),
+    options.reference ? digestBlob(options.reference) : Promise.resolve(undefined),
   ]);
   const fetcher = options.fetcher ?? fetch;
   const retryLimit = Math.max(0, Math.min(3, options.retryLimit ?? 2));
@@ -412,9 +420,11 @@ export async function runAiEditVariations(options: {
         variationIndex: index,
         sourceDigest,
         maskDigest,
+        referenceDigest,
       });
       const body = new FormData();
       body.append("image", options.image, "source.png");
+      if (options.reference) body.append("reference", options.reference, "identity-reference.png");
       if (options.mask) body.append("mask", options.mask, "mask.png");
       body.append("prompt", config.prompt);
       body.append("operation", config.operation);
@@ -425,6 +435,7 @@ export async function runAiEditVariations(options: {
       body.append("variationIndex", String(config.variationIndex));
       body.append("sourceDigest", sourceDigest);
       if (maskDigest) body.append("maskDigest", maskDigest);
+      if (referenceDigest) body.append("referenceDigest", referenceDigest);
       let response: Response | undefined;
       for (let attempt = 0; attempt <= retryLimit; attempt += 1) {
         try {

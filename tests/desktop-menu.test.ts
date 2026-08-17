@@ -159,10 +159,11 @@ test("accelerators are cross-platform, not hard-coded to one modifier", () => {
 type Listener = (message: { payload: unknown }) => void;
 
 /** Stand in for Tauri's global, with control over when `listen` resolves. */
-function fakeTauri() {
+function fakeTauri(pendingFiles: string[] = []) {
   const handlers = new Map<string, Listener>();
   let resolveListen: ((stop: () => void) => void) | null = null;
   let stopped = 0;
+  const invokes: string[] = [];
   const globalWindow = globalThis as unknown as { window?: unknown };
   const previous = globalWindow.window;
   globalWindow.window = {
@@ -173,12 +174,20 @@ function fakeTauri() {
           resolveListen = resolve;
         }),
       },
+      core: {
+        invoke: async (command: string) => {
+          invokes.push(command);
+          if (command === "take_pending_open_files") return pendingFiles.splice(0);
+          return undefined;
+        },
+      },
     },
   };
   return {
     fire: (payload: unknown, event: string = MENU_COMMAND_EVENT) => handlers.get(event)?.({ payload }),
     settle: () => resolveListen?.(() => { stopped += 1; }),
     stopped: () => stopped,
+    invokes: () => [...invokes],
     restore: () => { globalWindow.window = previous; },
   };
 }
@@ -315,6 +324,42 @@ test("a file the OS asks us to open arrives as a path", () => {
     tauri.fire("", OPEN_FILE_EVENT);
     tauri.fire(42, OPEN_FILE_EVENT);
     assert.deepEqual(opened, ["/Users/someone/Artwork.psd"]);
+  } finally {
+    tauri.restore();
+  }
+});
+
+test("cold-launch files drain only after the live listener is installed", async () => {
+  const tauri = fakeTauri(["/tmp/cold.psd", "", "/tmp/cold.luma"]);
+  try {
+    const opened: string[] = [];
+    listenForOpenFile((path) => opened.push(path));
+    assert.deepEqual(opened, [], "the native queue must not drain before listen resolves");
+    assert.deepEqual(tauri.invokes(), []);
+    tauri.settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(tauri.invokes(), ["take_pending_open_files"]);
+    assert.deepEqual(opened, ["/tmp/cold.psd", "/tmp/cold.luma"]);
+    tauri.fire("/tmp/live.psb", OPEN_FILE_EVENT);
+    assert.deepEqual(opened, ["/tmp/cold.psd", "/tmp/cold.luma", "/tmp/live.psb"]);
+  } finally {
+    tauri.restore();
+  }
+});
+
+test("an unmounted open listener ignores a late cold-launch drain", async () => {
+  const tauri = fakeTauri(["/tmp/cold.psd"]);
+  try {
+    const opened: string[] = [];
+    const stop = listenForOpenFile((path) => opened.push(path));
+    tauri.settle();
+    await Promise.resolve();
+    stop();
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual(opened, []);
   } finally {
     tauri.restore();
   }

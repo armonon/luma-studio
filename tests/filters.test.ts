@@ -3,9 +3,19 @@ import test from "node:test";
 import "./canvas-harness.ts";
 import { createDocument, createRasterLayer } from "../app/engine/document.ts";
 import {
+  SMART_FILTER_KINDS,
+  SMART_FILTER_SPECS,
+  dustAndScratches,
   filterRegionForSelection,
   gaussianBlur,
+  highPass,
   invertColors,
+  maximumFilter,
+  medianFilter,
+  minimumFilter,
+  motionBlur,
+  smartFilterInfluenceRadius,
+  surfaceBlur,
   unsharpMask,
 } from "../app/engine/filters.ts";
 import { pixelAt, solidCanvas, testCanvas } from "./canvas-harness.ts";
@@ -189,4 +199,75 @@ test("selected unsharp mask includes a bounded blur halo, not the whole layer", 
   assert.ok(reads[0][2] < 40 && reads[0][3] < 40);
   assert.ok(reads[0][2] * reads[0][3] < (width * height) / 100);
   assert.deepEqual(pixelAt(bitmap, 50, 50), pixelAt(patternedCanvas(width, height), 50, 50));
+});
+
+test("professional smart-filter catalogue is complete and provides deterministic defaults", () => {
+  assert.equal(SMART_FILTER_KINDS.length, 12);
+  assert.deepEqual(new Set(SMART_FILTER_KINDS).size, SMART_FILTER_KINDS.length);
+  for (const kind of SMART_FILTER_KINDS) {
+    assert.ok(SMART_FILTER_SPECS[kind].label.length > 2);
+    assert.ok(SMART_FILTER_SPECS[kind].category.length > 2);
+  }
+  assert.ok(smartFilterInfluenceRadius({ kind: "high-pass", params: { radius: 4 } }) > 4);
+  assert.equal(smartFilterInfluenceRadius({ kind: "invert", params: {} }), 0);
+});
+
+test("high pass turns flat color into neutral gray and preserves alpha", () => {
+  const bitmap = solidCanvas(12, 12, "rgba(32, 180, 90, .5)");
+  highPass(createDocument(12, 12), createRasterLayer("flat", bitmap), 3);
+  const pixel = pixelAt(bitmap, 6, 6);
+  assert.ok(pixel.r >= 127 && pixel.r <= 129);
+  assert.ok(pixel.g >= 127 && pixel.g <= 129);
+  assert.ok(pixel.b >= 127 && pixel.b <= 129);
+  assert.equal(pixel.a, 127);
+});
+
+test("motion blur spreads an impulse along its angle without crossing the perpendicular axis", () => {
+  const bitmap = solidCanvas(15, 15, "black");
+  const context = bitmap.getContext("2d")!;
+  context.fillStyle = "white";
+  context.fillRect(7, 7, 1, 1);
+  motionBlur(createDocument(15, 15), createRasterLayer("impulse", bitmap), 4, 0);
+  assert.ok(pixelAt(bitmap, 4, 7).r > 0);
+  assert.equal(pixelAt(bitmap, 7, 4).r, 0);
+  assert.equal(pixelAt(bitmap, 7, 7).a, 255);
+});
+
+test("median, maximum and minimum implement distinct morphology operations", () => {
+  const salt = solidCanvas(9, 9, "black");
+  salt.getContext("2d")!.fillStyle = "white";
+  salt.getContext("2d")!.fillRect(4, 4, 1, 1);
+  medianFilter(createDocument(9, 9), createRasterLayer("salt", salt), 1);
+  assert.equal(pixelAt(salt, 4, 4).r, 0, "median removes isolated salt");
+
+  const bright = solidCanvas(9, 9, "black");
+  bright.getContext("2d")!.fillStyle = "white";
+  bright.getContext("2d")!.fillRect(4, 4, 1, 1);
+  maximumFilter(createDocument(9, 9), createRasterLayer("bright", bright), 1);
+  assert.equal(pixelAt(bright, 3, 4).r, 255, "maximum expands highlights");
+
+  const dark = solidCanvas(9, 9, "white");
+  dark.getContext("2d")!.fillStyle = "black";
+  dark.getContext("2d")!.fillRect(4, 4, 1, 1);
+  minimumFilter(createDocument(9, 9), createRasterLayer("dark", dark), 1);
+  assert.equal(pixelAt(dark, 3, 4).r, 0, "minimum expands shadows");
+});
+
+test("surface blur protects strong edges while dust removal replaces isolated defects", () => {
+  const edge = solidCanvas(12, 6, "rgb(20,20,20)");
+  const context = edge.getContext("2d")!;
+  context.fillStyle = "rgb(230,230,230)";
+  context.fillRect(6, 0, 6, 6);
+  context.fillStyle = "rgb(35,35,35)";
+  context.fillRect(2, 2, 1, 1);
+  surfaceBlur(createDocument(12, 6), createRasterLayer("surface", edge), 2, 25);
+  assert.ok(pixelAt(edge, 5, 3).r < 60);
+  assert.ok(pixelAt(edge, 6, 3).r > 190);
+
+  const dust = solidCanvas(9, 9, "rgb(80,80,80)");
+  dust.getContext("2d")!.fillStyle = "white";
+  dust.getContext("2d")!.fillRect(4, 4, 1, 1);
+  dustAndScratches(createDocument(9, 9), createRasterLayer("dust", dust), 1, 20);
+  assert.equal(pixelAt(dust, 4, 4).r, 80);
+  assert.equal(pixelAt(dust, 3, 4).r, 80);
 });

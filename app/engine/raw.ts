@@ -5,6 +5,8 @@
 // if you need the narrower list for UI copy that promises full RAW develop.
 export const RAW_EXTENSIONS = ["dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "pef"] as const;
 export const DNG_DECODED_EXTENSIONS = ["dng"] as const;
+/** Formats that may expose a standards-based TIFF CFA sensor IFD locally. */
+export const TIFF_CFA_SENSOR_EXTENSIONS = ["dng", "cr2", "nef", "nrw", "arw", "orf", "rw2", "pef"] as const;
 
 export type RawPreview = {
   blob: Blob;
@@ -63,7 +65,7 @@ export function extractEmbeddedRawPreview(source: ArrayBuffer, name: string): Ra
 }
 
 export type RawIngestResult =
-  | { kind: "developed-dng"; developed: ReturnType<typeof decodeDng> }
+  | { kind: "developed-raw"; developed: ReturnType<typeof decodeDng> }
   | { kind: "embedded-preview"; preview: RawPreview; decodeFailure?: { code: string; message: string } };
 
 /**
@@ -79,9 +81,12 @@ export function ingestRaw(
   const extension = rawExtension(name);
   if (!extension) throw new RawDecodeError("invalid-container", "The file extension is not a supported camera RAW type");
   let failure: RawDecodeError | undefined;
-  if (extension === "dng") {
+  if ((TIFF_CFA_SENSOR_EXTENSIONS as readonly string[]).includes(extension)) {
     try {
-      return { kind: "developed-dng", developed: decodeDng(source, name, settings) };
+      const developed = extension === "dng"
+        ? decodeDng(source, name, settings)
+        : decodeTiffCameraRaw(source, name, extension.toUpperCase(), settings);
+      return { kind: "developed-raw", developed };
     } catch (error) {
       if (!(error instanceof RawDecodeError)) throw error;
       failure = error;
@@ -101,7 +106,7 @@ export function ingestRaw(
     `${extension.toUpperCase()} sensor decoding is not available locally and this file has no readable embedded JPEG`,
   );
 }
-import { decodeDng, RawDecodeError } from "./raw-dng";
+import { decodeDng, decodeTiffCameraRaw, RawDecodeError } from "./raw-dng";
 import { RawDevelopSettings } from "./raw-develop";
 
 export * from "./raw-develop";

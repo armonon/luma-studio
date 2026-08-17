@@ -15,6 +15,7 @@ import { LUMA_API_VERSION, LumaAPI, Studio } from "@/app/engine/studio";
 import {
   AiProvenance,
   CapturedBrushAsset,
+  type BlendMode,
   Layer,
   NEUTRAL_CURVES,
   EFFECT_LABELS,
@@ -25,16 +26,20 @@ import {
   PathStyle,
   ProofProfile,
   ProofSettings,
+  type SmartFilterKind,
   ToneParams,
   Transform,
   cloneCurves,
   documentPointToLayer,
   layerCorners,
-  resolvedBlendPasses,
-  resolvedBlendIf,
-  resolvedFillOpacity,
 } from "@/app/engine/document";
-import { isNeutralBlendIf } from "@/app/engine/blend";
+import { SMART_FILTER_SPECS } from "@/app/engine/filters";
+import {
+  PRO_ADJUSTMENT_KINDS,
+  PRO_ADJUSTMENT_LABELS,
+  defaultProAdjustment,
+  type ProAdjustmentKind,
+} from "@/app/engine/pro-adjustments";
 import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
 import { readRecoveryWorkspace, writeRecoveryWorkspace } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
@@ -95,6 +100,7 @@ import type { FocusCreateAction } from "./layer-focus-panel";
 import { listenForMenuCommands, listenForOpenFile, publishRecentFiles } from "../desktop/native-menu";
 import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/recent-files";
 import type { StudioCommand } from "../desktop/menu-model";
+import { StartupOpenCoordinator } from "./startup-open-coordinator";
 import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
 import type { TransformCorner } from "./canvas-geometry";
 import {
@@ -103,6 +109,30 @@ import {
   type CanvasDragDraft,
   type SelectionCombineMode,
 } from "./canvas-gesture";
+import DesktopCanvasHud, { type SpaceDeckFeature } from "./desktop-canvas-hud";
+import {
+  DESKTOP_DEMO_LAYERS,
+  desktopRadialOverlayPosition,
+  initialStudioPresentation,
+  shouldMountLegacyInspector,
+  shouldRevealDesktopPassDeck,
+  studioUiWorkPolicy,
+} from "./desktop-presentation";
+import { FrameCoalescer } from "./frame-coalescer";
+import {
+  clampSpaceDeckPosition,
+  isEditableTextTarget,
+  resolveSpaceDeckContext,
+  spaceDeckDimensions,
+  spaceDeckCommands,
+  togglePinnedSpaceDeck,
+  type SpaceDeckCommand,
+  type SpaceDeckPoint,
+} from "./space-deck-model";
+import type { PhotoshopCompatibilityReport } from "@/app/engine/psd";
+
+declare const __LUMA_NATIVE_DESKTOP__: boolean;
+const NATIVE_DESKTOP_BUILD = typeof __LUMA_NATIVE_DESKTOP__ !== "undefined" && __LUMA_NATIVE_DESKTOP__;
 
 const ExportPopover = lazy(() => import("./export-popover"));
 const ToolDock = lazy(() => import("./tool-dock"));
@@ -110,12 +140,14 @@ const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
 const StudioTitlebar = lazy(() => import("./studio-titlebar"));
 const ContextToolbar = lazy(() => import("./context-toolbar"));
 const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
+const VirtualLayerStack = lazy(() => import("./virtual-layer-stack"));
 const BlendStackEditor = lazy(() => import("./blend-stack-editor"));
 const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
 const SmartFilterEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.SmartFilterEditor })));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
 const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.HslEditor })));
+const ProAdjustmentEditor = lazy(() => import("./pro-adjustment-editor"));
 
 type ToneKey = keyof ToneParams;
 type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
@@ -316,6 +348,7 @@ function formatBytes(bytes: number) {
 }
 
 export default function SpatialStudio({ desktop = false }: { desktop?: boolean }) {
+  const initialPresentation = initialStudioPresentation(desktop);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -325,13 +358,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const focusImportInput = useRef<HTMLInputElement>(null);
   const inspectorRef = useRef<HTMLElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
-  const [, setVersion] = useState(0);
+  const [startupReady, setStartupReady] = useState(false);
+  const startupOpenCoordinator = useRef(new StartupOpenCoordinator());
+  const [version, setVersion] = useState(0);
   const forceUpdate = useCallback(() => setVersion((n) => n + 1), []);
+  const [loadedPhotoshopReport, setLoadedPhotoshopReport] = useState<PhotoshopCompatibilityReport | null>(null);
 
-  const [workspace, setWorkspace] = useState<WorkspaceMode>("edit");
-  const [activeTool, setActiveTool] = useState<Tool>("brush");
+  const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPresentation.workspace);
+  const [activeTool, setActiveTool] = useState<Tool>(initialPresentation.tool);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
-  const [assetsOpen, setAssetsOpen] = useState(true);
+  const [assetsOpen, setAssetsOpen] = useState(initialPresentation.assetsOpen);
   const [dropActive, setDropActive] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
@@ -383,6 +419,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [capturedBrushMode, setCapturedBrushMode] = useState<ImageBrushMode>("color");
   const [captureSampling, setCaptureSampling] = useState(false);
   const [captureSampleMerged, setCaptureSampleMerged] = useState(true);
+  const [captureLive, setCaptureLive] = useState(true);
   const [captureRadius, setCaptureRadius] = useState(64);
   const [captureHover, setCaptureHover] = useState<Point | null>(null);
   const [captureSource, setCaptureSource] = useState<{
@@ -397,7 +434,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [gradientType, setGradientType] = useState<"linear" | "radial">("linear");
   const [patternKind, setPatternKind] = useState<PatternKind>("checker");
   const [patternScale, setPatternScale] = useState(24);
-  const [warpRadius, setWarpRadius] = useState(180);
+  const [warpRadius, setWarpRadius] = useState(desktop ? 360 : 180);
+  const warpHoverRef = useRef<Point | null>(null);
+  const warpOverlayRef = useRef<HTMLDivElement>(null);
+  const [showRadialOverlay, setShowRadialOverlay] = useState(initialPresentation.showRadialOverlay);
   const [colorSamples, setColorSamples] = useState<Array<Point & { color: string }>>([]);
   const [measurement, setMeasurement] = useState<{ start: Point; end: Point } | null>(null);
   const [retouchSample, setRetouchSample] = useState<{ x: number; y: number } | null>(null);
@@ -418,6 +458,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [branchMixOpacity, setBranchMixOpacity] = useState(0.5);
+  const [branchMixBlend, setBranchMixBlend] = useState<BlendMode>("source-over");
   const [blurRadius, setBlurRadius] = useState(8);
   const [sharpAmount, setSharpAmount] = useState(0.6);
   const [neural, setNeural] = useState<{ msg: string; pct: number } | null>(null);
@@ -447,11 +489,31 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const glSupported = !!studio && Studio.canUseGL();
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
-  const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
+  const [view, setView] = useState({ zoom: initialPresentation.zoom, panX: 0, panY: 0 });
   const viewAnimationRef = useRef<number | null>(null);
   const [displayViewport, setDisplayViewport] = useState<DisplayViewport | null>(null);
   const spaceHeld = useRef(false);
+  const [passDeckOpen, setPassDeckOpen] = useState(false);
+  const [passDeckPinned, setPassDeckPinned] = useState(false);
+  const [passDeckPosition, setPassDeckPosition] = useState<SpaceDeckPoint>({ x: 20, y: 20 });
+  const spacePointerRef = useRef<SpaceDeckPoint | null>(null);
+  const spaceOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const spaceGestureRef = useRef<"idle" | "pending" | "deck" | "panning" | "dismissed">("idle");
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
+  const panFrameRef = useRef<FrameCoalescer<{ panX: number; panY: number }> | null>(null);
+
+  useEffect(() => {
+    const coalescer = new FrameCoalescer<{ panX: number; panY: number }>(
+      (callback) => requestAnimationFrame(callback),
+      (frame) => cancelAnimationFrame(frame),
+      ({ panX, panY }) => setView((current) => ({ ...current, panX, panY })),
+    );
+    panFrameRef.current = coalescer;
+    return () => {
+      coalescer.cancel();
+      panFrameRef.current = null;
+    };
+  }, []);
 
   // Draft state for pending vector/marquee shapes.
   const [drag, setDrag] = useState<CanvasDragDraft | null>(null);
@@ -538,6 +600,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   useEffect(() => {
     if (!canvasRef.current) return;
+    setStartupReady(false);
+    startupOpenCoordinator.current.reset();
+    let cancelled = false;
     const target = canvasRef.current;
     const s = new Studio(1600, 1067, target);
     const unsub = s.subscribe(() => {
@@ -579,7 +644,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         if (recovery.length) {
           const ordered = [...recovery.filter((entry) => !entry.active), ...recovery.filter((entry) => entry.active)];
           let project: Awaited<ReturnType<Studio["importProject"]>> | null = null;
-          for (const entry of ordered) project = await s.importProject(entry.blob);
+          // Recovery checkpoints restore the current document state only.
+          // Older checkpoints may still contain a large undo graph; leaving
+          // those assets compressed prevents a memory spike before the first
+          // frame. Opening a user-selected .luma file below still restores its
+          // complete version history.
+          for (const entry of ordered) {
+            project = await s.importProject(entry.blob, { restoreHistory: false });
+          }
           if (!project) throw new Error("Recovery workspace was empty");
           setActiveLayerId(project.doc.layers[0]?.id ?? null);
           setCustomName(project.name);
@@ -587,21 +659,36 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         } else {
           const img = await loadImage(filmstrip[0].src);
           const layer = s.openImage(filmstrip[0].name, img);
+          if (desktop) {
+            s.setLayerProp(layer.id, "name", "Base Layer", "Starter layer named");
+            for (const demoLayer of DESKTOP_DEMO_LAYERS) {
+              s.addAdjustmentLayer(demoLayer.name, demoLayer.tone);
+            }
+          }
           setActiveLayerId(layer.id);
         }
       } catch {
         const img = await loadImage(filmstrip[0].src);
         const layer = s.openImage(filmstrip[0].name, img);
+        if (desktop) {
+          s.setLayerProp(layer.id, "name", "Base Layer", "Starter layer named");
+          for (const demoLayer of DESKTOP_DEMO_LAYERS) {
+            s.addAdjustmentLayer(demoLayer.name, demoLayer.tone);
+          }
+        }
         setActiveLayerId(layer.id);
+      } finally {
+        if (!cancelled) setStartupReady(true);
       }
     })();
     return () => {
+      cancelled = true;
       unsub();
       s.dispose();
       const host = window as unknown as { luma?: LumaAPI };
       if (host.luma === api) delete host.luma;
     };
-  }, [forceUpdate, notify, setActiveLayerId]);
+  }, [desktop, forceUpdate, notify, setActiveLayerId]);
 
   const doc = studio?.doc;
   const layers: Layer[] = doc?.layers ?? [];
@@ -609,6 +696,32 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
   const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const identityReference = layers.find((layer) => layer.identityReference) ?? null;
+  const positionWarpOverlay = (point: Point | null) => {
+    warpHoverRef.current = point;
+    if (!doc || !warpOverlayRef.current) return;
+    const position = desktopRadialOverlayPosition({
+      point,
+      documentWidth: doc.width,
+      documentHeight: doc.height,
+      radius: warpRadius,
+    });
+    warpOverlayRef.current.style.left = position.left;
+    warpOverlayRef.current.style.top = position.top;
+  };
+  const documentWidth = doc?.width;
+  const documentHeight = doc?.height;
+  useEffect(() => {
+    if (!documentWidth || !documentHeight || !warpOverlayRef.current) return;
+    const position = desktopRadialOverlayPosition({
+      point: warpHoverRef.current,
+      documentWidth,
+      documentHeight,
+      radius: warpRadius,
+    });
+    warpOverlayRef.current.style.left = position.left;
+    warpOverlayRef.current.style.top = position.top;
+  }, [documentWidth, documentHeight, warpRadius]);
   // The dialog closes itself if the layer it was opened for is deleted.
   const styleLayer = layers.find((layer) => layer.id === styleLayerId) ?? null;
   const focusedLayer = resolvedFocusState.scope
@@ -874,8 +987,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
+    if (passDeckOpen && !passDeckPinned && !spaceHeld.current) {
+      setPassDeckOpen(false);
+      spaceGestureRef.current = "idle";
+    }
     // Middle mouse or space+left = pan.
     if (e.button === 1 || (spaceHeld.current && e.button === 0)) {
+      if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
+      spaceOpenTimerRef.current = null;
+      spaceGestureRef.current = "panning";
+      if (!passDeckPinned) setPassDeckOpen(false);
       (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
       panDragRef.current = { startX: e.clientX, startY: e.clientY, panX: view.panX, panY: view.panY };
       return;
@@ -887,6 +1008,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       const asset = studio.captureBrushFromDocument(p.x, p.y, captureRadius, {
         name: captureSampleMerged ? "Merged canvas capture" : `${activeLayer?.name ?? "Layer"} capture`,
         sourceLayerId: captureSampleMerged ? undefined : activeLayer?.id,
+        live: captureLive,
       });
       if (!asset) { notify("Choose a paintable layer or sample the merged canvas"); return; }
       activateCapturedBrush(asset);
@@ -929,6 +1051,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (paintingTool) {
       if (!activeLayer) { notify("Select a layer"); return; }
       const params = brushParams();
+      if (activeTool === "capture-brush" && activeCapturedBrushId && studio.refreshCapturedBrush(activeCapturedBrushId)) {
+        params.imageTip = studio.capturedBrushTip(activeCapturedBrushId, capturedBrushMode) ?? params.imageTip;
+      }
       if ((params.mode === "mask-add" || params.mode === "mask-remove") && activeLayer.locked) {
         notify("Unlock the layer before editing its mask"); return;
       }
@@ -1093,10 +1218,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
+    const stageRect = stageRef.current?.getBoundingClientRect();
+    if (stageRect) spacePointerRef.current = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
+    if (activeTool === "radial-warp") positionWarpOverlay(eventToDoc(e));
     if (panDragRef.current) {
       const dx = e.clientX - panDragRef.current.startX;
       const dy = e.clientY - panDragRef.current.startY;
-      setView((v) => ({ ...v, panX: panDragRef.current!.panX + dx, panY: panDragRef.current!.panY + dy }));
+      const next = { panX: panDragRef.current.panX + dx, panY: panDragRef.current.panY + dy };
+      if (panFrameRef.current) panFrameRef.current.push(next);
+      else setView((current) => ({ ...current, ...next }));
       return;
     }
     if (activeTool === "capture-brush" && captureSampling) {
@@ -1175,7 +1305,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
-    if (panDragRef.current) { panDragRef.current = null; return; }
+    if (panDragRef.current) {
+      panFrameRef.current?.flush();
+      panDragRef.current = null;
+      if (!spaceHeld.current) spaceGestureRef.current = "idle";
+      return;
+    }
     if (activeTool === "pen" && penDragging) {
       setPenDragging(null);
       return;
@@ -1348,7 +1483,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       setActiveAdjustmentId(null);
       setCustomName(file.name.replace(/\.ps[db]$/i, ""));
       setTone({ ...NEUTRAL_TONE });
-      const report = studio.photoshopCompatibility({ format: "source" });
+      const report = await studio.photoshopCompatibility({ format: "source" });
       const previewOnly = report.issues.filter((issue) => issue.severity === "warning").length;
       notify(`${file.name} · ${d.layers.length} layers · ${report.container.toUpperCase()}${previewOnly ? ` · ${previewOnly} review note${previewOnly === 1 ? "" : "s"}` : " · preservation ready"}`);
       return;
@@ -1364,13 +1499,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         const ingested = ingestRaw(bytes, file.name, {
           workingSpace: studio.doc.colorSpace,
         });
-        if (ingested.kind === "developed-dng") {
+        if (ingested.kind === "developed-raw") {
           const layer = studio.openDevelopedDng(name, bytes, ingested.developed);
           setActiveLayerId(layer.id);
           setCustomName(name);
           setActiveAdjustmentId(null);
           setTone({ ...NEUTRAL_TONE });
-          notify(`DNG developed · ${ingested.developed.metadata.bitsPerSample}-bit Bayer · 32-bit float master`);
+          notify(`${ingested.developed.provenance.format} developed · ${ingested.developed.metadata.bitsPerSample}-bit Bayer · 32-bit float master`);
           return;
         }
         URL.revokeObjectURL(url);
@@ -1465,16 +1600,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const openDocumentPath = async (path: string) => {
+    const readyPath = startupOpenCoordinator.current.route(path);
+    if (!readyPath) return;
     try {
-      const opened = await readNativePath(path);
+      const opened = await readNativePath(readyPath);
       if (!opened) return;
       await importOpenedFile(opened);
-      const next = withRecentFile(recentFilesRef.current, path);
+      const next = withRecentFile(recentFilesRef.current, readyPath);
       recentFilesRef.current = next;
       saveRecentFiles(safeLocalStorage(), next);
       publishRecentFiles(next);
     } catch (error) {
-      notify(error instanceof Error ? error.message : `${path} could not be opened`);
+      notify(error instanceof Error ? error.message : `${readyPath} could not be opened`);
     }
   };
 
@@ -1691,6 +1828,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setTone({ ...NEUTRAL_TONE });
     switchWorkspace("develop");
   };
+  const addProfessionalAdjustment = (kind: ProAdjustmentKind) => {
+    if (!studio) return;
+    const layer = studio.addProAdjustmentLayer(kind);
+    setActiveLayerId(layer.id);
+    switchWorkspace("develop");
+    notify(`${PRO_ADJUSTMENT_LABELS[kind]} adjustment added`);
+  };
   const addBlank = () => {
     if (!studio) return;
     const layer = studio.addBlankRaster("Paint");
@@ -1819,10 +1963,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
 
-  const runFilter = (kind: "blur" | "sharpen" | "invert" | "desaturate" | "hue", opts: Record<string, number> = {}) => {
+  const runFilter = (kind: SmartFilterKind, opts: Record<string, number> = {}) => {
     if (!studio || !activeLayer || activeLayer.kind === "group") { notify("Select a content layer"); return; }
-    studio.addSmartFilter(activeLayer.id, kind, opts);
-    notify(`${kind[0].toUpperCase() + kind.slice(1)} added as a Smart Filter`);
+    studio.addSmartFilter(activeLayer.id, kind, { ...SMART_FILTER_SPECS[kind].defaults, ...opts });
+    notify(`${SMART_FILTER_SPECS[kind].label} added as a Smart Filter`);
   };
 
   const exportPNG = async () => {
@@ -1859,7 +2003,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const exportPsd = async () => {
     if (!studio) return;
     try {
-      const { buffer: buf, report } = studio.exportPhotoshop({ format: photoshopFormat });
+      const { buffer: buf, report } = await studio.exportPhotoshop({ format: photoshopFormat });
       const blob = new Blob([buf], { type: "image/vnd.adobe.photoshop" });
       const saved = await downloadOrSave(blob, `${customName || filmstrip[activePreset].name}-luma.${report.container}`);
       if (!saved) return;
@@ -1964,6 +2108,306 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
 
+  const spaceDeckContext = resolveSpaceDeckContext({
+    layer: activeLayer,
+    tool: activeTool,
+    hasSelection: Boolean(doc?.selection),
+  });
+  const contextualSpaceCommands = spaceDeckCommands({
+    layer: activeLayer,
+    tool: activeTool,
+    hasSelection: Boolean(doc?.selection),
+  });
+  const spaceToolLabel = Object.values(modeTools).flat().find(([tool]) => tool === activeTool)?.[2] ?? "Canvas";
+  /* eslint-disable react-hooks/refs -- These callbacks are data handed to the HUD's event handlers; the feature builder never invokes them during render. */
+  const spaceToolFeatures: SpaceDeckFeature[] = (() => {
+    const range = (
+      id: string,
+      label: string,
+      value: number,
+      min: number,
+      max: number,
+      step: number,
+      output: string,
+      onChange: (next: number) => void,
+      onCommit?: () => void,
+    ): SpaceDeckFeature => ({ kind: "range", id, label, value, min, max, step, output, onChange, onCommit });
+    const choice = (
+      id: string,
+      label: string,
+      value: string,
+      options: ReadonlyArray<{ value: string; label: string }>,
+      onChange: (next: string) => void,
+    ): SpaceDeckFeature => ({ kind: "choice", id, label, value, options, onChange });
+    const toggle = (
+      id: string,
+      label: string,
+      detail: string,
+      value: boolean,
+      onChange: (next: boolean) => void,
+    ): SpaceDeckFeature => ({ kind: "toggle", id, label, detail, value, onChange });
+    const color = (id: string, label: string, value: string, onChange: (next: string) => void): SpaceDeckFeature => (
+      { kind: "color", id, label, value, onChange }
+    );
+    const action = (
+      id: string,
+      label: string,
+      detail: string,
+      icon: string,
+      onRun: () => void,
+      disabled = false,
+    ): SpaceDeckFeature => ({ kind: "action", id, label, detail, icon, onRun, disabled });
+
+    const brushCore = (maximum = activeTool === "capture-brush" ? 1200 : 400): SpaceDeckFeature[] => [
+      range("size", "Size", brushSize, 1, maximum, 1, `${Math.round(brushSize)} px`, setBrushSize),
+      ...(activeTool === "pencil" ? [] : [range("hardness", "Hardness", hardness * 100, 0, 100, 1, `${Math.round(hardness * 100)}%`, (value) => setHardness(value / 100))]),
+      range("opacity", "Opacity", brushOpacity * 100, 1, 100, 1, `${Math.round(brushOpacity * 100)}%`, (value) => setBrushOpacity(value / 100)),
+      range("flow", "Flow", brushFlow * 100, 1, 100, 1, `${Math.round(brushFlow * 100)}%`, (value) => setBrushFlow(value / 100)),
+    ];
+
+    if (activeTool === "capture-brush") return [
+      ...brushCore(1200),
+      range("sample-radius", "Sample radius", captureRadius, 2, 512, 1, `${captureRadius} px`, setCaptureRadius),
+      choice("capture-mode", "Color mode", capturedBrushMode, [
+        { value: "color", label: "Full color" },
+        { value: "tint", label: "Tint with paint" },
+        { value: "stencil", label: "Dark-pixel stencil" },
+        { value: "material", label: "Material transfer" },
+      ], (value) => setCapturedBrushMode(value as ImageBrushMode)),
+      toggle("sample-merged", "Merged source", "Sample the visible composite", captureSampleMerged, setCaptureSampleMerged),
+      toggle("living-source", "Living source", "Refresh the sampled pixels at every stroke", captureLive, setCaptureLive),
+      action("sample-canvas", "Sample canvas", "Click the image to capture", "◎", () => { setCaptureSampling(true); setCaptureSource(null); }),
+      action("upload-tip", "Upload image", "Build a brush from a file", "↗", () => captureInput.current?.click()),
+    ];
+
+    if (activeTool === "gradient") return [
+      color("start-color", "Start color", brushColor, setBrushColor),
+      color("end-color", "End color", secondaryColor, setSecondaryColor),
+      choice("gradient-type", "Gradient", gradientType, [
+        { value: "linear", label: "Linear" }, { value: "radial", label: "Radial" },
+      ], (value) => setGradientType(value as typeof gradientType)),
+    ];
+
+    if (activeTool === "pattern") return [
+      color("pattern-primary", "Primary", brushColor, setBrushColor),
+      color("pattern-secondary", "Secondary", secondaryColor, setSecondaryColor),
+      choice("pattern-kind", "Pattern", patternKind, [
+        { value: "checker", label: "Checker" }, { value: "stripes", label: "Stripes" }, { value: "dots", label: "Dots" },
+      ], (value) => setPatternKind(value as PatternKind)),
+      range("pattern-scale", "Scale", patternScale, 2, 160, 1, `${patternScale} px`, setPatternScale),
+    ];
+
+    if (activeTool === "fill") return [
+      color("fill-color", "Fill color", brushColor, setBrushColor),
+      color("fill-secondary", "Pattern accent", secondaryColor, setSecondaryColor),
+      range("fill-opacity", "Opacity", brushOpacity * 100, 1, 100, 1, `${Math.round(brushOpacity * 100)}%`, (value) => setBrushOpacity(value / 100)),
+    ];
+
+    if (activeTool === "mask-add" || activeTool === "mask-remove") return [
+      ...brushCore(),
+      toggle("pressure-size", "Pressure size", "Pen pressure changes radius", pressureSize, setPressureSize),
+      toggle("pressure-opacity", "Pressure opacity", "Pen pressure changes strength", pressureOpacity, setPressureOpacity),
+    ];
+
+    if (paintingTool || retouchTool) {
+      const sampleTool = activeTool === "clone" || activeTool === "heal" || activeTool === "patch";
+      return [
+        ...brushCore(),
+        ...(activeTool === "pencil" ? [] : [
+          range("smoothing", "Smoothing", brushSmoothing * 100, 0, 100, 1, `${Math.round(brushSmoothing * 100)}%`, (value) => setBrushSmoothing(value / 100)),
+          range("spacing", "Spacing", brushSpacing * 100, 1, 100, 1, `${Math.round(brushSpacing * 100)}%`, (value) => setBrushSpacing(value / 100)),
+        ]),
+        ...(activeTool === "brush" || activeTool === "mixer" ? [
+          range("roundness", "Roundness", brushRoundness * 100, 10, 100, 1, `${Math.round(brushRoundness * 100)}%`, (value) => setBrushRoundness(value / 100)),
+          range("scatter", "Scatter", brushScatter * 100, 0, 100, 1, `${Math.round(brushScatter * 100)}%`, (value) => setBrushScatter(value / 100)),
+        ] : []),
+        ...(sampleTool ? [action(
+          "sample-source",
+          retouchSample ? "Clear source" : "Set source",
+          retouchSample ? `${Math.round(retouchSample.x)}, ${Math.round(retouchSample.y)}` : "Alt-click on the canvas",
+          "◎",
+          () => setRetouchSample(null),
+        )] : []),
+      ];
+    }
+
+    if (marqueeTool || lassoTool || wandTool || pointSelectionTool || activeTool === "sel-sam") return [
+      choice("selection-mode", "Combine", selectionMode, [
+        { value: "replace", label: "New selection" }, { value: "add", label: "Add" },
+        { value: "subtract", label: "Subtract" }, { value: "intersect", label: "Intersect" },
+      ], (value) => setSelectionMode(value as SelectionCombineMode)),
+      range("feather", "Feather", feather, 0, 200, 1, `${feather} px`, setFeather),
+      range("selection-smooth", "Smooth", selectionSmooth, 0, 100, 1, `${selectionSmooth}`, setSelectionSmooth),
+      range("selection-contrast", "Contrast", selectionContrast, 0, 100, 1, `${selectionContrast}%`, setSelectionContrast),
+      range("selection-shift", "Edge shift", selectionShift, -100, 100, 1, `${selectionShift}%`, setSelectionShift),
+      ...(wandTool || activeTool === "sel-magnetic" ? [
+        range("tolerance", "Tolerance", wandTolerance, 0, 255, 1, `${wandTolerance}`, setWandTolerance),
+      ] : []),
+    ];
+
+    if (activeTool === "tone") return toneRows.map(([key, label, min, max, step]) => range(
+      `tone-${key}`,
+      label,
+      tone[key],
+      min,
+      max,
+      step,
+      `${tone[key] > 0 ? "+" : ""}${tone[key].toFixed(step < 1 ? 2 : 0)}`,
+      (value) => onToneChange(key, value),
+      onToneCommit,
+    ));
+
+    const typeTool = ["text", "paragraph-text", "vertical-text", "path-text", "type-mask"].includes(activeTool);
+    if (typeTool) {
+      const textLayer = activeLayer?.kind === "text" ? activeLayer : null;
+      const activeSize = textLayer?.text ? parseInt(textLayer.text.font.match(/(\d+)px/)?.[1] || `${textSize}`, 10) : textSize;
+      return [
+        {
+          kind: "text", id: "text-content", label: "Text", value: textLayer?.text?.text ?? textDraft,
+          placeholder: "Type…", onChange: (value) => { setTextDraft(value); if (textLayer?.text) studio?.updateText(textLayer.id, { text: value }); },
+        },
+        range("text-size", "Font size", activeSize, 8, 500, 1, `${activeSize} px`, (value) => {
+          setTextSize(value);
+          if (textLayer?.text) studio?.updateText(textLayer.id, { font: textLayer.text.font.replace(/\d+px/, `${value}px`) });
+        }),
+        color("text-color", "Color", textLayer?.text?.color ?? brushColor, (value) => {
+          setBrushColor(value);
+          if (textLayer?.text) studio?.updateText(textLayer.id, { color: value });
+        }),
+        ...(textLayer?.text ? [
+          range("tracking", "Tracking", textLayer.text.tracking ?? 0, -100, 600, 10, `${textLayer.text.tracking ?? 0}`, (value) => studio?.updateText(textLayer.id, { tracking: value })),
+          range("paragraph-spacing", "Paragraph gap", textLayer.text.paragraphSpacing ?? 0, 0, 3, 0.1, `${(textLayer.text.paragraphSpacing ?? 0).toFixed(1)}×`, (value) => studio?.updateText(textLayer.id, { paragraphSpacing: value })),
+          ...(textLayer.text.layout === "paragraph" ? [toggle("justify", "Justify", "Stretch paragraph lines", textLayer.text.justify ?? false, (value) => studio?.updateText(textLayer.id, { justify: value }))] : []),
+        ] : []),
+      ];
+    }
+
+    const shapeTool = ["rect", "ellipse", "triangle", "polygon", "line", "custom-shape", "frame"].includes(activeTool);
+    if (shapeTool) {
+      const shapeLayer = activeLayer?.kind === "shape" ? activeLayer : null;
+      return [
+        color("shape-fill", "Fill", shapeLayer?.shape?.fill ?? brushColor, (value) => {
+          setBrushColor(value);
+          if (shapeLayer?.shape) studio?.updateShape(shapeLayer.id, { fill: value });
+        }),
+        ...(shapeLayer?.shape ? [
+          color("shape-stroke", "Stroke", shapeLayer.shape.stroke, (value) => studio?.updateShape(shapeLayer.id, { stroke: value })),
+          range("stroke-width", "Stroke width", shapeLayer.shape.strokeWidth, 0, 100, 1, `${shapeLayer.shape.strokeWidth} px`, (value) => studio?.updateShape(shapeLayer.id, { strokeWidth: value })),
+          range("corner-radius", "Corner radius", shapeLayer.shape.radius, 0, 200, 1, `${shapeLayer.shape.radius} px`, (value) => studio?.updateShape(shapeLayer.id, { radius: value })),
+          choice("shape-geometry", "Geometry", shapeLayer.shape.kind, [
+            { value: "rect", label: "Rectangle" }, { value: "ellipse", label: "Ellipse" },
+          ], (value) => studio?.updateShape(shapeLayer.id, { kind: value as "rect" | "ellipse" })),
+        ] : []),
+      ];
+    }
+
+    if (activeTool === "pen" || activeTool === "path-select" || activeTool === "direct-select") return [
+      color("path-fill", "Path fill", activeLayer?.path?.fill ?? brushColor, (value) => {
+        setBrushColor(value);
+        if (activeLayer?.path) studio?.updatePath(activeLayer.id, { ...activeLayer.path, fill: value });
+      }),
+      action("finish-path", "Finish open path", "Commit current anchors", "↗", () => commitPenPath(false), penDraft.length < 2),
+      action("close-path", "Close path", "Join first and last anchor", "◇", () => commitPenPath(true), penDraft.length < 2),
+    ];
+
+    if (activeTool === "radial-warp") return [
+      range("warp-radius", "Influence", warpRadius, 20, 1200, 1, `${warpRadius} px`, setWarpRadius),
+      toggle("warp-overlay", "Overlay", "Show the influence ring", showRadialOverlay, setShowRadialOverlay),
+      toggle("show-guides", "Guides", "Show alignment guides", showGuides, setShowGuides),
+      action("fit-warp", "Fit canvas", "See the full warp area", "⌗", () => setView({ zoom: 1, panX: 0, panY: 0 })),
+    ];
+
+    if (["crop", "perspective-crop", "straighten", "content-move", "perspective-warp"].includes(activeTool)) return [
+      range("view-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+      toggle("show-guides", "Guides", "Show alignment guides", showGuides, setShowGuides),
+      toggle("snap-guides", "Snap", "Snap transforms to guides", snapGuides, setSnapGuides),
+      ...(activeTool === "content-move" ? [range("move-feather", "Selection feather", feather, 0, 200, 1, `${feather} px`, setFeather)] : []),
+      action("fit-transform", "Fit canvas", "Reset framing", "⌗", () => setView({ zoom: 1, panX: 0, panY: 0 })),
+    ];
+
+    if (activeTool === "eyedropper" || activeTool === "color-sampler" || activeTool === "ruler") return [
+      color("sample-color", "Current color", brushColor, setBrushColor),
+      ...(activeTool === "color-sampler" ? [action("clear-samples", "Clear samples", `${colorSamples.length} saved`, "×", () => setColorSamples([]), colorSamples.length === 0)] : []),
+      ...(activeTool === "ruler" ? [action("clear-ruler", "Clear ruler", measurement ? "Remove measurement" : "No measurement", "×", () => setMeasurement(null), !measurement)] : []),
+      range("measure-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+    ];
+
+    if (activeLayer) return [
+      range("layer-opacity", "Layer opacity", activeLayer.opacity * 100, 0, 100, 1, `${Math.round(activeLayer.opacity * 100)}%`, (value) => setLayerOpacity(activeLayer.id, value / 100)),
+      toggle("layer-visible", "Visible", "Show this layer", activeLayer.visible, (value) => setLayerVisible(activeLayer.id, value)),
+      toggle("layer-lock", "Locked", "Protect layer pixels", Boolean(activeLayer.locked), (value) => studio?.setLayerProp(activeLayer.id, "locked", value, "Layer lock")),
+      toggle("snap-move", "Snap", "Snap movement to guides", snapGuides, setSnapGuides),
+      action("focus-active", "Focus layer", "Isolate the active layer", "◎", () => enterFocusMode(activeLayer.id)),
+    ];
+
+    return [
+      range("canvas-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+      toggle("canvas-guides", "Guides", "Show alignment guides", showGuides, setShowGuides),
+      toggle("canvas-snap", "Snap", "Snap tools to guides", snapGuides, setSnapGuides),
+    ];
+  })();
+  /* eslint-enable react-hooks/refs */
+  const spaceToolFeatureCount = spaceToolFeatures.length;
+  const { width: spaceDeckWidth, height: spaceDeckHeight } = spaceDeckDimensions(spaceToolFeatureCount);
+  const latestSpaceCommands = useRef(contextualSpaceCommands);
+  useEffect(() => {
+    latestSpaceCommands.current = contextualSpaceCommands;
+  }, [contextualSpaceCommands]);
+
+  const openSpaceDeck = useCallback((pinned = false) => {
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const anchor = spacePointerRef.current ?? { x: rect.width / 2, y: rect.height / 2 };
+    setPassDeckPosition(clampSpaceDeckPosition(
+      anchor,
+      { width: rect.width, height: rect.height },
+      { width: spaceDeckWidth, height: spaceDeckHeight },
+    ));
+    spaceGestureRef.current = "deck";
+    setPassDeckPinned(pinned);
+    setPassDeckOpen(true);
+  }, [spaceDeckHeight, spaceDeckWidth]);
+
+  useEffect(() => {
+    if (!passDeckOpen) return;
+    const rect = stageRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setPassDeckPosition((current) => clampSpaceDeckPosition(
+      { x: current.x + spaceDeckWidth / 2, y: current.y + spaceDeckHeight / 2 },
+      { width: rect.width, height: rect.height },
+      { width: spaceDeckWidth, height: spaceDeckHeight },
+    ));
+  }, [passDeckOpen, spaceDeckHeight, spaceDeckWidth]);
+
+  const runSpaceDeckCommand = (command: SpaceDeckCommand) => {
+    switch (command.id) {
+      case "fit-canvas": setView({ zoom: 1, panX: 0, panY: 0 }); break;
+      case "new-layer": addBlank(); break;
+      case "open-document": requestDocumentOpen(); break;
+      case "show-history": setShowHistory(true); break;
+      case "deselect": studio?.deselect(); break;
+      case "invert-selection": studio?.invertSelectionArea(); break;
+      case "feather-selection": studio?.featherSelection(feather || 4); break;
+      case "selection-ai": activateTool("sel-sam", "select"); focusInspector("ai"); break;
+      case "mask-reveal": activateTool("mask-add", "mask"); break;
+      case "mask-hide": activateTool("mask-remove", "mask"); break;
+      case "invert-mask": if (activeLayerId) studio?.invertMask(activeLayerId); break;
+      case "focus-mask": if (activeLayerId) enterFocusMode(activeLayerId, "mask"); break;
+      case "brush-smaller": setBrushSize((value) => Math.max(1, Math.round(value * 0.8))); break;
+      case "brush-larger": setBrushSize((value) => Math.min(activeTool === "capture-brush" ? 1200 : 400, Math.round(value * 1.25))); break;
+      case "brush-softer": setHardness((value) => Math.max(0, Math.round((value - 0.1) * 10) / 10)); break;
+      case "brush-harder": setHardness((value) => Math.min(1, Math.round((value + 0.1) * 10) / 10)); break;
+      case "focus-layer": if (activeLayerId) enterFocusMode(activeLayerId); break;
+      case "layer-style": if (activeLayerId) setStyleLayerId(activeLayerId); break;
+      case "toggle-visibility": if (activeLayer) setLayerVisible(activeLayer.id, !activeLayer.visible); break;
+      case "toggle-lock": if (activeLayer) studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked"); break;
+    }
+    if (!passDeckPinned) {
+      setPassDeckOpen(false);
+      spaceGestureRef.current = "idle";
+    }
+  };
+
   // Restore Open Recent and hand it to the native menu, once.
   useEffect(() => {
     if (!desktop) return;
@@ -1985,6 +2429,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     latestOpenPath.current = openDocumentPath;
   });
 
+  // Recovery is intentionally allowed to finish first, then every Finder or
+  // Open Recent request queued during startup is opened in arrival order. The
+  // final requested file therefore wins instead of being replaced by recovery.
+  useEffect(() => {
+    if (!desktop || !studio || !startupReady) return;
+    const pending = startupOpenCoordinator.current.markReady();
+    if (!pending.length) return;
+    void (async () => {
+      for (const path of pending) await latestOpenPath.current(path);
+    })();
+  }, [desktop, startupReady, studio]);
+
   // The native menu bar lives in the Tauri process, so its clicks arrive as an
   // event rather than a DOM interaction — as does a double-clicked document,
   // one from the command line, and an Open Recent pick. Web builds see none.
@@ -1997,7 +2453,47 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const editingText = isEditableTextTarget(e.target);
+      if (!editingText && passDeckOpen && /^[1-4]$/.test(e.key)) {
+        e.preventDefault();
+        const index = Number(e.key) - 1;
+        const command = latestSpaceCommands.current[index];
+        if (command) runSpaceDeckCommand(command);
+        return;
+      }
+      if (!editingText && e.key === "Escape" && passDeckOpen) {
+        e.preventDefault();
+        setPassDeckOpen(false);
+        setPassDeckPinned(false);
+        spaceGestureRef.current = "idle";
+        return;
+      }
+      if (shouldRevealDesktopPassDeck({
+        desktop,
+        code: e.code,
+        repeat: e.repeat,
+        hasSelectedLayer: Boolean(activeLayerId),
+        editingText,
+      })) {
+        e.preventDefault();
+        spaceHeld.current = true;
+        document.documentElement.dataset.spaceHeld = "true";
+        document.body.style.cursor = "grab";
+        spaceGestureRef.current = "pending";
+        if (!passDeckOpen) {
+          if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
+          spaceOpenTimerRef.current = setTimeout(() => {
+            spaceOpenTimerRef.current = null;
+            if (spaceGestureRef.current === "pending") openSpaceDeck(false);
+          }, 170);
+        }
+        return;
+      }
+      if (desktop && e.code === "Space" && !editingText) {
+        e.preventDefault();
+        return;
+      }
+      if (editingText) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
         if (e.shiftKey) studio?.redo(); else studio?.undo();
@@ -2058,17 +2554,55 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === "Space") { spaceHeld.current = false; document.body.style.cursor = ""; }
+      if (e.code === "Space") {
+        if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
+        spaceOpenTimerRef.current = null;
+        spaceHeld.current = false;
+        delete document.documentElement.dataset.spaceHeld;
+        document.body.style.cursor = "";
+        if (spaceGestureRef.current === "pending") {
+          const next = togglePinnedSpaceDeck({ open: passDeckOpen, pinned: passDeckPinned });
+          if (!next.open) {
+            setPassDeckOpen(next.open);
+            setPassDeckPinned(next.pinned);
+            spaceGestureRef.current = "idle";
+          } else if (passDeckOpen) {
+            setPassDeckPinned(next.pinned);
+            spaceGestureRef.current = "deck";
+          } else {
+            openSpaceDeck(next.pinned);
+          }
+        } else if (spaceGestureRef.current === "deck") {
+          setPassDeckPinned(true);
+        } else if (spaceGestureRef.current === "panning" || spaceGestureRef.current === "dismissed") {
+          if (!passDeckPinned) setPassDeckOpen(false);
+          spaceGestureRef.current = passDeckPinned ? "deck" : "idle";
+        }
+      }
+    };
+    const onBlur = () => {
+      if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
+      spaceOpenTimerRef.current = null;
+      spaceHeld.current = false;
+      delete document.documentElement.dataset.spaceHeld;
+      document.body.style.cursor = "";
+      if (!passDeckPinned) setPassDeckOpen(false);
+      spaceGestureRef.current = passDeckPinned ? "deck" : "idle";
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
+      if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
+      spaceOpenTimerRef.current = null;
+      delete document.documentElement.dataset.spaceHeld;
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspace, studio, projectName, activeLayerId, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode]);
+  }, [desktop, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -2089,9 +2623,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         shortcut: resolveShortcut(tool, shortcut, workflowPreferences),
       })),
   }));
-  const historyState = studio?.historyState();
-  const engineState = studio?.engineState();
-  const photoshopReport = studio?.photoshopCompatibility({ format: photoshopFormat });
+  const uiWork = studioUiWorkPolicy({
+    desktop,
+    nativeBuild: NATIVE_DESKTOP_BUILD,
+    inspector: inspectorTab,
+    exportOpen: showExportMenu,
+    historyOpen: showHistory,
+  });
+  const historyState = uiWork.historyTree ? studio?.historyState() : undefined;
+  const engineState = uiWork.engineDiagnostics ? studio?.engineState() : undefined;
+  useEffect(() => {
+    let cancelled = false;
+    if (!studio || !uiWork.photoshopPreflight) return;
+    void studio.photoshopCompatibility({ format: photoshopFormat }).then((report) => {
+      if (!cancelled) setLoadedPhotoshopReport(report);
+    }).catch(() => {
+      if (!cancelled) setLoadedPhotoshopReport(null);
+    });
+    return () => { cancelled = true; };
+  }, [studio, uiWork.photoshopPreflight, photoshopFormat, version]);
+  const photoshopReport = uiWork.photoshopPreflight ? loadedPhotoshopReport : null;
   const canvasCursor = useMemo(() => {
     if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool || transformDragTool || pointSelectionTool || quadTool) return "crosshair";
     if (activeTool === "pen" || activeTool === "sel-sam" || activeTool === "eyedropper" || activeTool === "color-sampler" || activeTool === "direct-select") return "crosshair";
@@ -2344,6 +2895,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               groups={toolPaletteGroups}
               activeWorkspace={workspace}
               activeTool={activeTool}
+              compactDesktop={desktop}
               onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
               onAiSelect={() => { activateTool("sel-sam", "select"); focusInspector("ai"); }}
               onCommand={runStudioCommand}
@@ -2494,6 +3046,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
                   onPointerCancel={onPointerUp}
+                  onPointerLeave={() => positionWarpOverlay(null)}
                   style={{
                     position: "absolute",
                     inset: 0,
@@ -2517,6 +3070,29 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     }}
                   >
                     {dragOverlay}
+                    {desktop && activeTool === "radial-warp" && showRadialOverlay && (
+                      <div
+                        ref={warpOverlayRef}
+                        className="desktop-radial-overlay"
+                        aria-hidden="true"
+                        style={{
+                          ...desktopRadialOverlayPosition({
+                            point: null,
+                            documentWidth: doc.width,
+                            documentHeight: doc.height,
+                            radius: warpRadius,
+                          }),
+                          width: `${(warpRadius * 2 / doc.width) * 100}%`,
+                          height: `${(warpRadius * 2 / doc.height) * 100}%`,
+                        }}
+                      >
+                        <i className="radial-handle radial-handle-top" />
+                        <i className="radial-handle radial-handle-right" />
+                        <i className="radial-handle radial-handle-bottom" />
+                        <i className="radial-handle radial-handle-left" />
+                        <b />
+                      </div>
+                    )}
                     {doc.artboards?.map((artboard) => (
                       <div
                         key={artboard.id}
@@ -2569,6 +3145,28 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       />
                     ))}
                   </div>
+                )}
+                {desktop && passDeckOpen && (
+                  <DesktopCanvasHud
+                    activeLayer={activeLayer}
+                    context={spaceDeckContext}
+                    toolLabel={spaceToolLabel}
+                    features={spaceToolFeatures}
+                    commands={contextualSpaceCommands}
+                    position={passDeckPosition}
+                    size={{ width: spaceDeckWidth, height: spaceDeckHeight }}
+                    pinned={passDeckPinned}
+                    onPinnedChange={(pinned) => {
+                      setPassDeckPinned(pinned);
+                      spaceGestureRef.current = pinned ? "deck" : "idle";
+                    }}
+                    onCommand={runSpaceDeckCommand}
+                    onClose={() => {
+                      setPassDeckOpen(false);
+                      setPassDeckPinned(false);
+                      spaceGestureRef.current = "idle";
+                    }}
+                  />
                 )}
                 <div className="canvas-status">
                   <span title={engineState ? `${engineState.surfaces} canvas mirrors · ${engineState.precisionTiles} resident precision tiles · ${engineState.previewCache.hits} tile-cache hits · ${formatBytes(engineState.workingSetBytes)} current working set` : undefined}>
@@ -2627,6 +3225,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <button onClick={() => { if (studio) { const l = studio.addCurvesLayer(); setActiveLayerId(l.id); } }} title="Add curves">∿</button>
                   <button onClick={() => { if (studio) { const l = studio.addLevelsLayer(); setActiveLayerId(l.id); } }} title="Add levels">▦</button>
                   <button onClick={() => { if (studio) { const l = studio.addHslLayer(); setActiveLayerId(l.id); } }} title="Add HSL">◉</button>
+                  <select
+                    aria-label="Add professional adjustment"
+                    title="Add professional adjustment"
+                    value=""
+                    onChange={(event) => {
+                      const kind = event.target.value as ProAdjustmentKind;
+                      if (kind) addProfessionalAdjustment(kind);
+                    }}
+                  >
+                    <option value="">＋ Adjust</option>
+                    {PRO_ADJUSTMENT_KINDS.map((kind) => <option key={kind} value={kind}>{PRO_ADJUSTMENT_LABELS[kind]}</option>)}
+                  </select>
                   <button onClick={() => {
                     if (!studio || !activeLayerId) return;
                     if (activeLayer?.kind === "group") studio.ungroupLayer(activeLayer.id);
@@ -2640,67 +3250,38 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <button onClick={removeActive} title="Delete active">×</button>
                 </div>
               </header>
-              <div className="layer-stack">
-                {layers.map((layer, targetIndex) => (
-                  <button
-                    key={layer.id}
-                    className={`spatial-layer ${activeLayerId === layer.id ? "active" : ""}`}
-                    style={{ marginLeft: layer.parentId ? 14 : 0 }}
-                    title={layer.ai
-                      ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}${layer.ai.inputSha256 ? ` · input ${layer.ai.inputSha256.slice(0, 12)}…` : ""}`
-                      : undefined}
-                    draggable
-                    onDragStart={() => setDraggedLayerId(layer.id)}
-                    onDragEnd={() => setDraggedLayerId(null)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => {
-                      if (!studio || !draggedLayerId || draggedLayerId === layer.id) return;
-                      const sourceIndex = layers.findIndex((candidate) => candidate.id === draggedLayerId);
-                      studio.reorderLayer(draggedLayerId, targetIndex - sourceIndex);
-                      setDraggedLayerId(null);
-                    }}
-                    onClick={() => {
-                      setActiveLayerId(layer.id);
-                      setInspectorTab("layers");
-                      if (layer.kind === "adjustment-tone") {
-                        setActiveAdjustmentId(layer.id);
-                        if (layer.tone) setTone({ ...layer.tone });
-                      }
-                    }}
-                    onDoubleClick={() => {
-                      // Photoshop's split: the row opens Layer Style, the name renames.
-                      setActiveLayerId(layer.id);
-                      setStyleLayerId(layer.id);
-                    }}
-                  >
-                    <span className={`spatial-layer-thumb kind-${layer.kind}`}>
-                      {layer.kind === "group" ? "▾" :
-                       layer.kind === "smart-object" ? "◇" :
-                       layer.kind === "adjustment-tone" ? "◐" :
-                       layer.kind === "adjustment-curves" ? "∿" :
-                       layer.kind === "adjustment-levels" ? "▦" :
-                       layer.kind === "adjustment-hsl" ? "◉" :
-                       layer.kind === "text" ? "T" :
-                       layer.kind === "shape" ? "▭" :
-                       layer.kind === "path" ? "✎" : "▨"}
-                    </span>
-                    <span className="layer-name">
-                      <strong
-                        title="Double-click to rename"
-                        onDoubleClick={(event) => {
-                          event.stopPropagation();
-                          const name = window.prompt("Layer name", layer.name)?.trim();
-                          if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
-                        }}
-                      >{layer.name}</strong>
-                      <small>{layer.kind}{layer.source?.mode === "embedded-raw-preview" ? ` · ${layer.source.format} proxy` : layer.source?.mode === "dng-cfa-developed" ? " · DNG sensor · editable" : ""}{layer.source?.colorProfile ? ` · ICC ${layer.source.colorProfile.name}${layer.source.colorProfile.canTransform ? "" : " (metadata)"}` : ""}{layer.mask ? " · mask" : ""}{(layer.filters?.length || layer.effects?.length) ? ` · fx ${(layer.filters?.length ?? 0) + (layer.effects?.length ?? 0)}` : ""}{resolvedBlendPasses(layer).length > 1 ? ` · blend ${resolvedBlendPasses(layer).length}` : ""}{(!isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1) ? " · advanced" : ""}{layer.clipping ? " · clip" : ""}{layer.ai ? ` · ${layer.ai.model}` : ""}</small>
-                    </span>
-                    <i onClick={(e) => { e.stopPropagation(); setLayerVisible(layer.id, !layer.visible); }}>
-                      {layer.visible ? "◉" : "○"}
-                    </i>
-                  </button>
-                ))}
-              </div>
+              <Suspense fallback={<div className="layer-stack" aria-label="Loading layers" />}>
+                <VirtualLayerStack
+                  layers={layers}
+                  activeLayerId={activeLayerId}
+                  draggedLayerId={draggedLayerId}
+                  onDragStart={setDraggedLayerId}
+                  onDragEnd={() => setDraggedLayerId(null)}
+                  onDrop={(sourceId, targetIndex) => {
+                    if (!studio) return;
+                    const sourceIndex = layers.findIndex((candidate) => candidate.id === sourceId);
+                    studio.reorderLayer(sourceId, targetIndex - sourceIndex);
+                    setDraggedLayerId(null);
+                  }}
+                  onSelect={(layer) => {
+                    setActiveLayerId(layer.id);
+                    setInspectorTab("layers");
+                    if (layer.kind === "adjustment-tone") {
+                      setActiveAdjustmentId(layer.id);
+                      if (layer.tone) setTone({ ...layer.tone });
+                    }
+                  }}
+                  onOpenStyle={(layer) => {
+                    setActiveLayerId(layer.id);
+                    setStyleLayerId(layer.id);
+                  }}
+                  onRename={(layer) => {
+                    const name = window.prompt("Layer name", layer.name)?.trim();
+                    if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
+                  }}
+                  onToggleVisible={(layer) => setLayerVisible(layer.id, !layer.visible)}
+                />
+              </Suspense>
               {activeLayer && (
                 <div className="layer-controls">
                   <label>
@@ -2763,6 +3344,76 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               )}
             </section>
 
+            {desktop && (
+              <section className="glass-card desktop-properties-card">
+                <header>
+                  <strong>{activeToolMeta?.[2] ?? "Properties"}</strong>
+                  <small>{doc?.selection ? "SELECTION" : workspace.toUpperCase()}</small>
+                </header>
+                <div className="desktop-properties-body">
+                  <div className="desktop-property-target">
+                    <span className={`spatial-layer-thumb kind-${activeLayer?.kind ?? "canvas"}`} aria-hidden="true">
+                      {activeLayer?.kind === "text" ? "T" : activeLayer?.kind === "shape" ? "▭" : activeLayer?.kind === "group" ? "▾" : "▨"}
+                    </span>
+                    <span>
+                      <strong>{activeLayer?.name ?? "Canvas"}</strong>
+                      <small>{activeLayer ? `${activeLayer.kind} · ${activeLayer.visible ? "visible" : "hidden"}${activeLayer.locked ? " · locked" : ""}` : `${doc?.width ?? 0} × ${doc?.height ?? 0}`}</small>
+                    </span>
+                    {activeLayer && <button type="button" onClick={() => enterFocusMode(activeLayer.id)} title="Focus this layer">◎</button>}
+                  </div>
+                  {activeTool === "radial-warp" ? <>
+                    <div className="desktop-property-switch">
+                      <span><strong>Radial warp</strong><small>Drag inside the ring to reshape locally</small></span>
+                      <button type="button" role="switch" aria-checked className="active" onClick={() => activateTool("move", "edit")} aria-label="Disable radial warp"><i /></button>
+                    </div>
+                    <label className="desktop-property-range">
+                      <span>Influence</span>
+                      <input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} />
+                      <output>{warpRadius}px</output>
+                    </label>
+                    <div className="desktop-property-row">
+                      <span>Overlay</span>
+                      <button type="button" className={showRadialOverlay ? "active" : ""} aria-pressed={showRadialOverlay} onClick={() => setShowRadialOverlay((visible) => !visible)}>{showRadialOverlay ? "Visible" : "Hidden"}</button>
+                    </div>
+                  </> : (paintingTool || workspace === "mask") ? <>
+                    <label className="desktop-property-range">
+                      <span>Size</span>
+                      <input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} />
+                      <output>{brushSize}px</output>
+                    </label>
+                    <label className="desktop-property-range">
+                      <span>Hardness</span>
+                      <input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(event) => setHardness(Number(event.target.value) / 100)} />
+                      <output>{Math.round(hardness * 100)}%</output>
+                    </label>
+                    <label className="desktop-property-range">
+                      <span>Opacity</span>
+                      <input type="range" min="1" max="100" value={Math.round(brushOpacity * 100)} onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)} />
+                      <output>{Math.round(brushOpacity * 100)}%</output>
+                    </label>
+                  </> : activeLayer ? <>
+                    <label className="desktop-property-range">
+                      <span>Opacity</span>
+                      <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => setLayerOpacity(activeLayer.id, Number(event.target.value) / 100)} />
+                      <output>{Math.round(activeLayer.opacity * 100)}%</output>
+                    </label>
+                    <div className="desktop-property-row">
+                      <span>Tool features</span>
+                      <button type="button" onClick={() => openSpaceDeck(true)}>{spaceToolLabel} · Open</button>
+                    </div>
+                    <div className="desktop-property-row desktop-property-buttons">
+                      <button type="button" className={activeLayer.visible ? "active" : ""} onClick={() => setLayerVisible(activeLayer.id, !activeLayer.visible)}>◉ Visible</button>
+                      <button type="button" className={activeLayer.locked ? "active" : ""} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>⌁ {activeLayer.locked ? "Locked" : "Unlocked"}</button>
+                    </div>
+                  </> : (
+                    <button className="desktop-empty-action" type="button" onClick={addBlank}>＋ Add your first layer</button>
+                  )}
+                  <div className="desktop-space-hint"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></div>
+                </div>
+              </section>
+            )}
+
+            {!NATIVE_DESKTOP_BUILD && shouldMountLegacyInspector(desktop) && <>
             <section className="glass-card mask-card">
               <header><strong>Channels</strong><small title="Channel previews do not change RGB export">{(engineState?.channelView ?? "rgb").toUpperCase()}</small></header>
               <div className="mask-segmented channel-switcher">
@@ -3153,7 +3804,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   ))}
                 </div>
                 <p style={{ padding: "0 12px 10px", fontSize: 11, opacity: 0.65 }}>
-                  Re-developed from the original embedded DNG sensor asset · {activeLayer.raw.matrixSource.replaceAll("-", " ")}
+                  Re-developed from the original embedded {activeLayer.raw.sensor.format ?? activeLayer.source?.format ?? "RAW"} sensor asset · {activeLayer.raw.matrixSource.replaceAll("-", " ")}
                   {activeLayer.raw.sensor.warnings.length ? ` · ${activeLayer.raw.sensor.warnings.join(" · ")}` : ""}
                 </p>
               </section>
@@ -3174,7 +3825,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <HslEditor hsl={activeLayer.hsl} onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)} onCommit={(h) => studio?.updateHsl(activeLayer.id, h)} onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })} />
               </Suspense>
             )}
-            {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && (
+            {workspace === "develop" && activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
+              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
+                <ProAdjustmentEditor
+                  adjustment={activeLayer.proAdjustment}
+                  onLive={(adjustment) => studio?.liveUpdateProAdjustment(activeLayer.id, adjustment)}
+                  onCommit={(adjustment) => studio?.updateProAdjustment(activeLayer.id, adjustment)}
+                  onReset={() => studio?.updateProAdjustment(activeLayer.id, defaultProAdjustment(activeLayer.proAdjustment!.kind))}
+                />
+              </Suspense>
+            )}
+            {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && activeLayer?.kind !== "adjustment-pro" && (
               <section className="glass-card tone-card">
                 <header>
                   <strong>{activeIsAdjustment ? "Develop stack" : "Add Tone"}</strong>
@@ -3252,7 +3913,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                         <option value="color">Full color</option>
                         <option value="tint">Tint with paint color</option>
                         <option value="stencil">Dark pixels as stencil</option>
+                        <option value="material">Material transfer</option>
                       </select>
+                    </label>
+                    <label style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", fontSize: 10 }}>
+                      <span><strong>Living source</strong><br /><small style={{ opacity: 0.62 }}>Re-sample before every stroke</small></span>
+                      <input type="checkbox" checked={captureLive} onChange={(event) => setCaptureLive(event.target.checked)} />
                     </label>
                     {captureSampling && (
                       <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 44px", alignItems: "center", gap: 7, fontSize: 10 }}>
@@ -3326,7 +3992,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                                 style={{ width: "100%", display: "grid", justifyItems: "center", gap: 3, padding: "5px 3px", overflow: "hidden" }}
                               >
                                 <CapturedBrushThumbnail asset={asset} />
-                                <span style={{ width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 9 }}>{asset.name}</span>
+                                <span style={{ width: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 9 }}>{asset.liveSource?.live ? "● " : ""}{asset.name}</span>
                               </button>
                               <button
                                 aria-label={`Remove ${asset.name}`}
@@ -3506,6 +4172,22 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   aria-label="Generative edit prompt"
                   style={{ minHeight: 58, resize: "vertical", borderRadius: 8, padding: 8, background: "rgba(255,255,255,.06)", color: "inherit", border: "1px solid rgba(255,255,255,.14)" }}
                 />
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 6, padding: "5px 7px", border: "1px solid rgba(126,231,255,.15)", borderRadius: 8, background: "rgba(126,231,255,.035)", fontSize: 10 }}>
+                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <strong>Identity Lock</strong> · {identityReference?.name ?? "No reference"}
+                  </span>
+                  <button
+                    disabled={!activeLayer || activeLayer.kind === "group" || activeLayer.kind.startsWith("adjustment-")}
+                    onClick={() => {
+                      if (!studio || !activeLayer) return;
+                      const clearing = identityReference?.id === activeLayer.id;
+                      studio.setIdentityReference(clearing ? null : activeLayer.id);
+                      notify(clearing ? "Identity reference cleared" : `${activeLayer.name} locked as the AI reference`);
+                    }}
+                    title="The locked layer is sent as a separate identity/product reference for generative edits"
+                    style={{ padding: "4px 7px", fontSize: 9 }}
+                  >{identityReference?.id === activeLayer?.id ? "Unlock" : "Lock active"}</button>
+                </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <select value={aiOperation} onChange={(event) => setAiOperation(event.target.value as AiProvenance["operation"])} style={{ flex: 1 }}>
                     <option value="fill">Generative fill</option>
@@ -3593,14 +4275,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 ◴{historyState?.branchPoints ? <sup>{historyState.branchPoints + 1}</sup> : null}
               </button>
             </div>
+            </>}
           </aside>
         </div>
         {desktop && (
           <Suspense fallback={null}>
             <DesktopStatusbar
               dimensions={doc ? `${doc.width.toLocaleString()} × ${doc.height.toLocaleString()} px` : "No document open"}
-              bitDepth={engineState?.bitDepth ?? 8}
-              colorSpace={engineState?.colorSpace ?? "sRGB"}
+              bitDepth={doc?.bitDepth ?? 8}
+              colorSpace={doc?.colorSpace ?? "sRGB"}
               accelerated={useGL}
               tool={activeToolMeta?.[2] ?? "Tool"}
               shortcut={activeToolMeta ? resolveShortcut(activeToolMeta[0], activeToolMeta[3], workflowPreferences) : ""}
@@ -3778,25 +4461,29 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </small>
               <button onClick={() => setShowHistory(false)} aria-label="Close version history">×</button>
             </div>
-            <p>Undo, explore another direction, and return to either version. Alternate work is retained as a branch.</p>
+            <p>Restore a version, or mix an alternate branch into the current image as a new editable layer.</p>
+            <div style={{ display: "grid", gridTemplateColumns: "68px minmax(0,1fr) 46px 112px", gap: 7, alignItems: "center", padding: "4px 12px 9px", fontSize: 10 }}>
+              <span>Mix strength</span>
+              <input type="range" min="1" max="100" value={Math.round(branchMixOpacity * 100)} onChange={(event) => setBranchMixOpacity(Number(event.target.value) / 100)} />
+              <output>{Math.round(branchMixOpacity * 100)}%</output>
+              <select value={branchMixBlend} onChange={(event) => setBranchMixBlend(event.target.value as BlendMode)} aria-label="Branch mix blend mode">
+                <option value="source-over">Normal</option><option value="soft-light">Soft Light</option><option value="overlay">Overlay</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="color">Color</option><option value="luminosity">Luminosity</option>
+              </select>
+            </div>
             <div role="tree" style={{ maxHeight: "min(56vh, 520px)", overflowY: "auto", padding: "2px 0" }}>
               {historyState?.nodes.map((node) => (
-                <button
+                <div
                   key={node.id}
                   role="treeitem"
                   aria-current={node.isCurrent ? "step" : undefined}
                   aria-selected={node.isCurrent}
-                  onClick={() => {
-                    if (!studio || node.isCurrent) return;
-                    studio.checkoutHistory(node.id);
-                    notify(`Restored ${node.label}`);
-                  }}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "20px minmax(0,1fr) auto",
+                    gridTemplateColumns: "minmax(0,1fr) 54px",
                     alignItems: "center",
                     width: "100%",
-                    paddingLeft: 10 + node.depth * 16,
+                    gap: 5,
+                    paddingLeft: 6 + node.depth * 16,
                     background: node.isCurrent
                       ? "linear-gradient(90deg,rgba(124,92,231,.3),rgba(35,133,244,.16))"
                       : node.isOnCurrentPath ? "rgba(255,255,255,.055)" : "rgba(255,255,255,.025)",
@@ -3804,14 +4491,33 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     opacity: node.isOnCurrentPath || node.isCurrent ? 1 : 0.72,
                   }}
                 >
-                  <i aria-hidden="true">{node.isCurrent ? "●" : node.childCount > 1 ? "⑂" : "○"}</i>
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
-                    {node.label}
-                  </span>
-                  <small style={{ opacity: 0.58 }}>
-                    {node.childCount > 1 ? `${node.childCount} branches` : new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                  </small>
-                </button>
+                  <button
+                    onClick={() => {
+                      if (!studio || node.isCurrent) return;
+                      studio.checkoutHistory(node.id);
+                      notify(`Restored ${node.label}`);
+                    }}
+                    style={{ display: "grid", gridTemplateColumns: "20px minmax(0,1fr) auto", alignItems: "center", minWidth: 0, border: 0, background: "transparent", textAlign: "left" }}
+                  >
+                    <i aria-hidden="true">{node.isCurrent ? "●" : node.childCount > 1 ? "⑂" : "○"}</i>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.label}</span>
+                    <small style={{ opacity: 0.58 }}>{node.childCount > 1 ? `${node.childCount} branches` : new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
+                  </button>
+                  <button
+                    disabled={node.isCurrent || !node.parentId}
+                    title={doc?.selection ? "Mix this version inside the active selection" : "Mix this version as a new layer"}
+                    onClick={() => {
+                      if (!studio) return;
+                      const result = studio.mixHistoryBranch(node.id, branchMixOpacity, branchMixBlend);
+                      if (result.error) { notify(result.error); return; }
+                      if (result.layer) {
+                        setActiveLayerId(result.layer.id);
+                        notify(`${node.label} mixed as a new layer`);
+                      }
+                    }}
+                    style={{ padding: "5px 6px", fontSize: 9 }}
+                  >Mix</button>
+                </div>
               ))}
             </div>
           </section>
@@ -3828,16 +4534,27 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <input type="range" min="1" max="64" value={blurRadius} onChange={(e) => setBlurRadius(Number(e.target.value))} style={{ flex: 1 }} />
               <output>{blurRadius}px</output>
             </label>
-            <button onClick={() => { runFilter("blur", { radius: blurRadius }); }}><i>◌</i><span>Gaussian blur</span><kbd>↵</kbd></button>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 6, padding: "4px 8px 8px" }}>
+              <button onClick={() => runFilter("blur", { radius: blurRadius })}><i>◌</i><span>Gaussian</span></button>
+              <button onClick={() => runFilter("motion-blur", { radius: blurRadius * 2, angle: 0 })}><i>↔</i><span>Motion</span></button>
+              <button onClick={() => runFilter("surface-blur", { radius: Math.min(12, blurRadius), threshold: 24 })}><i>◍</i><span>Surface</span></button>
+              <button onClick={() => runFilter("high-pass", { radius: Math.min(32, blurRadius) })}><i>◇</i><span>High Pass</span></button>
+            </div>
             <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", fontSize: 12 }}>
               <span style={{ width: 90 }}>Sharpen</span>
               <input type="range" min="0" max="200" value={Math.round(sharpAmount * 100)} onChange={(e) => setSharpAmount(Number(e.target.value) / 100)} style={{ flex: 1 }} />
               <output>{sharpAmount.toFixed(2)}</output>
             </label>
-            <button onClick={() => runFilter("sharpen", { radius: 2, amount: sharpAmount })}><i>✧</i><span>Unsharp mask</span><kbd>↵</kbd></button>
-            <button onClick={() => runFilter("invert")}><i>◑</i><span>Invert colors</span><kbd>↵</kbd></button>
-            <button onClick={() => runFilter("desaturate", { amount: 1 })}><i>◐</i><span>Desaturate</span><kbd>↵</kbd></button>
-            <button onClick={() => runFilter("hue", { degrees: 45 })}><i>✦</i><span>Hue rotate +45°</span><kbd>↵</kbd></button>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 6, padding: "4px 8px 8px" }}>
+              <button onClick={() => runFilter("sharpen", { radius: 2, amount: sharpAmount })}><i>✧</i><span>Unsharp</span></button>
+              <button onClick={() => runFilter("median", { radius: Math.min(6, blurRadius) })}><i>⋯</i><span>Median</span></button>
+              <button onClick={() => runFilter("dust-scratches", { radius: Math.min(6, blurRadius), threshold: 18 })}><i>⌁</i><span>Dust</span></button>
+              <button onClick={() => runFilter("maximum", { radius: Math.min(8, blurRadius) })}><i>⊕</i><span>Maximum</span></button>
+              <button onClick={() => runFilter("minimum", { radius: Math.min(8, blurRadius) })}><i>⊖</i><span>Minimum</span></button>
+              <button onClick={() => runFilter("invert")}><i>◑</i><span>Invert</span></button>
+              <button onClick={() => runFilter("desaturate", { amount: 1 })}><i>◐</i><span>Desaturate</span></button>
+              <button onClick={() => runFilter("hue", { degrees: 45 })}><i>✦</i><span>Hue +45°</span></button>
+            </div>
           </section>
         </div>
       )}

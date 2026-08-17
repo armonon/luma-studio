@@ -703,6 +703,10 @@ export function isLinearCompositing() { return linearCompositing; }
  * effect needs beyond its own layer cannot be honoured here.
  */
 export function glCanRenderDocument(doc: Document): boolean {
+  // The professional adjustment pack is tile-rendered by the exact CPU path
+  // until its shared formulas are compiled to a single GPU program. Falling
+  // back is preferable to treating an unknown adjustment as transparent.
+  if (doc.layers.some((layer) => layer.kind === "adjustment-pro")) return false;
   // Adjustment programs transform the current composite directly. Route
   // adjustment layers with custom blend passes through the exact CPU path.
   if (doc.layers.some((layer) => {

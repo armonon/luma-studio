@@ -149,3 +149,18 @@ test("distinct canvases are still billed separately", () => {
   };
   assert.equal(historyEntrySize(entry), 128 + 100 * 100 * 4 * 2);
 });
+
+test("large pure reorders retain ids instead of cloning layer payloads", () => {
+  const ids = Array.from({ length: 100_000 }, (_, index) => `layer-${index}`);
+  const entry: HistoryEntry = {
+    label: "Layer reordered",
+    before: [],
+    after: [],
+    layerOrderBefore: ids,
+    layerOrderAfter: [...ids].reverse(),
+  };
+  const bytes = historyEntrySize(entry);
+  assert.ok(bytes < 8 * 1024 * 1024, `100K-layer reorder should stay compact, received ${bytes} bytes`);
+  assert.equal(entry.layersBefore, undefined);
+  assert.equal(entry.layersAfter, undefined);
+});

@@ -26,7 +26,7 @@ export type BrushTexture = {
   seed?: number;
 };
 
-export type ImageBrushMode = "color" | "tint" | "stencil";
+export type ImageBrushMode = "color" | "tint" | "stencil" | "material";
 
 /** Immutable sampled image used as a full-colour or colorized brush tip. */
 export type ImageBrushTip = {
@@ -446,7 +446,11 @@ function imageStrokeSource(
         const deposit = clamp(dab.opacity * sampled.alpha * stencil * edge *
           textureAt(x + originX, y + originY, dab, params.texture));
         if (deposit <= 0) continue;
-        const source = tip.mode === "color" ? sampled.color : paintColor;
+        const source = tip.mode === "color"
+          ? sampled.color
+          : tip.mode === "material"
+            ? paintColor.map((channel) => clamp(channel * (0.35 + sampled.displayLuminance * 1.3))) as [number, number, number]
+            : paintColor;
         const pixel = y * surface.width + x;
         const colorOffset = pixel * 3;
         if (!buildUp && deposit <= alpha[pixel]) continue;
@@ -707,7 +711,7 @@ function stampCanvas(ctx: CanvasRenderingContext2D, dab: BrushDab, params: Brush
 const imageTipCanvasCache = new WeakMap<ImageBrushTip, Map<string, HTMLCanvasElement>>();
 
 function canvasForImageTip(tip: ImageBrushTip, color: string) {
-  const colorKey = tip.mode === "color" ? "color" : color.toLowerCase();
+  const colorKey = tip.mode === "color" ? "color" : `${tip.mode}:${color.toLowerCase()}`;
   const cached = imageTipCanvasCache.get(tip);
   const existing = cached?.get(colorKey);
   if (existing) return existing;
@@ -726,10 +730,11 @@ function canvasForImageTip(tip: ImageBrushTip, color: string) {
       image.data.set([red, green, blue, alpha], offset);
     } else {
       const luminance = (red * 0.2126 + green * 0.7152 + blue * 0.0722) / 255;
+      const materialScale = 0.35 + luminance * 1.3;
       image.data.set([
-        tint[0],
-        tint[1],
-        tint[2],
+        tip.mode === "material" ? Math.round(Math.min(255, tint[0] * materialScale)) : tint[0],
+        tip.mode === "material" ? Math.round(Math.min(255, tint[1] * materialScale)) : tint[1],
+        tip.mode === "material" ? Math.round(Math.min(255, tint[2] * materialScale)) : tint[2],
         Math.round(alpha * (tip.mode === "stencil" ? 1 - luminance : 1)),
       ], offset);
     }

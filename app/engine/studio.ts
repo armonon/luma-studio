@@ -45,6 +45,7 @@ import {
   createLevelsLayer,
   createGroupLayer,
   createPathLayer,
+  createProAdjustmentLayer,
   createRasterLayer,
   createShapeLayer,
   createTextLayer,
@@ -59,9 +60,16 @@ import {
   transformPoint,
   type GlobalLight,
 } from "./document";
+import {
+  PRO_ADJUSTMENT_LABELS,
+  defaultProAdjustment,
+  type ProAdjustmentKind,
+  type ProAdjustmentParams,
+} from "./pro-adjustments";
 import { instantiateStyle, planCreateLayers, type LayerStylePreset } from "./layer-styles";
 import { renderEffectAlone } from "./layer-effects";
 import { isNeutralBlendIf } from "./blend";
+import { blendRecipePasses, type BlendRecipeId } from "./blend-recipes";
 import { compositeNativeTile, isNativeCoreAvailable } from "./native-core";
 import {
   BrushParams,
@@ -102,6 +110,7 @@ import {
 } from "./selection";
 import {
   desaturate,
+  filterRegionForSelection,
   gaussianBlur,
   hueRotate,
   invertColors,
@@ -134,13 +143,11 @@ import {
 } from "./layer-mutations";
 import { autoLumaMaskInPlace, clearMaskInPlace, invertMaskInPlace } from "./mask-ops";
 import { withSelectionCommit } from "./selection-driver";
-import {
-  exportPhotoshopDocument,
-  exportPsd,
-  importPsd,
-  photoshopCompatibilityReport,
-  type PhotoshopExportOptions,
+import type {
+  PhotoshopCompatibilityReport,
+  PhotoshopExportOptions,
 } from "./psd";
+import { getPhotoshopDocumentMetadata } from "./psd-metadata";
 import { OperationHistory } from "./operation-history";
 import { DEFAULT_TILE_SIZE, PixelFormat, PixelRect, PrecisionTileSurface, TileGrid } from "./tile-store";
 import { drawLayerContentManaged, precisionPreviewCacheStats } from "./precision-renderer";
@@ -158,7 +165,7 @@ import {
   VirtualCanvasPyramid,
   type ViewportPlan,
 } from "./virtual-canvas";
-import { calculateDisplayViewport, type DisplayViewport } from "./viewport";
+import { calculateDisplayViewport, sameDisplayViewport, type DisplayViewport } from "./viewport";
 import { appendDirtyRegion } from "./dirty-regions";
 import { AdaptiveRenderGovernor } from "./performance-governor";
 import {
@@ -193,6 +200,7 @@ export type LayerSnapshot = {
   curves?: Curves;
   levels?: LevelsParams;
   hsl?: HslParams;
+  proAdjustment?: ProAdjustmentParams;
   opacity?: number;
   fillOpacity?: number | null;
   blend?: BlendMode;
@@ -233,6 +241,10 @@ export type HistoryEntry = {
   after: LayerSnapshot[];
   layersBefore?: Layer[];
   layersAfter?: Layer[];
+  /** Compact structural history for pure reorders. Layer objects and pixel
+   * stores stay shared; only stable ids are retained. */
+  layerOrderBefore?: string[];
+  layerOrderAfter?: string[];
   selectionBefore?: Selection | null;
   selectionAfter?: Selection | null;
   selectionTranslation?: SelectionTranslationPatch;
@@ -455,6 +467,7 @@ export class Studio {
   private readonly historyBudgetBytes: number;
   private renderScheduled = false;
   private renderRevision = 0;
+  private layerHierarchyRevision = 0;
   private fullRenderPending = true;
   private pendingDirtyRegions: PixelRect[] = [];
   private disposed = false;
@@ -595,6 +608,7 @@ export class Studio {
 
   /** Keep a bounded, priority-ordered tile plan aligned with the visible canvas. */
   setVirtualViewport(viewport: DisplayViewport) {
+    if (sameDisplayViewport(this.displayViewport, viewport)) return this.virtualPlan;
     this.displayViewport = viewport;
     this.virtualPlan = this.virtualPlanner.plan(viewport, {
       prefetchMarginTiles: 1,
@@ -674,6 +688,7 @@ export class Studio {
       const renderStartedAt = performance.now();
       renderViewport(this.doc, this.target, governedViewport, {
         cacheRevision: this.renderRevision,
+        hierarchyRevision: this.layerHierarchyRevision,
         dirtyRegions,
         channelView: this.channelView,
         focus: this.focusPreview,
@@ -721,7 +736,11 @@ export class Studio {
     workingSetBytes += precisionBytes;
     const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
-    const photoshop = photoshopCompatibilityReport(this.doc, { format: "auto" });
+    const photoshopMetadata = getPhotoshopDocumentMetadata(this.doc);
+    const photoshopContainer = photoshopMetadata?.header.container
+      ?? (this.doc.width > 30000 || this.doc.height > 30000 ? "psb" : "psd");
+    const photoshopCanExport = this.doc.width > 0 && this.doc.height > 0
+      && this.doc.width <= 300000 && this.doc.height <= 300000;
     return {
       // The interactive viewport is always the CPU tiled renderer; `useGL`
       // only selects the export/flatten path, so it is reported separately
@@ -762,10 +781,10 @@ export class Studio {
         dirty: this.virtualDirty.stats(),
       },
       photoshop: {
-        container: photoshop.container,
-        canExport: photoshop.canExport,
-        warnings: photoshop.issues.filter((issue) => issue.severity === "warning").length,
-        preserved: photoshop.issues.filter((issue) => issue.severity === "info").length,
+        container: photoshopContainer,
+        canExport: photoshopCanExport,
+        warnings: photoshopMetadata?.importedIssues.filter((issue) => issue.severity === "warning").length ?? 0,
+        preserved: photoshopMetadata?.importedIssues.filter((issue) => issue.severity === "info").length ?? 0,
       },
       proofing: { ...this.doc.proofing },
       previewCache: precisionPreviewCacheStats(),
@@ -811,12 +830,109 @@ export class Studio {
     return true;
   }
 
+  /**
+   * Flattens an alternate history branch into a new, editable layer above the
+   * current document. With an active selection only that bounded region is
+   * rendered, so this remains practical on very large documents.
+   */
+  mixHistoryBranch(nodeId: string, opacity = 0.5, blend: BlendMode = "source-over"):
+    { layer?: Layer; error?: string } {
+    const currentId = this.history.current;
+    if (nodeId === currentId) return { error: "Choose a different history version" };
+    const bounds = this.doc.selection?.bounds ?? { x: 0, y: 0, w: this.doc.width, h: this.doc.height };
+    const width = Math.max(1, Math.ceil(bounds.w));
+    const height = Math.max(1, Math.ceil(bounds.h));
+    if (exceedsBrowserCanvas(width, height) || width * height > 64 * 1024 * 1024) {
+      return { error: "Select a smaller region before mixing this large branch" };
+    }
+    const originalSize = { width: this.doc.width, height: this.doc.height };
+    const applyTransition = (target: string) => {
+      const transition = this.history.checkout(target);
+      for (const node of transition.undo) if (node.value) this.applyHistoryEntry(node.value, "before");
+      for (const node of transition.redo) if (node.value) this.applyHistoryEntry(node.value, "after");
+    };
+    let branchBitmap: HTMLCanvasElement | null = null;
+    let failure: string | null = null;
+    try {
+      applyTransition(nodeId);
+      if (this.doc.width !== originalSize.width || this.doc.height !== originalSize.height) {
+        failure = "Versions with different canvas sizes cannot be mixed yet";
+      } else {
+        branchBitmap = newCanvas(width, height);
+        this.renderRevision += 1;
+        renderViewport(this.doc, branchBitmap, {
+          x: bounds.x,
+          y: bounds.y,
+          width,
+          height,
+          zoom: 1,
+          outputWidth: width,
+          outputHeight: height,
+          cssScale: 1,
+          devicePixelRatio: 1,
+        }, {
+          checkerboard: false,
+          selectionOverlay: false,
+          proofing: false,
+          cacheRevision: this.renderRevision,
+          hierarchyRevision: this.layerHierarchyRevision,
+        });
+      }
+    } catch (error) {
+      failure = error instanceof Error ? error.message : "That branch could not be rendered";
+    } finally {
+      try {
+        applyTransition(currentId);
+      } catch (error) {
+        // A failed restore is more important than the original render error.
+        failure = error instanceof Error ? error.message : "The current version could not be restored";
+      }
+    }
+    if (failure || !branchBitmap) {
+      this.requestRender();
+      this.emit();
+      return { error: failure ?? "That branch could not be mixed" };
+    }
+    if (this.doc.selection) {
+      const context = branchBitmap.getContext("2d")!;
+      context.save();
+      context.globalCompositeOperation = "destination-in";
+      context.drawImage(this.doc.selection.mask, -bounds.x, -bounds.y);
+      context.restore();
+    }
+    const node = this.history.tree().find((candidate) => candidate.id === nodeId);
+    const layer = createRasterLayer(`Branch Mix · ${node?.label ?? "Version"}`, branchBitmap);
+    layer.surface = this.surfaceFromCanvas(branchBitmap);
+    layer.opacity = Math.max(0, Math.min(1, opacity));
+    layer.blend = blend;
+    layer.transform = { ...layer.transform, tx: bounds.x, ty: bounds.y };
+    this.commitStructural("History branch mixed", () => this.doc.layers.unshift(layer));
+    this.checkpointLayerSurface(layer);
+    this.requestRender();
+    return { layer };
+  }
+
   private applyHistoryEntry(entry: HistoryEntry, side: "before" | "after") {
     const document = side === "before" ? entry.documentBefore : entry.documentAfter;
-    if (document) this.doc = cloneDocument(document);
+    if (document) {
+      this.doc = cloneDocument(document);
+      this.layerHierarchyRevision += 1;
+    }
     this.applySnapshots(side === "before" ? entry.before : entry.after);
     const layers = side === "before" ? entry.layersBefore : entry.layersAfter;
-    if (layers) this.doc.layers = layers.map(shallowCloneLayer);
+    if (layers) {
+      this.doc.layers = layers.map(shallowCloneLayer);
+      this.layerHierarchyRevision += 1;
+    }
+    const layerOrder = side === "before" ? entry.layerOrderBefore : entry.layerOrderAfter;
+    if (layerOrder) {
+      const byId = new Map(this.doc.layers.map((layer) => [layer.id, layer]));
+      const reordered = layerOrder.map((id) => byId.get(id)).filter((layer): layer is Layer => Boolean(layer));
+      if (reordered.length === this.doc.layers.length) {
+        this.doc.layers = reordered;
+        this.layerHierarchyRevision += 1;
+      }
+    }
     const selectionKey = side === "before" ? "selectionBefore" : "selectionAfter";
     if (selectionKey in entry) {
       const selection = entry[selectionKey];
@@ -904,6 +1020,7 @@ export class Studio {
     this.activeSessionId = next.id;
     this.doc = next.doc;
     this.history = next.history;
+    this.layerHierarchyRevision += 1;
     this.focusPreview = null;
     this.resetVirtualGeometry(this.doc.width, this.doc.height);
     this.requestRender();
@@ -927,6 +1044,7 @@ export class Studio {
       this.activeSessionId = next.id;
       this.doc = next.doc;
       this.history = next.history;
+      this.layerHierarchyRevision += 1;
       this.focusPreview = null;
       this.resetVirtualGeometry(this.doc.width, this.doc.height);
       this.requestRender();
@@ -950,6 +1068,7 @@ export class Studio {
     this.focusPreview = null;
     this.resetVirtualGeometry(doc.width, doc.height);
     this.ensureDocumentSurfaces(doc);
+    this.layerHierarchyRevision += 1;
     this.saveActiveSession();
     const current = this.sessions.find((session) => session.id === this.activeSessionId);
     if (current && current.doc.layers.length === 0) {
@@ -991,7 +1110,7 @@ export class Studio {
     return this.addRasterFromImage(name, img, source, { fit: false });
   }
 
-  /** Install a sensor-developed DNG without quantizing its float master. */
+  /** Install a sensor-developed camera RAW without quantizing its float master. */
   openDevelopedDng(name: string, original: ArrayBuffer, developed: DevelopedDng) {
     const doc = createDocument(developed.width, developed.height);
     doc.bitDepth = 32;
@@ -1003,7 +1122,7 @@ export class Studio {
     layer.source = {
       originalName: developed.provenance.originalName,
       format: developed.provenance.format,
-      mode: "dng-cfa-developed",
+      mode: developed.provenance.mode,
       originalBytes: developed.provenance.originalBytes,
     };
     layer.raw = {
@@ -1013,12 +1132,13 @@ export class Studio {
       boundary: developed.provenance.boundary,
       matrixSource: developed.provenance.matrixSource,
       sensor: {
+        format: developed.provenance.format,
         bitsPerSample: developed.metadata.bitsPerSample,
         dngVersion: developed.metadata.dngVersion,
         warnings: [...developed.metadata.warnings],
       },
     };
-    this.commitStructural(`${name} developed from DNG`, () => this.doc.layers.unshift(layer));
+    this.commitStructural(`${name} developed from ${developed.provenance.format}`, () => this.doc.layers.unshift(layer));
     this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
@@ -1027,12 +1147,17 @@ export class Studio {
   /** Re-run the sensor pipeline from the embedded original DNG and commit one undo step. */
   redevelopRaw(layerId: string, patch: Partial<RawDevelopSettings>) {
     const layer = this.findLayer(layerId);
-    if (!layer?.raw || layer.source?.mode !== "dng-cfa-developed") return false;
+    if (!layer?.raw || (layer.source?.mode !== "dng-cfa-developed" && layer.source?.mode !== "camera-raw-developed")) return false;
     const before = snapshotLayer(layer);
     let session = this.rawSessions.get(layerId);
     if (!session) {
       const source = layer.raw.original.slice().buffer as ArrayBuffer;
-      session = new DngDevelopSession(source, layer.source.originalName, layer.raw.settings);
+      session = new DngDevelopSession(
+        source,
+        layer.source.originalName,
+        layer.raw.settings,
+        layer.raw.sensor.format ?? layer.source.format,
+      );
       this.rawSessions.set(layerId, session);
     }
     const developed = session.develop({
@@ -1136,6 +1261,7 @@ export class Studio {
     this.doc.width = rectified.width;
     this.doc.height = rectified.height;
     this.doc.layers = [layer];
+    this.layerHierarchyRevision += 1;
     this.doc.guides = [];
     this.doc.selection = null;
     this.resetVirtualGeometry(rectified.width, rectified.height);
@@ -1908,10 +2034,23 @@ export class Studio {
     return layer;
   }
 
+  addProAdjustmentLayer(
+    kind: ProAdjustmentKind,
+    params: ProAdjustmentParams = defaultProAdjustment(kind),
+  ) {
+    const name = PRO_ADJUSTMENT_LABELS[kind];
+    const layer = createProAdjustmentLayer(name, params);
+    this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.requestRender();
+    return layer;
+  }
+
   liveUpdateLevels(id: string, levels: LevelsParams) { this.liveAdjustment(id, "levels", levels); }
   updateLevels(id: string, levels: LevelsParams) { this.commitAdjustment(id, "levels", levels); }
   liveUpdateHsl(id: string, hsl: HslParams) { this.liveAdjustment(id, "hsl", hsl); }
   updateHsl(id: string, hsl: HslParams) { this.commitAdjustment(id, "hsl", hsl); }
+  liveUpdateProAdjustment(id: string, params: ProAdjustmentParams) { this.liveAdjustment(id, "proAdjustment", params); }
+  updateProAdjustment(id: string, params: ProAdjustmentParams) { this.commitAdjustment(id, "proAdjustment", params); }
   updateCurves(id: string, curves: Curves) { this.commitAdjustment(id, "curves", curves); }
   liveUpdateCurves(id: string, curves: Curves) { this.liveAdjustment(id, "curves", curves); }
 
@@ -2582,9 +2721,16 @@ export class Studio {
     if (idx < 0) return;
     const next = Math.max(0, Math.min(this.doc.layers.length - 1, idx + delta));
     if (next === idx) return;
-    this.commitStructural("Layer reordered", () => {
-      const [l] = this.doc.layers.splice(idx, 1);
-      this.doc.layers.splice(next, 0, l);
+    const layerOrderBefore = this.doc.layers.map((layer) => layer.id);
+    const [l] = this.doc.layers.splice(idx, 1);
+    this.doc.layers.splice(next, 0, l);
+    this.layerHierarchyRevision += 1;
+    this.commit({
+      label: "Layer reordered",
+      before: [],
+      after: [],
+      layerOrderBefore,
+      layerOrderAfter: this.doc.layers.map((layer) => layer.id),
     });
     this.requestRender();
   }
@@ -2592,6 +2738,7 @@ export class Studio {
   private commitStructural(label: string, mutate: () => void) {
     const before = this.doc.layers.map(shallowCloneLayer);
     mutate();
+    this.layerHierarchyRevision += 1;
     const after = this.doc.layers.map(shallowCloneLayer);
     this.commit({ label, before: [], after: [], layersBefore: before, layersAfter: after });
   }
@@ -2619,6 +2766,18 @@ export class Studio {
     layer[key] = value;
     this.commit({ label: label || `${String(key)} changed`, before: [before], after: [after] });
     this.requestRender();
+  }
+
+  setIdentityReference(id: string | null) {
+    const target = id ? this.findLayer(id) : null;
+    if (id && (!target || target.kind === "group" || target.kind.startsWith("adjustment-"))) return false;
+    const current = this.doc.layers.find((layer) => layer.identityReference)?.id ?? null;
+    if (current === id) return false;
+    this.commitStructural(id ? "Identity reference locked" : "Identity reference cleared", () => {
+      for (const layer of this.doc.layers) layer.identityReference = layer.id === id || undefined;
+    });
+    this.requestRender();
+    return true;
   }
 
   setBlendStack(id: string, passes: ReadonlyArray<BlendPass>, label = "Blend stack changed") {
@@ -2663,6 +2822,12 @@ export class Studio {
     return this.setBlendStack(id, passes, "Blend pass added");
   }
 
+  applyBlendRecipe(id: string, recipe: BlendRecipeId) {
+    const passes = blendRecipePasses(recipe);
+    if (!passes) return false;
+    return this.setBlendStack(id, passes, `Blend recipe · ${recipe}`);
+  }
+
   updateBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
     const layer = this.findLayer(id);
     if (!layer) return false;
@@ -2671,6 +2836,65 @@ export class Studio {
     if (index < 0) return false;
     passes[index] = { ...passes[index], ...patch };
     return this.setBlendStack(id, passes, patch.mode ? "Blend mode changed" : patch.opacity !== undefined ? "Blend pass opacity" : "Blend pass toggled");
+  }
+
+  /**
+   * Preview a blend-pass slider without producing one history node per input
+   * event. The first tick captures the exact pre-drag state; the matching
+   * commit below consumes it as a single undoable operation.
+   */
+  liveUpdateBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
+    const layer = this.findLayer(id);
+    if (!layer || layer.kind === "group") return false;
+    const passes = resolvedBlendPasses(layer);
+    const index = passes.findIndex((pass) => pass.id === passId);
+    if (index < 0) return false;
+    const key = `blend-pass:${id}:${passId}`;
+    if (!this.liveSnapshots.has(key)) {
+      this.liveSnapshots.set(key, {
+        layerId: id,
+        blend: layer.blend,
+        blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
+      });
+    }
+    passes[index] = {
+      ...passes[index],
+      ...patch,
+      opacity: Math.max(0, Math.min(1, patch.opacity ?? passes[index].opacity)),
+    };
+    layer.blendStack = cloneBlendStack(passes);
+    layer.blend = passes[0].mode;
+    this.requestRender();
+    return true;
+  }
+
+  commitBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
+    const layer = this.findLayer(id);
+    if (!layer || layer.kind === "group") return false;
+    const passes = resolvedBlendPasses(layer);
+    const index = passes.findIndex((pass) => pass.id === passId);
+    if (index < 0) return false;
+    const key = `blend-pass:${id}:${passId}`;
+    const before = this.liveSnapshots.get(key) ?? {
+      layerId: id,
+      blend: layer.blend,
+      blendStack: layer.blendStack ? cloneBlendStack(layer.blendStack) : null,
+    };
+    this.liveSnapshots.delete(key);
+    passes[index] = {
+      ...passes[index],
+      ...patch,
+      opacity: Math.max(0, Math.min(1, patch.opacity ?? passes[index].opacity)),
+    };
+    layer.blendStack = cloneBlendStack(passes);
+    layer.blend = passes[0].mode;
+    this.commit({
+      label: patch.opacity !== undefined ? "Blend pass opacity" : "Blend pass changed",
+      before: [before],
+      after: [{ layerId: id, blend: layer.blend, blendStack: cloneBlendStack(passes) }],
+    });
+    this.requestRender();
+    return true;
   }
 
   removeBlendPass(id: string, passId: string) {
@@ -2801,15 +3025,12 @@ export class Studio {
   }
 
   // --- painting ---
-  addCapturedBrush(
-    name: string,
+  private sampledBrushBitmap(
     source: HTMLCanvasElement,
-    centerX = source.width / 2,
-    centerY = source.height / 2,
-    radius = Math.min(source.width, source.height) / 2,
-  ): CapturedBrushAsset | null {
-    if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(radius) || radius < 1 ||
-        source.width < 1 || source.height < 1) return null;
+    centerX: number,
+    centerY: number,
+    radius: number,
+  ) {
     const sourceDiameter = radius * 2;
     const edge = Math.max(8, Math.min(MAX_CAPTURED_BRUSH_EDGE, Math.ceil(sourceDiameter)));
     const bitmap = newCanvas(edge, edge);
@@ -2830,12 +3051,28 @@ export class Studio {
       edge,
     );
     context.restore();
+    return bitmap;
+  }
+
+  addCapturedBrush(
+    name: string,
+    source: HTMLCanvasElement,
+    centerX = source.width / 2,
+    centerY = source.height / 2,
+    radius = Math.min(source.width, source.height) / 2,
+    liveSource?: CapturedBrushAsset["liveSource"],
+  ): CapturedBrushAsset | null {
+    if (!Number.isFinite(centerX) || !Number.isFinite(centerY) || !Number.isFinite(radius) || radius < 1 ||
+        source.width < 1 || source.height < 1) return null;
+    const sourceDiameter = radius * 2;
+    const bitmap = this.sampledBrushBitmap(source, centerX, centerY, radius);
     const asset: CapturedBrushAsset = {
       id: nextId("captured-brush"),
       name: name.trim().slice(0, 80) || `Captured Brush ${(this.doc.capturedBrushes?.length ?? 0) + 1}`,
       bitmap,
       sourceDiameter,
       createdAt: new Date().toISOString(),
+      liveSource,
     };
     const brushes = [...(this.doc.capturedBrushes ?? []), asset];
     this.doc.capturedBrushes = brushes.slice(-MAX_CAPTURED_BRUSHES);
@@ -2847,7 +3084,7 @@ export class Studio {
     x: number,
     y: number,
     radius: number,
-    options: { name?: string; sourceLayerId?: string } = {},
+    options: { name?: string; sourceLayerId?: string; live?: boolean } = {},
   ) {
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(radius)) return null;
     const diameter = radius * 2;
@@ -2880,9 +3117,76 @@ export class Studio {
         checkerboard: false,
         selectionOverlay: false,
         proofing: false,
+        cacheRevision: this.renderRevision,
+        hierarchyRevision: this.layerHierarchyRevision,
       });
     }
-    return this.addCapturedBrush(options.name ?? "Canvas capture", source, edge / 2, edge / 2, edge / 2);
+    const asset = this.addCapturedBrush(
+      options.name ?? "Canvas capture",
+      source,
+      edge / 2,
+      edge / 2,
+      edge / 2,
+      options.live ? {
+        mode: options.sourceLayerId ? "layer" : "merged",
+        layerId: options.sourceLayerId,
+        centerX: x,
+        centerY: y,
+        radius,
+        live: true,
+      } : undefined,
+    );
+    if (asset) asset.sourceDiameter = diameter;
+    return asset;
+  }
+
+  /** Re-samples a Living Source Brush once at stroke start, never per dab. */
+  refreshCapturedBrush(id: string) {
+    const brushes = this.doc.capturedBrushes ?? [];
+    const index = brushes.findIndex((brush) => brush.id === id);
+    const asset = brushes[index];
+    const live = asset?.liveSource;
+    if (!asset || !live?.live || live.radius < 1) return false;
+    const diameter = live.radius * 2;
+    const edge = Math.max(8, Math.min(MAX_CAPTURED_BRUSH_EDGE, Math.ceil(diameter)));
+    const scale = edge / diameter;
+    const source = newCanvas(edge, edge);
+    if (live.mode === "layer") {
+      const layer = live.layerId ? this.findLayer(live.layerId) : null;
+      if (!layer || layer.kind === "group") return false;
+      drawLayerContentManaged(source.getContext("2d")!, layer, {
+        a: scale, b: 0, c: 0, d: scale,
+        e: -(live.centerX - live.radius) * scale,
+        f: -(live.centerY - live.radius) * scale,
+      });
+    } else {
+      renderViewport(this.doc, source, {
+        x: live.centerX - live.radius,
+        y: live.centerY - live.radius,
+        width: diameter,
+        height: diameter,
+        zoom: scale,
+        outputWidth: edge,
+        outputHeight: edge,
+        cssScale: scale,
+        devicePixelRatio: 1,
+      }, {
+        checkerboard: false,
+        selectionOverlay: false,
+        proofing: false,
+        cacheRevision: this.renderRevision,
+        hierarchyRevision: this.layerHierarchyRevision,
+      });
+    }
+    const next = [...brushes];
+    next[index] = {
+      ...asset,
+      bitmap: this.sampledBrushBitmap(source, edge / 2, edge / 2, edge / 2),
+      sourceDiameter: diameter,
+    };
+    this.doc.capturedBrushes = next;
+    this.emit();
+    return true;
   }
 
   removeCapturedBrush(id: string) {
@@ -3341,27 +3645,39 @@ export class Studio {
   fillLayer(layerId: string, color: string) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap || layer.locked) return;
-    const before = [snapshotLayer(layer)];
+    const region = filterRegionForSelection(this.doc, layer);
+    if (!region) return;
     const ctx = layer.bitmap.getContext("2d")!;
+    const before = ctx.getImageData(region.x, region.y, region.width, region.height);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (this.doc.selection) {
-      const scratch = newCanvas(this.doc.width, this.doc.height);
+      const scratch = newCanvas(region.width, region.height);
       const sctx = scratch.getContext("2d")!;
       sctx.fillStyle = color;
-      sctx.fillRect(0, 0, this.doc.width, this.doc.height);
+      sctx.fillRect(0, 0, region.width, region.height);
       sctx.globalCompositeOperation = "destination-in";
-      sctx.drawImage(this.doc.selection.mask, 0, 0);
-      ctx.drawImage(scratch, 0, 0);
+      const mask = newCanvas(region.width, region.height);
+      const maskData = this.selectionTileForLayer(layer, region.x, region.y, region.width, region.height);
+      if (!maskData) { ctx.restore(); return; }
+      mask.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(maskData), region.width, region.height), 0, 0);
+      sctx.drawImage(mask, 0, 0);
+      ctx.drawImage(scratch, region.x, region.y);
     } else {
       ctx.fillStyle = color;
-      ctx.fillRect(0, 0, this.doc.width, this.doc.height);
+      ctx.fillRect(region.x, region.y, region.width, region.height);
     }
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
-    this.syncLayerSurface(layer);
+    this.syncLayerSurface(layer, region);
     this.checkpointLayerSurface(layer);
-    this.commit({ label: `Filled with ${color}`, before, after: [snapshotLayer(layer)] });
+    const after = ctx.getImageData(region.x, region.y, region.width, region.height);
+    this.commit({
+      label: `Filled with ${color}`,
+      before: [],
+      after: [],
+      pixelPatches: [{ layerId, target: "bitmap", x: region.x, y: region.y, before, after }],
+    });
     this.actions.push({ op: "fill", color });
     this.requestRender();
   }
@@ -3369,21 +3685,33 @@ export class Studio {
   clearPixels(layerId: string) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap || layer.locked) return;
-    const before = [snapshotLayer(layer)];
+    const region = filterRegionForSelection(this.doc, layer);
+    if (!region) return;
     const ctx = layer.bitmap.getContext("2d")!;
+    const before = ctx.getImageData(region.x, region.y, region.width, region.height);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     if (this.doc.selection) {
       ctx.globalCompositeOperation = "destination-out";
-      ctx.drawImage(this.doc.selection.mask, 0, 0);
+      const mask = newCanvas(region.width, region.height);
+      const maskData = this.selectionTileForLayer(layer, region.x, region.y, region.width, region.height);
+      if (!maskData) { ctx.restore(); return; }
+      mask.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(maskData), region.width, region.height), 0, 0);
+      ctx.drawImage(mask, region.x, region.y);
     } else {
-      ctx.clearRect(0, 0, this.doc.width, this.doc.height);
+      ctx.clearRect(region.x, region.y, region.width, region.height);
     }
     ctx.restore();
     bumpBitmapVersion(layer.bitmap);
-    this.syncLayerSurface(layer);
+    this.syncLayerSurface(layer, region);
     this.checkpointLayerSurface(layer);
-    this.commit({ label: "Pixels cleared", before, after: [snapshotLayer(layer)] });
+    const after = ctx.getImageData(region.x, region.y, region.width, region.height);
+    this.commit({
+      label: "Pixels cleared",
+      before: [],
+      after: [],
+      pixelPatches: [{ layerId, target: "bitmap", x: region.x, y: region.y, before, after }],
+    });
     this.actions.push({ op: "clear" });
     this.requestRender();
   }
@@ -3462,6 +3790,8 @@ export class Studio {
     if (!source || source.kind === "group") throw new Error("Select a content layer");
     const composite = this.flatten();
     const image = await canvasToBlob(composite);
+    const identityLayer = this.doc.layers.find((layer) => layer.identityReference && layer.id !== layerId);
+    const referenceBlob = identityLayer ? await canvasToBlob(rasterizeLayer(this.doc, identityLayer)) : undefined;
     let maskBlob: Blob | undefined;
     let selectionGuide: AiSelectionGuide = { mode: "none" };
     if (this.doc.selection) {
@@ -3476,9 +3806,10 @@ export class Studio {
       maskBlob = await canvasToBlob(mask);
       selectionGuide = editMask.guide;
     }
-    const [inputSha256, maskSha256] = await Promise.all([
+    const [inputSha256, maskSha256, referenceSha256] = await Promise.all([
       sha256Blob(image),
       maskBlob ? sha256Blob(maskBlob) : Promise.resolve(undefined),
+      referenceBlob ? sha256Blob(referenceBlob) : Promise.resolve(undefined),
     ]);
     const total = options.variations ?? 1;
     let completed = 0;
@@ -3486,6 +3817,7 @@ export class Studio {
       endpoint: options.endpoint,
       image,
       mask: maskBlob,
+      reference: referenceBlob,
       operation,
       prompt,
       controls: options.controls,
@@ -3510,6 +3842,7 @@ export class Studio {
         variationIndex: result.index,
         sourceDigest: inputSha256,
         maskDigest: maskSha256,
+        referenceDigest: referenceSha256,
       });
       layer.ai = {
         id: result.provenanceId ?? nextId("ai"),
@@ -3518,17 +3851,19 @@ export class Studio {
         model: result.model ?? "gpt-image-2",
         prompt,
         createdAt: new Date().toISOString(),
-        sourceLayerIds: [layerId],
+        sourceLayerIds: [layerId, ...(identityLayer ? [identityLayer.id] : [])],
         usedSelection: selectionGuide.mode !== "none",
         requestId: result.upstreamRequestId,
         inputSha256,
         maskSha256,
+        referenceSha256,
         parameters: {
           quality: config.quality,
           size: config.size,
           variationIndex: config.variationIndex,
           controls: config.controls,
           selection: config.selection,
+          identityReferenceLayerId: identityLayer?.id,
         },
       };
       return layer;
@@ -3735,6 +4070,7 @@ export class Studio {
 
   // --- PSD ---
   async importPsd(buffer: ArrayBuffer) {
+    const { importPsd } = await import("./psd");
     const newDoc = await importPsd(buffer);
     this.installDocument(newDoc, "Imported PSD");
     this.commit({ label: "PSD imported", before: [], after: [] });
@@ -3742,9 +4078,20 @@ export class Studio {
     return newDoc;
   }
 
-  exportPsd(options: PhotoshopExportOptions = {}): ArrayBuffer { return exportPsd(this.doc, options); }
-  exportPhotoshop(options: PhotoshopExportOptions = {}) { return exportPhotoshopDocument(this.doc, options); }
-  photoshopCompatibility(options: PhotoshopExportOptions = {}) { return photoshopCompatibilityReport(this.doc, options); }
+  async exportPsd(options: PhotoshopExportOptions = {}): Promise<ArrayBuffer> {
+    const { exportPsd } = await import("./psd");
+    return exportPsd(this.doc, options);
+  }
+
+  async exportPhotoshop(options: PhotoshopExportOptions = {}) {
+    const { exportPhotoshopDocument } = await import("./psd");
+    return exportPhotoshopDocument(this.doc, options);
+  }
+
+  async photoshopCompatibility(options: PhotoshopExportOptions = {}): Promise<PhotoshopCompatibilityReport> {
+    const { photoshopCompatibilityReport } = await import("./psd");
+    return photoshopCompatibilityReport(this.doc, options);
+  }
 
   async exportProject(name = "Untitled") {
     const { encodeLumaProject } = await import("./project");
@@ -3761,13 +4108,17 @@ export class Studio {
       name: session.name,
       active: session.id === this.activeSessionId,
       updatedAt,
-      blob: await encodeLumaProject(session.doc, actions, session.name, session.history.snapshot()),
+      // Crash recovery is a current-state checkpoint, not a second project
+      // archive. Persisting the complete undo graph here multiplied precision
+      // assets across snapshots and could inflate a tiny document into an
+      // 80+ MB startup payload. Explicit saves still include full history.
+      blob: await encodeLumaProject(session.doc, actions, session.name),
     })));
   }
 
-  async importProject(blob: Blob) {
+  async importProject(blob: Blob, options: { restoreHistory?: boolean } = {}) {
     const { decodeLumaProject } = await import("./project");
-    const project = await decodeLumaProject(blob);
+    const project = await decodeLumaProject(blob, options);
     this.installDocument(project.doc, project.name);
     this.history = project.history
       ? OperationHistory.fromSnapshot(project.history.snapshot(), {

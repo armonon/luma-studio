@@ -34,6 +34,7 @@ import {
   createHslLayer,
   createLevelsLayer,
   createPathLayer,
+  createProAdjustmentLayer,
   createTextLayer,
   drawLayerContent,
   newCanvas,
@@ -926,6 +927,71 @@ function importedAdjustment(layer: PsdLayer) {
       vibrance: adjustment.type === "vibrance" ? adjustment.vibrance ?? 0 : 0,
     });
   }
+  if (adjustment.type === "black & white") {
+    return createProAdjustmentLayer(layer.name || "Black & White", {
+      kind: "black-white",
+      amount: 1,
+      tint: psdColorToCss(adjustment.tintColor),
+      tintAmount: adjustment.useTint ? 1 : 0,
+    });
+  }
+  if (adjustment.type === "color balance") {
+    const values = (value: typeof adjustment.shadows): [number, number, number] => [
+      (value?.cyanRed ?? 0) / 100,
+      (value?.magentaGreen ?? 0) / 100,
+      (value?.yellowBlue ?? 0) / 100,
+    ];
+    return createProAdjustmentLayer(layer.name || "Color Balance", {
+      kind: "color-balance",
+      shadows: values(adjustment.shadows),
+      midtones: values(adjustment.midtones),
+      highlights: values(adjustment.highlights),
+      preserveLuminosity: adjustment.preserveLuminosity ?? true,
+    });
+  }
+  if (adjustment.type === "photo filter") {
+    return createProAdjustmentLayer(layer.name || "Photo Filter", {
+      kind: "photo-filter",
+      color: psdColorToCss(adjustment.color),
+      density: (adjustment.density ?? 25) / 100,
+      preserveLuminosity: adjustment.preserveLuminosity ?? true,
+    });
+  }
+  if (adjustment.type === "channel mixer") {
+    const values = (value: typeof adjustment.red, fallback: [number, number, number, number]) => [
+      (value?.red ?? fallback[0]) / 100,
+      (value?.green ?? fallback[1]) / 100,
+      (value?.blue ?? fallback[2]) / 100,
+      (value?.constant ?? fallback[3]) / 100,
+    ] as const;
+    return createProAdjustmentLayer(layer.name || "Channel Mixer", {
+      kind: "channel-mixer",
+      matrix: [
+        ...values(adjustment.red, [100, 0, 0, 0]),
+        ...values(adjustment.green, [0, 100, 0, 0]),
+        ...values(adjustment.blue, [0, 0, 100, 0]),
+      ],
+    });
+  }
+  if (adjustment.type === "gradient map") {
+    const stops = [...(adjustment.colorStops ?? [])].sort((a, b) => a.location - b.location);
+    return createProAdjustmentLayer(layer.name || "Gradient Map", {
+      kind: "gradient-map",
+      shadow: psdColorToCss(stops[0]?.color),
+      highlight: psdColorToCss(stops.at(-1)?.color),
+      reverse: adjustment.reverse ?? false,
+      smoothness: Math.max(0, Math.min(1, (adjustment.smoothness ?? 4096) / 4096)),
+    });
+  }
+  if (adjustment.type === "threshold") {
+    return createProAdjustmentLayer(layer.name || "Threshold", { kind: "threshold", level: (adjustment.level ?? 128) / 255 });
+  }
+  if (adjustment.type === "posterize") {
+    return createProAdjustmentLayer(layer.name || "Posterize", { kind: "posterize", levels: adjustment.levels ?? 4 });
+  }
+  if (adjustment.type === "invert") {
+    return createProAdjustmentLayer(layer.name || "Invert", { kind: "invert" });
+  }
   return null;
 }
 
@@ -1295,6 +1361,83 @@ function adjustmentLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
     });
     return results.length ? results : [{ ...base(), adjustment: { type: "brightness/contrast", brightness: 0, contrast: 0 } }];
   }
+  if (layer.kind === "adjustment-pro" && layer.proAdjustment) {
+    const adjustment = layer.proAdjustment;
+    switch (adjustment.kind) {
+      case "black-white": return [{
+        ...base(),
+        opacity: Math.max(0, Math.min(1, layer.opacity * adjustment.amount)),
+        adjustment: {
+          type: "black & white",
+          reds: 40, yellows: 60, greens: 40, cyans: 60, blues: 20, magentas: 80,
+          useTint: adjustment.tintAmount > 0,
+          tintColor: cssColorToPsd(adjustment.tint),
+        },
+      }];
+      case "color-balance": {
+        const values = (rgb: [number, number, number]) => ({
+          cyanRed: Math.round(rgb[0] * 100),
+          magentaGreen: Math.round(rgb[1] * 100),
+          yellowBlue: Math.round(rgb[2] * 100),
+        });
+        return [{ ...base(), adjustment: {
+          type: "color balance",
+          shadows: values(adjustment.shadows),
+          midtones: values(adjustment.midtones),
+          highlights: values(adjustment.highlights),
+          preserveLuminosity: adjustment.preserveLuminosity,
+        } }];
+      }
+      case "photo-filter": return [{ ...base(), adjustment: {
+        type: "photo filter",
+        color: cssColorToPsd(adjustment.color),
+        density: adjustment.density * 100,
+        preserveLuminosity: adjustment.preserveLuminosity,
+      } }];
+      case "channel-mixer": {
+        const channel = (offset: number) => ({
+          red: adjustment.matrix[offset] * 100,
+          green: adjustment.matrix[offset + 1] * 100,
+          blue: adjustment.matrix[offset + 2] * 100,
+          constant: adjustment.matrix[offset + 3] * 100,
+        });
+        return [{ ...base(), adjustment: { type: "channel mixer", red: channel(0), green: channel(4), blue: channel(8) } }];
+      }
+      case "color-lookup": return [{ ...base(), opacity: layer.opacity * adjustment.intensity, adjustment: {
+        type: "color lookup",
+        lookupType: "3dlut",
+        name: `Luma ${adjustment.preset}`,
+      } }];
+      case "gradient-map": return [{ ...base(), adjustment: {
+        type: "gradient map",
+        name: layer.name,
+        gradientType: "solid",
+        reverse: adjustment.reverse,
+        smoothness: Math.round(adjustment.smoothness * 4096),
+        colorStops: [
+          { color: cssColorToPsd(adjustment.shadow), location: 0, midpoint: 50 },
+          { color: cssColorToPsd(adjustment.highlight), location: 4096, midpoint: 50 },
+        ],
+        opacityStops: [
+          { opacity: 1, location: 0, midpoint: 50 },
+          { opacity: 1, location: 4096, midpoint: 50 },
+        ],
+      } }];
+      case "relight-field": return [{
+        ...base(),
+        opacity: layer.opacity * Math.max(0.05, Math.min(1, adjustment.radius)),
+        adjustment: {
+          type: "exposure",
+          exposure: adjustment.intensity * 1.65,
+          offset: adjustment.temperature * 0.02,
+          gamma: 1,
+        },
+      }];
+      case "threshold": return [{ ...base(), adjustment: { type: "threshold", level: Math.round(adjustment.level * 255) } }];
+      case "posterize": return [{ ...base(), adjustment: { type: "posterize", levels: Math.round(adjustment.levels) } }];
+      case "invert": return [{ ...base(), adjustment: { type: "invert" } }];
+    }
+  }
   return [];
 }
 
@@ -1587,6 +1730,14 @@ export function photoshopCompatibilityReport(
       code: "LUMA_ONLY_EFFECT_NOT_EXPORTED",
       severity: "warning",
       message: `Bloom, Relief and Long Shadow have no Photoshop layer style equivalent, so they are not written to the file (${luminanceLayers.length} layer${luminanceLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
+    });
+  }
+  const relightLayers = doc.layers.filter((layer) => layer.proAdjustment?.kind === "relight-field");
+  if (relightLayers.length) {
+    issues.push({
+      code: "RELIGHT_FIELD_APPROXIMATED",
+      severity: "warning",
+      message: `Relight Field has no native Photoshop adjustment descriptor, so ${relightLayers.length} field${relightLayers.length === 1 ? " is" : "s are"} exported as editable Exposure approximations. The flattened composite keeps the exact Luma rendering.`,
     });
   }
   if (container === "psd" && (doc.width > 30000 || doc.height > 30000)) {

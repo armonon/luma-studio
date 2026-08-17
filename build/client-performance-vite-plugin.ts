@@ -16,6 +16,33 @@ export function clientPerformance(): Plugin {
           // All supported production browsers implement modulepreload. Avoid
           // paying for Vite's compatibility shim on every studio visit.
           modulePreload: { polyfill: false },
+          rolldownOptions: {
+            output: {
+              // Luma's renderer is split across several tightly-coupled local
+              // modules. Let dynamic feature boundaries remain separate, but
+              // merge small shared fragments so opening the studio does not
+              // spend extra requests and compression dictionaries on 1–18 KB
+              // chunks such as blend, color, document, and tile-store.
+              codeSplitting: {
+                minSize: 100_000,
+                groups: [
+                  {
+                    name(moduleId: string) {
+                      if (!moduleId.includes("node_modules")) return null;
+                      return /\/node_modules\/(?:react|react-dom|scheduler)\//.test(moduleId)
+                        ? "framework"
+                        : null;
+                    },
+                  },
+                  {
+                    name: "luma-engine-core",
+                    test: /\/app\/engine\/(?:document|layer-styles|blend|renderer|tile-store|color)\.ts$/,
+                    includeDependenciesRecursively: true,
+                  },
+                ],
+              },
+            },
+          },
         },
       };
     },

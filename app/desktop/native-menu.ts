@@ -48,7 +48,11 @@ export function listenForMenuCommands(dispatch: (command: StudioCommand) => void
   });
 }
 
-function subscribe(event: string, handle: (payload: unknown) => void): Unlisten {
+function subscribe(
+  event: string,
+  handle: (payload: unknown) => void,
+  onReady?: (isActive: () => boolean) => void,
+): Unlisten {
   const listen = (window as TauriWindow).__TAURI__?.event?.listen;
   if (!listen) return () => {};
 
@@ -59,7 +63,10 @@ function subscribe(event: string, handle: (payload: unknown) => void): Unlisten 
     handle(message.payload);
   }).then((stop) => {
     if (cancelled) stop();
-    else unlisten = stop;
+    else {
+      unlisten = stop;
+      onReady?.(() => !cancelled);
+    }
   }).catch(() => {
     // A menu that cannot subscribe is a menu that does nothing; the studio's
     // own keyboard shortcuts still work, so this must not take the app down.
@@ -81,8 +88,23 @@ function subscribe(event: string, handle: (payload: unknown) => void): Unlisten 
  * half-working open path.
  */
 export function listenForOpenFile(open: (path: string) => void): Unlisten {
-  return subscribe(OPEN_FILE_EVENT, (payload) => {
+  const deliver = (payload: unknown) => {
     if (typeof payload === "string" && payload) open(payload);
+  };
+  return subscribe(OPEN_FILE_EVENT, deliver, (isActive) => {
+    // Finder can launch the native process with a document before React has
+    // mounted this listener. Rust buffers those cold-launch paths until this
+    // handshake, which deliberately runs only after `listen` resolves.
+    const invoke = (window as TauriWindow).__TAURI__?.core?.invoke;
+    void invoke?.("take_pending_open_files")
+      .then((pending) => {
+        if (!isActive() || !Array.isArray(pending)) return;
+        pending.forEach(deliver);
+      })
+      .catch(() => {
+        // The live listener is already usable even if the cold-launch drain
+        // is unavailable in an older or partially initialized native shell.
+      });
   });
 }
 

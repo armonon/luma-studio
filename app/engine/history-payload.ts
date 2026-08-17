@@ -24,6 +24,7 @@ import {
 } from "./document";
 import type { LayerSnapshot, HistoryEntry, PixelPatch, SurfaceTilePatch } from "./studio";
 import type { RawDevelopSettings } from "./raw-develop";
+import { cloneProAdjustment } from "./pro-adjustments";
 
 // ---------- byte accounting ----------
 
@@ -73,6 +74,8 @@ export function historyEntrySize(entry: HistoryEntry): number {
   for (const s of entry.after) { bill(s.bitmap); bill(s.mask); }
   if (entry.layersBefore) for (const l of entry.layersBefore) { bill(l.bitmap); bill(l.mask); }
   if (entry.layersAfter) for (const l of entry.layersAfter) { bill(l.bitmap); bill(l.mask); }
+  if (entry.layerOrderBefore) total += entry.layerOrderBefore.reduce((bytes, id) => bytes + 8 + id.length * 2, 0);
+  if (entry.layerOrderAfter) total += entry.layerOrderAfter.reduce((bytes, id) => bytes + 8 + id.length * 2, 0);
   bill(entry.selectionBefore?.mask);
   bill(entry.selectionAfter?.mask);
   for (const doc of [entry.documentBefore, entry.documentAfter]) {
@@ -176,6 +179,7 @@ export function shallowCloneLayer(layer: Layer): Layer {
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
     levels: layer.levels ? { ...layer.levels } : undefined,
     hsl: layer.hsl ? { ...layer.hsl } : undefined,
+    proAdjustment: layer.proAdjustment ? cloneProAdjustment(layer.proAdjustment) : undefined,
     text: layer.text ? { ...layer.text } : undefined,
     shape: layer.shape ? { ...layer.shape } : undefined,
     path: layer.path ? deepClonePath(layer.path) : undefined,
@@ -223,6 +227,7 @@ export function snapshotLayer(layer: Layer): LayerSnapshot {
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
     levels: layer.levels ? { ...layer.levels } : undefined,
     hsl: layer.hsl ? { ...layer.hsl } : undefined,
+    proAdjustment: layer.proAdjustment ? cloneProAdjustment(layer.proAdjustment) : undefined,
     opacity: layer.opacity,
     fillOpacity: layer.fillOpacity ?? null,
     blend: layer.blend,

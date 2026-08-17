@@ -115,10 +115,10 @@ export type DevelopedDng = {
   settings: RawDevelopSettings;
   whiteBalanceMultipliers: readonly [number, number, number];
   provenance: {
-    mode: "dng-cfa-developed";
+    mode: "dng-cfa-developed" | "camera-raw-developed";
     originalName: string;
-    format: "DNG";
-    decoder: "luma-dng-tiff-v1";
+    format: string;
+    decoder: "luma-dng-tiff-v1" | "luma-camera-tiff-v1";
     originalBytes: number;
     matrixSource: DngMetadata["matrixSource"];
     settings: RawDevelopSettings;
@@ -533,6 +533,7 @@ export function developParsedDng(
   originalName: string,
   originalBytes: number,
   settingsInput: Partial<RawDevelopSettings> = {},
+  sourceFormat = "DNG",
 ): DevelopedDng {
   const { metadata } = parsed;
   const settings = sanitizeRawDevelopSettings({
@@ -586,6 +587,10 @@ export function developParsedDng(
     cameraToXyz: matrixTransform,
   });
   const oriented = orientLinearRgba(developed.pixels, developedWidth, developedHeight, metadata.orientation);
+  const format = sourceFormat.toUpperCase();
+  if (format !== "DNG") {
+    metadata.warnings = [...metadata.warnings, `${format} uses the TIFF CFA compatibility decoder; proprietary maker-note corrections are preserved in the source but not applied`];
+  }
   return {
     width: oriented.width,
     height: oriented.height,
@@ -594,10 +599,10 @@ export function developParsedDng(
     settings: developed.settings,
     whiteBalanceMultipliers: developed.whiteBalanceMultipliers,
     provenance: {
-      mode: "dng-cfa-developed",
+      mode: format === "DNG" ? "dng-cfa-developed" : "camera-raw-developed",
       originalName,
-      format: "DNG",
-      decoder: "luma-dng-tiff-v1",
+      format,
+      decoder: format === "DNG" ? "luma-dng-tiff-v1" : "luma-camera-tiff-v1",
       originalBytes,
       matrixSource: metadata.matrixSource,
       settings: developed.settings,
@@ -616,6 +621,16 @@ export function decodeDng(
   return developParsedDng(parseDng(source), originalName, source.byteLength, settings);
 }
 
+/** Develop TIFF-CFA camera RAWs whose sensor IFD uses standard TIFF/DNG tags. */
+export function decodeTiffCameraRaw(
+  source: ArrayBuffer,
+  originalName: string,
+  format: string,
+  settings: Partial<RawDevelopSettings> = {},
+) {
+  return developParsedDng(parseDng(source), originalName, source.byteLength, settings, format);
+}
+
 /**
  * Re-developable in-memory RAW session. Sensor codes and parsed metadata stay
  * immutable while develop parameters can be previewed, reset, or committed by
@@ -628,11 +643,13 @@ export class DngDevelopSession {
   readonly originalBytes: number;
   readonly initialSettings: RawDevelopSettings;
   private settingsValue: RawDevelopSettings;
+  readonly sourceFormat: string;
 
-  constructor(source: ArrayBuffer, originalName: string, settings: Partial<RawDevelopSettings> = {}) {
+  constructor(source: ArrayBuffer, originalName: string, settings: Partial<RawDevelopSettings> = {}, sourceFormat = "DNG") {
     this.parsed = parseDng(source);
     this.originalName = originalName;
     this.originalBytes = source.byteLength;
+    this.sourceFormat = sourceFormat.toUpperCase();
     this.initialSettings = sanitizeRawDevelopSettings({
       ...settings,
       exposureEV: settings.exposureEV ?? this.parsed.metadata.baselineExposure,
@@ -646,7 +663,7 @@ export class DngDevelopSession {
 
   develop(patch: Partial<RawDevelopSettings> = {}) {
     this.settingsValue = sanitizeRawDevelopSettings({ ...this.settingsValue, ...patch });
-    return developParsedDng(this.parsed, this.originalName, this.originalBytes, this.settingsValue);
+    return developParsedDng(this.parsed, this.originalName, this.originalBytes, this.settingsValue, this.sourceFormat);
   }
 
   reset() {

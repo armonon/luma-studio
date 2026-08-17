@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ToolPalette, { type ToolPaletteGroup } from "./tool-palette";
 import { CategoryIcon, ToolIcon } from "./studio-icons";
 import type { StudioCommand } from "../desktop/menu-model";
+import { DESKTOP_TOOL_RAIL } from "./desktop-presentation";
 
 type CategoryId = "move" | "paint" | "select" | "retouch" | "create" | "ai";
 
@@ -26,6 +27,7 @@ export default function ToolDock({
   onSelect,
   onAiSelect,
   onCommand,
+  compactDesktop = false,
 }: {
   groups: ToolPaletteGroup[];
   activeWorkspace: string;
@@ -33,6 +35,7 @@ export default function ToolDock({
   onSelect: (tool: string, workspace: string) => void;
   onAiSelect: () => void;
   onCommand: (command: StudioCommand) => void;
+  compactDesktop?: boolean;
 }) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [flyout, setFlyout] = useState<CategoryId | null>(null);
@@ -82,7 +85,22 @@ export default function ToolDock({
     <>
       <aside className="spatial-toolbar" aria-label="Primary tools">
         <div className="primary-tool-categories">
-          {categories.map((category) => (
+          {compactDesktop ? DESKTOP_TOOL_RAIL.map((toolId) => {
+            const tool = tools.find((candidate) => candidate.id === toolId);
+            if (!tool) return null;
+            return (
+              <button
+                key={tool.id}
+                className={activeTool === tool.id ? "active" : ""}
+                onClick={() => onSelect(tool.id, tool.workspace)}
+                aria-label={tool.label}
+                aria-pressed={activeTool === tool.id}
+                title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}`}
+              >
+                <ToolIcon id={tool.id} />
+              </button>
+            );
+          }) : categories.map((category) => (
             <button
               key={category.id}
               className={activeCategory === category.id || (category.id === "ai" && flyout === "ai") ? "active" : ""}
