@@ -5,7 +5,7 @@
   "identifier": "app.luma.studio",
   "build": {
     "devUrl": "http://localhost:3000",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run desktop:dev",
     "beforeBuildCommand": "npm run desktop:build",
     "frontendDist": "../dist-desktop"
   },
