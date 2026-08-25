@@ -147,7 +147,11 @@ function FocusCard({
       <div className="focus-card-actions">
         <button onClick={() => onFocus()} title={`Focus ${item.layer.name}`}><ScanSearch size={12} strokeWidth={1.7} /><span>Focus</span></button>
         {(item.layer.maskSurface || item.layer.mask) && <button onClick={() => onFocus("mask")} title={`Focus ${item.layer.name} mask`}><CircleDashed size={12} strokeWidth={1.7} /></button>}
-        <button onClick={onPin} title={item.pinned ? "Unpin from Focus" : "Pin in Focus"}>{item.pinned ? <PinOff size={12} /> : <Pin size={12} />}</button>
+        <button
+          onClick={onPin}
+          title={item.pinned ? "Unpin from Focus" : "Pin in Focus"}
+          aria-label={item.pinned ? "Unpin from Focus" : "Pin in Focus"}
+        >{item.pinned ? <PinOff size={12} /> : <Pin size={12} />}</button>
       </div>
     </article>
   );

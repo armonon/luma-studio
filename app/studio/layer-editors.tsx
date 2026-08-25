@@ -143,7 +143,7 @@ export function LevelsEditor({ levels, onLive, onCommit, onReset }: {
 }) {
   const set = (patch: Partial<LevelsParams>) => onLive({ ...levels, ...patch });
   const rows: Array<[keyof LevelsParams, string, number, number, number]> = [["inBlack", "In black", 0, 1, 0.001], ["inWhite", "In white", 0, 1, 0.001], ["gamma", "Gamma", 0.1, 9.99, 0.01], ["outBlack", "Out black", 0, 1, 0.001], ["outWhite", "Out white", 0, 1, 0.001]];
-  return <section className="glass-card tone-card"><header><strong>Levels</strong><button onClick={onReset}>↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max, step]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={step} value={levels[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(levels)} /><output>{key === "gamma" ? levels[key].toFixed(2) : levels[key].toFixed(3)}</output></label>)}</div></section>;
+  return <section className="glass-card tone-card"><header><strong>Levels</strong><button onClick={onReset} aria-label="Reset levels">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max, step]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={step} value={levels[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(levels)} /><output>{key === "gamma" ? levels[key].toFixed(2) : levels[key].toFixed(3)}</output></label>)}</div></section>;
 }
 
 export function HslEditor({ hsl, onLive, onCommit, onReset }: {
@@ -154,5 +154,5 @@ export function HslEditor({ hsl, onLive, onCommit, onReset }: {
 }) {
   const set = (patch: Partial<HslParams>) => onLive({ ...hsl, ...patch });
   const rows: Array<[keyof HslParams, string, number, number]> = [["hue", "Hue", -180, 180], ["saturation", "Saturation", -100, 100], ["lightness", "Lightness", -100, 100]];
-  return <section className="glass-card tone-card"><header><strong>Hue / Saturation</strong><button onClick={onReset}>↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={1} value={hsl[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(hsl)} /><output>{Math.round(hsl[key])}</output></label>)}</div></section>;
+  return <section className="glass-card tone-card"><header><strong>Hue / Saturation</strong><button onClick={onReset} aria-label="Reset hue and saturation">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={1} value={hsl[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(hsl)} /><output>{Math.round(hsl[key])}</output></label>)}</div></section>;
 }

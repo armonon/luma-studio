@@ -70,7 +70,10 @@ import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 import { exceedsBrowserCanvas } from "./large-documents";
 import {
   assertSafePhotoshopDecodeBudget,
+  estimatePhotoshopFlattenedDecodeBytes,
   inspectPhotoshopHeader as inspectPhotoshopInputHeader,
+  PHOTOSHOP_DECODE_MEMORY_CEILING,
+  planPhotoshopImport,
 } from "./input-limits";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
@@ -1031,8 +1034,29 @@ function importedAdjustment(layer: PsdLayer) {
   return null;
 }
 
-export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
-  assertSafePhotoshopDecodeBudget(inspectPhotoshopInputHeader(buffer), buffer.byteLength);
+export type PhotoshopImportOptions = {
+  /** Auto preserves layers when bounded and otherwise opens the composite safely. */
+  mode?: "auto" | "layered" | "flattened";
+};
+
+export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOptions = {}): Promise<Document> {
+  const inputHeader = inspectPhotoshopInputHeader(buffer);
+  const requestedMode = options.mode ?? "auto";
+  const importMode = requestedMode === "auto"
+    ? planPhotoshopImport(inputHeader, buffer.byteLength).mode
+    : requestedMode;
+  if (importMode === "layered") {
+    assertSafePhotoshopDecodeBudget(inputHeader, buffer.byteLength);
+  } else {
+    const estimated = estimatePhotoshopFlattenedDecodeBytes(inputHeader, buffer.byteLength);
+    if (!Number.isSafeInteger(estimated) || estimated > PHOTOSHOP_DECODE_MEMORY_CEILING) {
+      throw new Error(
+        `Even a flattened Photoshop decode would require approximately ${Math.ceil(estimated / 1024 / 1024)} MB; `
+        + `the safe import ceiling is ${Math.floor(PHOTOSHOP_DECODE_MEMORY_CEILING / 1024 / 1024)} MB.`,
+      );
+    }
+  }
+  const flattenedFallback = importMode === "flattened" && inputHeader.layers > 0;
   const header = inspectPhotoshopHeader(buffer);
   if (header.channels < 1 || header.channels > 56 || header.width < 1 || header.height < 1 ||
       header.width > 300_000 || header.height > 300_000 || ![1, 8, 16, 32].includes(header.bitsPerChannel) ||
@@ -1044,20 +1068,24 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   const originalSource = new Uint8Array(buffer.slice(0));
   let psd: Psd;
   try {
-    const decode = (skipCompositeImageData: boolean) => readPsd(buffer.slice(0), {
+    const decode = (skipCompositeImageData: boolean, skipLayerImageData = false) => readPsd(buffer.slice(0), {
+      skipLayerImageData,
       skipCompositeImageData,
-      // Preserve embedded smart-object bytes. This is intentionally false and
-      // stated explicitly because ag-psd otherwise permits skipping them.
-      skipLinkedFilesData: false,
+      // Preserve embedded smart-object bytes for editable imports. A bounded
+      // composite fallback keeps the complete original container instead, so
+      // decoding duplicate linked payloads would only spend memory on content
+      // that is not exposed as an editable layer.
+      skipLinkedFilesData: flattenedFallback,
+      totalMemoryLimit: PHOTOSHOP_DECODE_MEMORY_CEILING,
       throwForMissingFeatures: false,
       logMissingFeatures: false,
       useImageData: true,
     });
-    psd = decode(true);
+    psd = flattenedFallback ? decode(false, true) : decode(true);
     // A flattened PSD has no layer records; its only artwork is the composite.
     // Decode that payload only for this case so layered documents keep the
     // lower-memory path and do not hold a redundant full-document image.
-    if (!(psd.children?.length)) psd = decode(false);
+    if (!flattenedFallback && !(psd.children?.length)) psd = decode(false);
   } catch (error) {
     throw new PhotoshopDecodeError(header, error);
   }
@@ -1067,6 +1095,13 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
       code: "PSB_IMPORTED",
       severity: "info",
       message: "Large Document Format structure was imported; choose PSB explicitly when exporting to retain that container.",
+    });
+  }
+  if (flattenedFallback) {
+    importedIssues.push({
+      code: "LAYERED_COMPOSITE_FALLBACK",
+      severity: "warning",
+      message: `The editable ${inputHeader.layers}-layer stack would exceed Luma's safe memory ceiling, so this document opened from its flattened composite. The original source remains preserved until the preview is edited.`,
     });
   }
   if (![8, 16, 32].includes(header.bitsPerChannel)) {
@@ -1111,6 +1146,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
 
   setPhotoshopDocumentMetadata(doc, {
     header,
+    importMode: flattenedFallback ? "flattened" : "layered",
     originalSource,
     originalDocumentFingerprint: documentStateFingerprint(doc),
     imageResources: psd.imageResources,
@@ -1234,7 +1270,9 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
     doc.layers.unshift(l);
   };
 
-  for (const layer of psd.children ?? []) visit(layer);
+  if (!flattenedFallback) {
+    for (const layer of psd.children ?? []) visit(layer);
+  }
   if (!doc.layers.length) {
     const canvas = newCanvas(psd.width, psd.height);
     const context = canvas.getContext("2d")!;
@@ -1255,11 +1293,14 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
     const flattened = createRasterLayer("Background", canvas);
     if (precisionSurface) flattened.surface = precisionSurface;
     doc.layers.push(flattened);
+    capture(flattened, { name: "Flattened composite" }, "preview-only");
     importedIssues.push({
-      code: "FLATTENED_COMPOSITE_IMPORTED",
-      severity: "info",
+      code: flattenedFallback ? "LAYERED_COMPOSITE_IMPORTED" : "FLATTENED_COMPOSITE_IMPORTED",
+      severity: flattenedFallback ? "warning" : "info",
       layerId: flattened.id,
-      message: "This Photoshop file has no layer table; its composite image was imported as one editable Background layer.",
+      message: flattenedFallback
+        ? "The Photoshop composite was imported as one editable Background layer; edit a copy if exact layered source passthrough matters."
+        : "This Photoshop file has no layer table; its composite image was imported as one editable Background layer.",
     });
   }
   for (const [index, layer] of doc.layers.entries()) {

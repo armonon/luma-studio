@@ -7,6 +7,12 @@ export const FILE_INPUT_LIMITS = {
 
 export const PHOTOSHOP_DECODE_MEMORY_CEILING = 2 * 1024 * 1024 * 1024;
 
+export type PhotoshopImportPlan = {
+  mode: "layered" | "flattened";
+  estimatedBytes: number;
+  layeredEstimatedBytes: number;
+};
+
 const IMAGE_HEADER_SCAN_BYTES = 16 * 1024 * 1024;
 export type CanvasLimitCheck = (width: number, height: number) => boolean;
 
@@ -37,6 +43,40 @@ export function estimatePhotoshopDecodeBytes(header: PhotoshopHeader, sourceByte
   // full-document scratch/composite planes during import. Keep the estimate
   // deliberately conservative until the streaming decoder replaces ag-psd.
   return decodedPlanes * 4 + documentPlane * 3 + sourceBytes * 3 + 256 * 1024 * 1024;
+}
+
+/**
+ * Conservative budget for decoding only the document composite. This is the
+ * safe fallback for otherwise valid layered PSD/PSB files whose editable
+ * planes would cross the process memory ceiling.
+ */
+export function estimatePhotoshopFlattenedDecodeBytes(header: PhotoshopHeader, sourceBytes: number) {
+  const sampleBytes = header.depth === 32 ? 4 : header.depth === 16 ? 2 : 1;
+  const documentPlane = header.width * header.height * 4 * sampleBytes;
+  // Source preservation + the codec input copy + parser bookkeeping account
+  // for the source multiplier. Composite channel storage, ImageData, Luma's
+  // local bitmap and export-safe scratch account for four document planes.
+  return documentPlane * 4 + sourceBytes * 3 + 256 * 1024 * 1024;
+}
+
+export function planPhotoshopImport(
+  header: PhotoshopHeader,
+  sourceBytes: number,
+  ceiling = PHOTOSHOP_DECODE_MEMORY_CEILING,
+): PhotoshopImportPlan {
+  const layeredEstimatedBytes = estimatePhotoshopDecodeBytes(header, sourceBytes);
+  if (Number.isSafeInteger(layeredEstimatedBytes) && layeredEstimatedBytes <= ceiling) {
+    return { mode: "layered", estimatedBytes: layeredEstimatedBytes, layeredEstimatedBytes };
+  }
+  const estimatedBytes = estimatePhotoshopFlattenedDecodeBytes(header, sourceBytes);
+  if (!Number.isSafeInteger(estimatedBytes) || estimatedBytes > ceiling) {
+    throw new Error(
+      `Even a flattened Photoshop decode would require approximately ${Math.ceil(estimatedBytes / 1024 / 1024)} MB; `
+      + `the safe import ceiling is ${Math.floor(ceiling / 1024 / 1024)} MB. `
+      + "Reduce the pixel dimensions in Photoshop before importing.",
+    );
+  }
+  return { mode: "flattened", estimatedBytes, layeredEstimatedBytes };
 }
 
 export function assertSafePhotoshopDecodeBudget(
@@ -236,7 +276,12 @@ export function inspectPhotoshopHeader(source: ArrayBuffer | Uint8Array): Photos
   return { container: version === 1 ? "psd" : "psb", channels, width, height, depth, colorMode, layers };
 }
 
-export function assertSafePhotoshopHeader(source: ArrayBuffer | Uint8Array, name: string, exceedsCanvas: CanvasLimitCheck) {
+export function assertSafePhotoshopHeader(
+  source: ArrayBuffer | Uint8Array,
+  name: string,
+  exceedsCanvas: CanvasLimitCheck,
+  options: { allowFlattenedFallback?: boolean } = {},
+) {
   const header = inspectPhotoshopHeader(source);
   if (header.channels < 1 || header.channels > 56) throw new Error(`${name} has an unsafe channel count`);
   if (header.width < 1 || header.height < 1 || header.width > 300_000 || header.height > 300_000) {
@@ -248,7 +293,8 @@ export function assertSafePhotoshopHeader(source: ArrayBuffer | Uint8Array, name
   if (exceedsCanvas(header.width, header.height)) {
     throw new Error(`${name} exceeds the safe PSD/PSB import canvas; convert it to a tiled Luma project first`);
   }
-  assertSafePhotoshopDecodeBudget(header, source.byteLength);
+  if (options.allowFlattenedFallback) planPhotoshopImport(header, source.byteLength);
+  else assertSafePhotoshopDecodeBudget(header, source.byteLength);
   return header;
 }
 

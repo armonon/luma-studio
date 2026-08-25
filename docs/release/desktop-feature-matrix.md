@@ -179,8 +179,8 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | Input | Status | Evidence / limitation |
 | --- | --- | --- |
 | `.luma` | Working | v1 compatibility and v4 document/assets/precision/history round trips |
-| PSD | Partial | Rich synthetic round trips pass; real-world corpus is below the RC gate |
-| PSB | Partial | Explicit PSB headers/export pass; real large-project corpus is incomplete |
+| PSD | Partial | 6/6 local real projects pass open → edit → native reopen → PSD reopen with zero preview drift; 50-file RC corpus is still incomplete |
+| PSB | Partial | 2/2 local real projects pass the same workflow, including layered and bounded-composite modes; broad corpus remains incomplete |
 | PNG | Working | Bounded header preflight and raster engine paths |
 | JPEG/JPG | Working | Bounded header preflight and raster engine paths |
 | WebP | Working | Bounded header/export encoding and raster engine paths |
@@ -214,7 +214,7 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | Corrupt recovery snapshot | Working | Import rejects without replacing or damaging the open document |
 | Oversized or malformed raster | Working | Header dimensions rejected before browser pixel allocation |
 | Malformed PSD/PSB sections | Working | Bounded parser rejects before `ag-psd` |
-| PSD decoded-memory estimate above 2 GiB | Working | Fails before codec allocation with an explicit estimate |
+| PSD/PSB layered decode estimate above 2 GiB | Working | Opens the bounded document composite when that fits; otherwise refuses before codec allocation. Untouched source bytes remain available for exact passthrough |
 | Unsupported RAW without a readable preview | Working | Explicit decode error; no false “developed RAW” claim |
 | RAW with only embedded preview | Working | Opens with preview provenance and typed sensor-decode failure |
 | Unsafe/malformed plugin package | Working | Bounded parser rejects it; partial registration is rolled back |
@@ -233,13 +233,16 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | HSL desktop access | Real HSL editor existed, but its only entry point was a compressed Layers-header icon | Added HSL to the All Tools command surface and native Layer menu; live route verified |
 | Native accelerator fall-through | Cmd/Ctrl menu chords could also activate a letter tool or change brush size | Modifier chords now stop before canvas/tool-only shortcuts; live and structural regression |
 | Filters/Batch Escape | Filters advertised `esc`, but neither Filters nor Batch had a matching dismissal branch | Added safe Escape dismissal; Batch remains non-dismissible while processing |
+| Demanding PSD/PSB import | Valid real projects with 5–11.5 GiB layered-decode estimates were rejected even though their composites fit safely | Added an automatic composite-only decode plan under the same 2 GiB ceiling, explicit preview-only warnings, and exact untouched-source passthrough |
+| Short-window inspector | A 720px-high desktop window let Layers and Properties consume nearly the whole rail | Rebalanced the final desktop media rule so contextual editors retain useful space; verified in the rebuilt 1280×720 workspace |
+| Icon-only command names | Layer creation/reordering, Focus pins, Actions and two reset controls had weak or unstable assistive names | Added explicit, stable accessible labels and a source regression test |
 
 ## Remaining release gaps
 
 `npm run release:status` currently passes 4 of 10 evidence gates:
 
 - Passed: P0 checkpoint, sparse selections, sparse masks, recovery/destructive tests.
-- Failing: real compatibility corpus (`2/6`), signed updater configuration, updater failure campaign, Apple signing/notarization report, remote crash reporting, clean-machine installation.
+- Failing: the required 50-project PSD/PSB/RAW corpus (local evidence is now 6/6 PSD and 2/2 PSB), signed updater configuration, updater failure campaign, Apple signing/notarization report, remote crash reporting, and clean-machine installation.
 - Large-document and native-RAW capabilities remain intentionally marked `planned` in the edition registry. Sparse alpha is complete, but all supported workflows must stay inside defined ceilings before either claim changes to shipped.
 - The 23.6 MB ONNX Runtime WASM and 550 KB Transformers chunk remain lazy rather than startup-loaded, but they are still a meaningful installed-size cost for local neural features.
 

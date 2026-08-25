@@ -24,6 +24,8 @@ export type PhotoshopCompatibilityIssue = {
 
 export type PhotoshopDocumentMetadata = {
   header: PhotoshopHeader;
+  /** Representation chosen at import so .luma restore recreates the same editable surface. */
+  importMode?: "layered" | "flattened";
   /** Complete source container retained for preservation metadata restoration after .luma reload. */
   originalSource?: Uint8Array;
   /** Luma document settings at import time, excluding layers and the active selection. */

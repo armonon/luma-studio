@@ -1563,7 +1563,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (/\.ps[db]$/i.test(file.name)) {
       assertFileSize(file, "photoshopBytes");
       const photoshopBytes = await file.arrayBuffer();
-      assertSafePhotoshopHeader(photoshopBytes, file.name, exceedsBrowserCanvas);
+      assertSafePhotoshopHeader(photoshopBytes, file.name, exceedsBrowserCanvas, { allowFlattenedFallback: true });
       const d = await studio.importPsd(photoshopBytes);
       setPhotoshopFormat("source");
       setActiveLayerId(d.layers[0]?.id ?? null);
@@ -3541,11 +3541,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <header>
                 <strong>Layers</strong>
                 <div className="layer-add-menu">
-                  <button onClick={addBlank} title="Add paint layer">＋</button>
-                  <button onClick={addAdjust} title="Add tone adjustment">◐</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addCurvesLayer()); }} title="Add curves">∿</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addLevelsLayer()); }} title="Add levels">▦</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addHslLayer()); }} title="Add HSL">◉</button>
+                  <button onClick={addBlank} title="Add paint layer" aria-label="Add paint layer">＋</button>
+                  <button onClick={addAdjust} title="Add tone adjustment" aria-label="Add tone adjustment">◐</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addCurvesLayer()); }} title="Add curves" aria-label="Add curves adjustment">∿</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addLevelsLayer()); }} title="Add levels" aria-label="Add levels adjustment">▦</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addHslLayer()); }} title="Add HSL" aria-label="Add HSL adjustment">◉</button>
                   <select
                     aria-label="Add professional adjustment"
                     title="Add professional adjustment"
@@ -3565,10 +3565,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       const group = studio.groupLayer(activeLayerId);
                       if (group) setActiveLayerId(group.id);
                     }
-                  }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"}>⌘</button>
-                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up">↑</button>
-                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down">↓</button>
-                  <button onClick={removeActive} title="Delete active">×</button>
+                  }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"} aria-label={activeLayer?.kind === "group" ? "Ungroup active layer" : "Group active layer"}>⌘</button>
+                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up" aria-label="Move active layer up">↑</button>
+                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down" aria-label="Move active layer down">↓</button>
+                  <button onClick={removeActive} title="Delete active" aria-label="Delete active layer">×</button>
                 </div>
               </header>
               <Suspense fallback={<div className="layer-stack" aria-label="Loading layers" />}>
@@ -3697,7 +3697,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       <strong>{activeLayer?.name ?? "Canvas"}</strong>
                       <small>{activeLayer ? `${activeLayer.kind} · ${activeLayer.visible ? "visible" : "hidden"}${activeLayer.locked ? " · locked" : ""}` : `${doc?.width ?? 0} × ${doc?.height ?? 0}`}</small>
                     </span>
-                    {activeLayer && <button type="button" onClick={() => enterFocusMode(activeLayer.id)} title="Focus this layer">◎</button>}
+                    {activeLayer && <button type="button" onClick={() => enterFocusMode(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer">◎</button>}
                   </div>
                   {activeTool === "radial-warp" ? <>
                     <div className="desktop-property-switch">
@@ -4623,7 +4623,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 {recordingName ? (
                   <button onClick={stopRecording} title="Stop">◼</button>
                 ) : (
-                  <button onClick={startRecording} title="Record">●</button>
+                  <button onClick={startRecording} title="Record" aria-label="Record action">●</button>
                 )}
               </header>
               <div className="neural-quick-grid">
@@ -4641,9 +4641,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             <div className="spatial-view-dock">
-              <button onClick={() => studio?.undo()} title="Undo" disabled={!studio?.canUndo()}>↶</button>
-              <button onClick={() => studio?.redo()} title="Redo" disabled={!studio?.canRedo()}>↷</button>
-              <button onClick={() => studio?.selectAll()} title="Select all">▭</button>
+              <button onClick={() => studio?.undo()} title="Undo" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
+              <button onClick={() => studio?.redo()} title="Redo" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
+              <button onClick={() => studio?.selectAll()} title="Select all" aria-label="Select all">▭</button>
               <span />
               <button
                 onClick={() => setShowHistory(true)}

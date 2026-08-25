@@ -12519,3 +12519,29 @@ html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
 @media (max-width: 1060px) {
   html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 50px minmax(0, 1fr) 286px; }
 }
+
+@media (max-height: 760px) {
+  html[data-luma-platform="desktop"] .spatial-window {
+    grid-template-rows: 43px minmax(0, 1fr) 18px;
+  }
+
+  html[data-luma-platform="desktop"] .studio-titlebar.spatial-topbar {
+    height: 43px;
+  }
+
+  html[data-luma-platform="desktop"] .primary-tool-categories > button,
+  html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
+    height: 34px;
+    min-height: 34px;
+    flex-basis: 34px;
+  }
+
+  html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
+    height: 36%;
+    min-height: 200px;
+  }
+
+  html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .desktop-properties-card {
+    max-height: 190px;
+  }
+}

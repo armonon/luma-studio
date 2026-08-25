@@ -4,6 +4,8 @@ import {
   assertSafePhotoshopHeader,
   assertSafePhotoshopDecodeBudget,
   estimatePhotoshopDecodeBytes,
+  estimatePhotoshopFlattenedDecodeBytes,
+  planPhotoshopImport,
   assertSafeRasterHeader,
   inspectPhotoshopHeader,
   inspectRasterHeader,
@@ -83,7 +85,7 @@ test("PSD and PSB headers are bounded before the codec sees them", () => {
   assert.throws(() => inspectPhotoshopHeader(malformed), /Malformed Photoshop section length/);
 });
 
-test("layered Photoshop files are refused before their decoded planes cross the memory ceiling", () => {
+test("layered Photoshop budgets stay strict while auto mode can choose a bounded composite", () => {
   const locallyBounded = {
     container: "psd" as const,
     channels: 3,
@@ -99,4 +101,13 @@ test("layered Photoshop files are refused before their decoded planes cross the 
     () => assertSafePhotoshopDecodeBudget({ ...locallyBounded, width: 4800, height: 6000, layers: 8 }, 64 * 1024 * 1024),
     /approximately .* safe import ceiling/i,
   );
+  const demanding = { ...locallyBounded, width: 4800, height: 6000, layers: 8 };
+  assert.ok(estimatePhotoshopFlattenedDecodeBytes(demanding, 64 * 1024 * 1024) < 2 * 1024 * 1024 * 1024);
+  assert.deepEqual(planPhotoshopImport(demanding, 64 * 1024 * 1024).mode, "flattened");
+  assert.doesNotThrow(() => assertSafePhotoshopHeader(
+    photoshopHeader(4800, 6000),
+    "layered.psd",
+    exceedsBrowserCanvas,
+    { allowFlattenedFallback: true },
+  ));
 });

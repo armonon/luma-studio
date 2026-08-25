@@ -104,6 +104,14 @@ test("the file associations cover the formats the app can open", () => {
   }
 });
 
+test("local macOS bundles receive a complete ad-hoc signature", () => {
+  const config = JSON.parse(
+    readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+  ) as { bundle: { macOS?: { signingIdentity?: string } } };
+  const bundle = config.bundle;
+  assert.equal(bundle.macOS?.signingIdentity, "-");
+});
+
 test("no command id appears twice", () => {
   const ids = menuCommands();
   assert.equal(new Set(ids).size, ids.length, "duplicate menu command");

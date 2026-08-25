@@ -162,7 +162,7 @@ function applyCorpusEdit(doc: Document) {
 }
 
 async function runPhotoshop(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
-  const header = assertSafePhotoshopHeader(bytes, entry.file, exceedsBrowserCanvas);
+  const header = assertSafePhotoshopHeader(bytes, entry.file, exceedsBrowserCanvas, { allowFlattenedFallback: true });
   if (header.container !== entry.kind) throw new Error(`container is ${header.container}, manifest says ${entry.kind}`);
   const opened = await importPsd(bytes);
   assertExpectedDimensions(entry, opened);

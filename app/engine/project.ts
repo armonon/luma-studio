@@ -132,6 +132,7 @@ type SerializedDocument = Omit<Document, "layers" | "selection" | "capturedBrush
   capturedBrushes?: SerializedCapturedBrush[];
   selection?: SerializedSelection;
   photoshopSourceAsset?: string;
+  photoshopImportMode?: "layered" | "flattened";
 };
 
 type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "maskSurface" | "raw"> & {
@@ -543,7 +544,8 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     ...brush,
     bitmapAsset: await addCanvasAsset(context, bitmap),
   })));
-  const photoshopSource = getPhotoshopDocumentMetadata(doc)?.originalSource;
+  const photoshopMetadata = getPhotoshopDocumentMetadata(doc);
+  const photoshopSource = photoshopMetadata?.originalSource;
   const selection = doc.selection ? await serializeSelection(doc.selection, context) : undefined;
   return {
     width: doc.width,
@@ -562,6 +564,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     layers,
     selection,
     photoshopSourceAsset: photoshopSource ? await addPhotoshopAsset(context, photoshopSource) : undefined,
+    photoshopImportMode: photoshopMetadata?.importMode,
   };
 }
 
@@ -670,7 +673,9 @@ async function deserializeDocument(
         originalSource.byteOffset,
         originalSource.byteOffset + originalSource.byteLength,
       ) as ArrayBuffer;
-      const restoredSource = await importPsd(buffer);
+      const restoredSource = await importPsd(buffer, {
+        mode: source.photoshopImportMode === "flattened" ? "flattened" : "auto",
+      });
       const documentMetadata = getPhotoshopDocumentMetadata(restoredSource);
       if (documentMetadata) {
         setPhotoshopDocumentMetadata(doc, { ...documentMetadata, originalSource });
