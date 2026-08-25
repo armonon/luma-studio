@@ -13,7 +13,11 @@ export default defineConfig({
     },
   },
   define: {
-    "process.env": JSON.stringify({ NEXT_PUBLIC_LUMA_EDITION: "pro" }),
+    "process.env": JSON.stringify({
+      NEXT_PUBLIC_LUMA_EDITION: "pro",
+      NEXT_PUBLIC_LUMA_CRASH_ENDPOINT: process.env.NEXT_PUBLIC_LUMA_CRASH_ENDPOINT,
+      NEXT_PUBLIC_LUMA_RELEASE: process.env.NEXT_PUBLIC_LUMA_RELEASE,
+    }),
     __LUMA_NATIVE_DESKTOP__: "true",
   },
   build: {

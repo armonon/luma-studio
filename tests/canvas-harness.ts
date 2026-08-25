@@ -13,7 +13,7 @@
  * Import this module for its side effects before importing engine modules.
  */
 
-import { createCanvas, ImageData as NapiImageData } from "@napi-rs/canvas";
+import { createCanvas, ImageData as NapiImageData, loadImage } from "@napi-rs/canvas";
 
 // Cast through `unknown`: the Node canvas types are structurally close to the
 // DOM ones but not assignable to them, and intersecting with `typeof globalThis`
@@ -21,6 +21,13 @@ import { createCanvas, ImageData as NapiImageData } from "@napi-rs/canvas";
 const g = globalThis as unknown as Record<string, unknown>;
 
 if (!g.ImageData) g.ImageData = NapiImageData;
+
+if (!g.createImageBitmap) {
+  g.createImageBitmap = async (blob: Blob) => {
+    const image = await loadImage(new Uint8Array(await blob.arrayBuffer()));
+    return Object.assign(image, { close() {} });
+  };
+}
 
 if (!g.document) {
   g.document = {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import "./canvas-harness.ts";
 import {
   createDocument,
   createGroupLayer,
@@ -14,10 +15,12 @@ import {
   focusBreadcrumbLayers,
   focusItems,
   hitTestEditableLayer,
+  layerVisualBounds,
   leaveLayerFocus,
   normalizeLayerFocusPreferences,
   reconcileLayerFocus,
 } from "../app/studio/layer-focus-model.ts";
+import { solidCanvas } from "./canvas-harness.ts";
 
 function nestedDocument() {
   const doc = createDocument(1000, 800);
@@ -81,6 +84,15 @@ test("fit and hit testing use a layer's visual geometry rather than the full pro
   assert.equal(hitTestEditableLayer(doc, 300, 300)?.id, person.id);
   assert.equal(hitTestEditableLayer(doc, 300, 520, group.id)?.id, shadow.id);
   assert.equal(hitTestEditableLayer(doc, 900, 700, group.id), null);
+});
+
+test("locally bounded imported rasters keep tight focus geometry", () => {
+  const doc = createDocument(1000, 800);
+  const layer = createRasterLayer("Imported local pixels");
+  layer.bitmap = solidCanvas(20, 10, "#fff");
+  layer.transform = { tx: 120, ty: 80, sx: 2, sy: 3, rotation: 0 };
+  doc.layers = [layer];
+  assert.deepEqual(layerVisualBounds(doc, layer.id), { x: 120, y: 80, width: 40, height: 30 });
 });
 
 test("invalid ancestry is cycle-safe", () => {

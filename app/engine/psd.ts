@@ -68,6 +68,10 @@ import type { SparseAlphaSurface } from "./alpha-surface";
 import { PrecisionTileSurface } from "./tile-store";
 import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 import { exceedsBrowserCanvas } from "./large-documents";
+import {
+  assertSafePhotoshopDecodeBudget,
+  inspectPhotoshopHeader as inspectPhotoshopInputHeader,
+} from "./input-limits";
 
 // ag-psd's blend-mode string is spec-compliant Photoshop, e.g. "soft light",
 // "multiply". Map to our canvas GlobalCompositeOperation names.
@@ -840,9 +844,20 @@ export function precisionSurfaceFromPsdPixels(
   left: number,
   top: number,
 ) {
+  return precisionSurfaceFromPsdPixelsInBounds(pixels, doc, doc.width, doc.height, left, top);
+}
+
+function precisionSurfaceFromPsdPixelsInBounds(
+  pixels: PixelData,
+  doc: Document,
+  width: number,
+  height: number,
+  left: number,
+  top: number,
+) {
   const surface = new PrecisionTileSurface(
-    doc.width,
-    doc.height,
+    width,
+    height,
     doc.bitDepth === 32 ? "rgba32f" : doc.bitDepth === 16 ? "rgba16f" : "rgba8",
     doc.colorSpace,
   );
@@ -1017,6 +1032,7 @@ function importedAdjustment(layer: PsdLayer) {
 }
 
 export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
+  assertSafePhotoshopDecodeBudget(inspectPhotoshopInputHeader(buffer), buffer.byteLength);
   const header = inspectPhotoshopHeader(buffer);
   if (header.channels < 1 || header.channels > 56 || header.width < 1 || header.height < 1 ||
       header.width > 300_000 || header.height > 300_000 || ![1, 8, 16, 32].includes(header.bitsPerChannel) ||
@@ -1028,8 +1044,8 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   const originalSource = new Uint8Array(buffer.slice(0));
   let psd: Psd;
   try {
-    psd = readPsd(buffer.slice(0), {
-      skipCompositeImageData: true,
+    const decode = (skipCompositeImageData: boolean) => readPsd(buffer.slice(0), {
+      skipCompositeImageData,
       // Preserve embedded smart-object bytes. This is intentionally false and
       // stated explicitly because ag-psd otherwise permits skipping them.
       skipLinkedFilesData: false,
@@ -1037,6 +1053,11 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
       logMissingFeatures: false,
       useImageData: true,
     });
+    psd = decode(true);
+    // A flattened PSD has no layer records; its only artwork is the composite.
+    // Decode that payload only for this case so layered documents keep the
+    // lower-memory path and do not hold a redundant full-document image.
+    if (!(psd.children?.length)) psd = decode(false);
   } catch (error) {
     throw new PhotoshopDecodeError(header, error);
   }
@@ -1165,27 +1186,30 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
       doc.layers.unshift(pathLayer);
       return;
     }
-    const canvas = newCanvas(psd.width, psd.height);
-    const ctx = canvas.getContext("2d")!;
     const src = (layer as { canvas?: HTMLCanvasElement }).canvas;
     const left = layer.left ?? 0;
     const top = layer.top ?? 0;
     const pixelData = layer.imageData;
+    const localWidth = Math.max(1, pixelData?.width ?? src?.width ?? (layer.right ?? left) - left);
+    const localHeight = Math.max(1, pixelData?.height ?? src?.height ?? (layer.bottom ?? top) - top);
+    const canvas = newCanvas(localWidth, localHeight);
+    const ctx = canvas.getContext("2d")!;
     let precisionSurface: PrecisionTileSurface | undefined;
     if (pixelData && doc.bitDepth > 8) {
-      precisionSurface = precisionSurfaceFromPsdPixels(pixelData, doc, left, top);
+      precisionSurface = precisionSurfaceFromPsdPixelsInBounds(pixelData, doc, localWidth, localHeight, 0, 0);
       drawPrecisionPreview(canvas, precisionSurface);
     } else if (pixelData) {
       const image = ctx.createImageData(pixelData.width, pixelData.height);
       image.data.set(pixelData.data as Uint8ClampedArray);
-      ctx.putImageData(image, left, top);
+      ctx.putImageData(image, 0, 0);
     } else if (src) {
-      ctx.drawImage(src, left, top);
+      ctx.drawImage(src, 0, 0);
     }
     const l: Layer = createRasterLayer(layer.name || "Layer", canvas);
     if (precisionSurface) l.surface = precisionSurface;
     if (layer.placedLayer) l.kind = "smart-object";
     applyImportedLayerMetadata(l, layer, parentId);
+    l.transform = { ...l.transform, tx: left, ty: top };
     applyImportedMask(l, layer, doc);
     const preservation = layer.placedLayer || layer.adjustment || layer.vectorMask
       ? "descriptor-preserved"
@@ -1211,6 +1235,33 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   };
 
   for (const layer of psd.children ?? []) visit(layer);
+  if (!doc.layers.length) {
+    const canvas = newCanvas(psd.width, psd.height);
+    const context = canvas.getContext("2d")!;
+    const pixelData = psd.imageData;
+    let precisionSurface: PrecisionTileSurface | undefined;
+    if (pixelData && doc.bitDepth > 8) {
+      precisionSurface = precisionSurfaceFromPsdPixels(pixelData, doc, 0, 0);
+      drawPrecisionPreview(canvas, precisionSurface);
+    } else if (pixelData) {
+      const image = context.createImageData(pixelData.width, pixelData.height);
+      image.data.set(pixelData.data as Uint8ClampedArray);
+      context.putImageData(image, 0, 0);
+    } else if (psd.canvas) {
+      context.drawImage(psd.canvas, 0, 0);
+    } else {
+      throw new PhotoshopDecodeError(header, new Error("Flattened Photoshop document has no readable composite image"));
+    }
+    const flattened = createRasterLayer("Background", canvas);
+    if (precisionSurface) flattened.surface = precisionSurface;
+    doc.layers.push(flattened);
+    importedIssues.push({
+      code: "FLATTENED_COMPOSITE_IMPORTED",
+      severity: "info",
+      layerId: flattened.id,
+      message: "This Photoshop file has no layer table; its composite image was imported as one editable Background layer.",
+    });
+  }
   for (const [index, layer] of doc.layers.entries()) {
     const metadata = getPhotoshopLayerMetadata(layer);
     if (metadata) setPhotoshopLayerMetadata(layer, { ...metadata, originalStackPosition: index });
@@ -1486,7 +1537,7 @@ function textLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
   const d = cos * t.sy;
   const tx = t.tx + a * style.x + c * style.y;
   const ty = t.ty + b * style.x + d * style.y;
-  const canvas = flattenLayerBitmap(doc, layer);
+  const rasterized = flattenLayerBitmap(doc, layer);
   const metadata = getPhotoshopLayerMetadata(layer);
   const originalText = metadata?.source.text;
   const textUnchanged = metadata?.originalTextFingerprint === textFingerprint(layer);
@@ -1514,15 +1565,15 @@ function textLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
   return resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0).map((pass) => ({
     ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
     name: resolvedBlendPasses(layer).length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
-    canvas: canvas ?? undefined,
+    canvas: rasterized?.canvas,
     text: simpleText,
-    left: 0,
-    top: 0,
+    left: rasterized?.left ?? 0,
+    top: rasterized?.top ?? 0,
   }));
 }
 
 function vectorLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
-  const canvas = flattenLayerBitmap(doc, layer);
+  const rasterized = flattenLayerBitmap(doc, layer);
   const metadata = getPhotoshopLayerMetadata(layer);
   const originalVector = metadata?.source;
   const preserveOriginalPath = layer.kind === "path"
@@ -1543,9 +1594,9 @@ function vectorLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
   return resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0).map((pass) => ({
     ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
     name: resolvedBlendPasses(layer).length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
-    canvas: canvas ?? undefined,
-    left: 0,
-    top: 0,
+    canvas: rasterized?.canvas,
+    left: rasterized?.left ?? 0,
+    top: rasterized?.top ?? 0,
     vectorMask: mask,
     vectorFill: fill,
     vectorStroke: stroke,
@@ -1905,15 +1956,15 @@ export function exportPhotoshopDocument(
     }
     if (layer.kind === "text") return textLayersToPsd(doc, layer).reverse();
     if (layer.kind === "shape" || layer.kind === "path") return vectorLayersToPsd(doc, layer).reverse();
-    const canvas = flattenLayerBitmap(doc, layer);
-    if (!canvas) return [];
+    const rasterized = flattenLayerBitmap(doc, layer);
+    if (!rasterized) return [];
     const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
     return passes.map((pass) => ({
       ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
       name: passes.length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
-      canvas,
-      left: 0,
-      top: 0,
+      canvas: rasterized.canvas,
+      left: rasterized.left,
+      top: rasterized.top,
     })).reverse();
   };
   const native16Channels = native16.eligible ? native16RgbChannels(doc.layers[0].surface!) : undefined;
@@ -1992,19 +2043,55 @@ export function exportPsd(doc: Document, options: PhotoshopExportOptions = {}): 
   return exportPhotoshopDocument(doc, options).buffer;
 }
 
-// Rasterize any layer content (raster / text / shape) to a doc-sized canvas
-// with its transform and mask baked in.
-function flattenLayerBitmap(doc: Document, layer: Layer): HTMLCanvasElement | null {
-  const c = newCanvas(doc.width, doc.height);
-  const ctx = c.getContext("2d")!;
+function transformedRasterBounds(doc: Document, layer: Layer) {
+  if (layer.kind !== "raster" && layer.kind !== "smart-object") {
+    return { left: 0, top: 0, width: doc.width, height: doc.height };
+  }
+  const width = layer.bitmap?.width ?? layer.surface?.grid.width ?? 0;
+  const height = layer.bitmap?.height ?? layer.surface?.grid.height ?? 0;
+  if (!width || !height) return null;
+  const { sx, sy, rotation, tx, ty } = layer.transform;
+  const cosine = Math.cos(rotation);
+  const sine = Math.sin(rotation);
+  const transform = (x: number, y: number) => ({
+    x: cosine * sx * x - sine * sy * y + tx,
+    y: sine * sx * x + cosine * sy * y + ty,
+  });
+  const corners = [transform(0, 0), transform(width, 0), transform(width, height), transform(0, height)];
+  const left = Math.floor(Math.min(...corners.map((corner) => corner.x)));
+  const top = Math.floor(Math.min(...corners.map((corner) => corner.y)));
+  const right = Math.ceil(Math.max(...corners.map((corner) => corner.x)));
+  const bottom = Math.ceil(Math.max(...corners.map((corner) => corner.y)));
+  const outputWidth = Math.max(1, right - left);
+  const outputHeight = Math.max(1, bottom - top);
+  if (exceedsBrowserCanvas(outputWidth, outputHeight)) {
+    throw new Error(`${layer.name} is too large to rasterize safely for Photoshop export`);
+  }
+  return { left, top, width: outputWidth, height: outputHeight };
+}
+
+// Rasterize into the smallest document-space rectangle that contains the
+// transformed pixels. Imported PSD layers normally keep local-sized bitmaps,
+// so export no longer recreates one document-sized canvas for every layer.
+function flattenLayerBitmap(doc: Document, layer: Layer): { canvas: HTMLCanvasElement; left: number; top: number } | null {
   if ((layer.kind === "raster" || layer.kind === "smart-object") && !layer.bitmap && !layer.surface) return null;
-  if (layer.surface) drawLayerContentManaged(ctx, layer);
-  else drawLayerContent(ctx, layer);
+  const bounds = transformedRasterBounds(doc, layer);
+  if (!bounds) return null;
+  const c = newCanvas(bounds.width, bounds.height);
+  const ctx = c.getContext("2d")!;
+  const projection = { a: 1, b: 0, c: 0, d: 1, e: -bounds.left, f: -bounds.top };
+  if (layer.surface) drawLayerContentManaged(ctx, layer, projection);
+  else drawLayerContent(ctx, layer, projection);
   if (hasLayerMask(layer)) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = "destination-in";
-    const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, { x: 0, y: 0, width: doc.width, height: doc.height });
+    const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, {
+      x: bounds.left,
+      y: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    });
     if (mask) ctx.drawImage(mask, 0, 0);
   }
-  return c;
+  return { canvas: c, left: bounds.left, top: bounds.top };
 }

@@ -238,12 +238,32 @@ function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
   });
 }
 
+async function canvasArchiveData(canvas: HTMLCanvasElement): Promise<Blob | Uint8Array> {
+  const encoded = await canvasBlob(canvas) as unknown;
+  if (encoded instanceof Blob) {
+    // JSZip's Node build does not accept Node's standards-compatible Blob,
+    // while browser builds do. Keep the browser path zero-copy and normalize
+    // only runtimes without FileReader.
+    return typeof FileReader === "undefined"
+      ? new Uint8Array(await encoded.arrayBuffer())
+      : encoded;
+  }
+  // Native/headless canvas implementations commonly follow the browser
+  // callback shape but provide a Buffer/Uint8Array. Normalize it before
+  // handing bytes to JSZip instead of letting project save fail asynchronously.
+  if (ArrayBuffer.isView(encoded)) {
+    return new Uint8Array(encoded.buffer, encoded.byteOffset, encoded.byteLength).slice();
+  }
+  if (encoded instanceof ArrayBuffer) return new Uint8Array(encoded.slice(0));
+  throw new Error("Canvas encoder returned an unsupported PNG payload");
+}
+
 async function addCanvasAsset(context: EncodeContext, canvas: HTMLCanvasElement) {
   const existing = context.assets.get(canvas);
   if (existing) return existing;
   context.nextAsset += 1;
   const asset = `assets/data/${context.nextAsset.toString().padStart(6, "0")}.png`;
-  context.zip.file(asset, await canvasBlob(canvas));
+  context.zip.file(asset, await canvasArchiveData(canvas));
   context.assets.set(canvas, asset);
   return asset;
 }
@@ -1002,7 +1022,10 @@ export async function decodeLumaProject(
 ): Promise<DecodedProject> {
   const archiveBytes = sourceByteLength(blob);
   if (archiveBytes > LUMA_PROJECT_LIMITS.archiveBytes) throw new Error("Luma project exceeds the 1 GB archive limit");
-  const zip = await JSZip.loadAsync(blob);
+  const archive = blob instanceof Blob && typeof FileReader === "undefined"
+    ? await blob.arrayBuffer()
+    : blob;
+  const zip = await JSZip.loadAsync(archive);
   assertSafeProjectArchive(zip, archiveBytes);
   const manifestFile = zip.file("manifest.json");
   if (!manifestFile) throw new Error("Project manifest is missing");

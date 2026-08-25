@@ -19,7 +19,7 @@ function browserStorage(): StorageLike | null {
 }
 
 /** Remove absolute user paths and query strings before anything is persisted. */
-function sanitize(value: unknown, limit: number) {
+export function sanitizeDiagnosticValue(value: unknown, limit: number) {
   return String(value ?? "Unknown error")
     .replace(/file:\/\/[^\s)]+/g, "[local-file]")
     .replace(/\/(Users|home)\/[^/\s]+\//g, "/$1/[user]/")
@@ -29,10 +29,10 @@ function sanitize(value: unknown, limit: number) {
 
 function errorParts(value: unknown) {
   if (value instanceof Error) return {
-    message: sanitize(value.message || value.name, 600),
-    stack: value.stack ? sanitize(value.stack, 4000) : undefined,
+    message: sanitizeDiagnosticValue(value.message || value.name, 600),
+    stack: value.stack ? sanitizeDiagnosticValue(value.stack, 4000) : undefined,
   };
-  return { message: sanitize(value, 600), stack: undefined };
+  return { message: sanitizeDiagnosticValue(value, 600), stack: undefined };
 }
 
 export class LocalDiagnostics {
@@ -98,6 +98,7 @@ export function installGlobalDiagnostics(options: {
   diagnostics?: LocalDiagnostics;
   context?: () => DiagnosticEvent["context"];
   onFatal?: (event: DiagnosticEvent) => void | Promise<void>;
+  onRecord?: (event: DiagnosticEvent) => void | Promise<void>;
 }) {
   const diagnostics = options.diagnostics ?? localDiagnostics;
   let lastRecoveryAt = 0;
@@ -105,6 +106,7 @@ export function installGlobalDiagnostics(options: {
     let context: DiagnosticEvent["context"];
     try { context = options.context?.(); } catch { context = undefined; }
     const event = diagnostics.record(kind, error, context);
+    if (options.onRecord) void Promise.resolve(options.onRecord(event)).catch(() => undefined);
     const now = Date.now();
     if (options.onFatal && now - lastRecoveryAt > 5000) {
       lastRecoveryAt = now;

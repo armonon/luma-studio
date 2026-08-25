@@ -226,6 +226,11 @@ function transformedBounds(layer: Layer, local: LayerBounds): LayerBounds {
 }
 
 function localLayerBounds(doc: Document, layer: Layer): LayerBounds {
+  if (layer.kind === "raster" || layer.kind === "smart-object") {
+    const width = layer.bitmap?.width ?? layer.surface?.grid.width;
+    const height = layer.bitmap?.height ?? layer.surface?.grid.height;
+    if (width && height) return { x: 0, y: 0, width, height };
+  }
   if (layer.shape) return { x: layer.shape.x, y: layer.shape.y, width: layer.shape.w, height: layer.shape.h };
   if (layer.path?.anchors.length) {
     const xs = layer.path.anchors.map((anchor) => anchor.x);

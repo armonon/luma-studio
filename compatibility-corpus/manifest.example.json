@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "sourceRoot": ".",
   "cases": [
     {
       "id": "photoshop-layered-rgb8",

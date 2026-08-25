@@ -1,6 +1,8 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import "../tests/canvas-harness.ts";
 import { newCanvas, type Document } from "../app/engine/document.ts";
 import { exceedsBrowserCanvas } from "../app/engine/large-documents.ts";
@@ -27,15 +29,19 @@ type CorpusCase = {
     maximumWarnings?: number;
   };
 };
-type CorpusManifest = { version: 1; cases: CorpusCase[] };
+type CorpusManifest = { version: 1; sourceRoot?: string; cases: CorpusCase[] };
 type CaseResult = {
   id: string;
   kind: CorpusKind;
   status: "pass" | "fail";
   durationMs: number;
+  peakRssMiB: number;
   detail: string;
   metrics?: Record<string, number | string>;
 };
+
+const execFileAsync = promisify(execFile);
+const WORKER_RESULT_PREFIX = "LUMA_CORPUS_RESULT=";
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -47,7 +53,56 @@ function parseArgs() {
     manifest: resolve(value("--manifest") ?? "compatibility-corpus/manifest.json"),
     report: resolve(value("--report") ?? "artifacts/compatibility-corpus-report.json"),
     minimum: Number(value("--minimum") ?? 50),
+    caseIds: (value("--case") ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean),
+    workerCase: value("--worker-case"),
+    requiredKinds: (value("--require-kinds") ?? "psd,psb,raw")
+      .split(",")
+      .map((kind) => kind.trim())
+      .filter(Boolean) as CorpusKind[],
   };
+}
+
+async function runCaseIsolated(manifest: string, entry: CorpusCase): Promise<CaseResult> {
+  try {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [
+      "--import",
+      "tsx",
+      fileURLToPath(import.meta.url),
+      "--manifest",
+      manifest,
+      "--worker-case",
+      entry.id,
+    ], {
+      cwd: process.cwd(),
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: 10 * 60 * 1000,
+    });
+    if (stderr.trim()) process.stderr.write(stderr);
+    const encoded = stdout.split(/\r?\n/).findLast((line) => line.startsWith(WORKER_RESULT_PREFIX));
+    if (!encoded) throw new Error("corpus worker exited without a result");
+    return JSON.parse(encoded.slice(WORKER_RESULT_PREFIX.length)) as CaseResult;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      status: "fail",
+      durationMs: 0,
+      peakRssMiB: 0,
+      detail: `isolated corpus worker failed: ${detail}`,
+    };
+  }
+}
+
+function elapsedMs(started: bigint) {
+  return Number(process.hrtime.bigint() - started) / 1_000_000;
+}
+
+function peakRssMiB() {
+  return Number((process.resourceUsage().maxRSS / 1024).toFixed(1));
 }
 
 function assertManifest(value: unknown): asserts value is CorpusManifest {
@@ -101,30 +156,33 @@ function meanAbsoluteError(a: Uint8ClampedArray, b: Uint8ClampedArray) {
 }
 
 function applyCorpusEdit(doc: Document) {
-  const layer = doc.layers.find((candidate) => candidate.kind !== "group");
-  if (!layer) throw new Error("document has no editable non-group layer");
+  const layer = doc.layers.find((candidate) => candidate.kind !== "group") ?? doc.layers[0];
+  if (!layer) throw new Error("document has no editable layer");
   layer.opacity = layer.opacity > 0.98 ? 0.97 : Math.min(1, layer.opacity + 0.01);
 }
 
 async function runPhotoshop(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
   const header = assertSafePhotoshopHeader(bytes, entry.file, exceedsBrowserCanvas);
   if (header.container !== entry.kind) throw new Error(`container is ${header.container}, manifest says ${entry.kind}`);
-  const opened = await importPsd(bytes.slice(0));
+  const opened = await importPsd(bytes);
   assertExpectedDimensions(entry, opened);
   applyCorpusEdit(opened);
+  const importPeakRssMiB = peakRssMiB();
 
   const native = await encodeLumaProject(opened, [], entry.id);
   const reopenedNative = await decodeLumaProject(native);
   assertExpectedDimensions(entry, reopenedNative.doc);
   const nativeError = meanAbsoluteError(preview(opened), preview(reopenedNative.doc));
   if (nativeError !== 0) throw new Error(`native save/reopen preview drifted by ${nativeError.toFixed(3)} levels`);
+  const nativeRoundTripPeakRssMiB = peakRssMiB();
 
   const exported = exportPhotoshopDocument(reopenedNative.doc, { format: entry.kind });
+  const photoshopExportPeakRssMiB = peakRssMiB();
   const warningCount = exported.report.issues.filter((issue) => issue.severity === "warning").length;
   if (entry.expected?.maximumWarnings !== undefined && warningCount > entry.expected.maximumWarnings) {
     throw new Error(`${warningCount} Photoshop warnings, allowed ${entry.expected.maximumWarnings}`);
   }
-  const reopenedPhotoshop = await importPsd(exported.buffer.slice(0));
+  const reopenedPhotoshop = await importPsd(exported.buffer);
   assertExpectedDimensions(entry, reopenedPhotoshop);
   const psdError = meanAbsoluteError(preview(reopenedNative.doc), preview(reopenedPhotoshop));
   const maximum = entry.expected?.maximumPsdMeanError ?? 3;
@@ -136,6 +194,10 @@ async function runPhotoshop(entry: CorpusCase, bytes: ArrayBuffer): Promise<Reco
     warnings: warningCount,
     nativeMeanError: nativeError,
     photoshopMeanError: Number(psdError.toFixed(4)),
+    importPeakRssMiB,
+    nativeRoundTripPeakRssMiB,
+    photoshopExportPeakRssMiB,
+    photoshopReopenPeakRssMiB: peakRssMiB(),
   };
 }
 
@@ -174,7 +236,7 @@ async function runRaw(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<str
 }
 
 async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
-  const started = performance.now();
+  const started = process.hrtime.bigint();
   let inputReady = false;
   try {
     const path = safeCasePath(root, entry.file);
@@ -182,7 +244,9 @@ async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
     const limit = entry.kind === "raw" ? FILE_INPUT_LIMITS.rawBytes : FILE_INPUT_LIMITS.photoshopBytes;
     if (!metadata.isFile() || metadata.size < 1 || metadata.size > limit) throw new Error(`file is outside the 1..${Math.round(limit / 1024 / 1024)} MB bound`);
     const source = await readFile(path);
-    const bytes = source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
+    const bytes = source.byteOffset === 0 && source.byteLength === source.buffer.byteLength
+      ? source.buffer as ArrayBuffer
+      : source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
     inputReady = true;
     const metrics = entry.kind === "raw" ? await runRaw(entry, bytes) : await runPhotoshop(entry, bytes);
     if (entry.expected?.outcome === "reject") {
@@ -190,21 +254,22 @@ async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
         id: entry.id,
         kind: entry.kind,
         status: "fail",
-        durationMs: performance.now() - started,
+        durationMs: elapsedMs(started),
+        peakRssMiB: peakRssMiB(),
         detail: "unsafe input was accepted",
         metrics,
       };
     }
-    return { id: entry.id, kind: entry.kind, status: "pass", durationMs: performance.now() - started, detail: "workflow passed", metrics };
+    return { id: entry.id, kind: entry.kind, status: "pass", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: "workflow passed", metrics };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (inputReady && entry.expected?.outcome === "reject") {
       const pattern = entry.expected.errorPattern ? new RegExp(entry.expected.errorPattern, "i") : null;
       if (!pattern || pattern.test(message)) {
-        return { id: entry.id, kind: entry.kind, status: "pass", durationMs: performance.now() - started, detail: `safely rejected: ${message}` };
+        return { id: entry.id, kind: entry.kind, status: "pass", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: `safely rejected: ${message}` };
       }
     }
-    return { id: entry.id, kind: entry.kind, status: "fail", durationMs: performance.now() - started, detail: message };
+    return { id: entry.id, kind: entry.kind, status: "fail", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: message };
   }
 }
 
@@ -212,16 +277,35 @@ async function main() {
   const options = parseArgs();
   const manifest = JSON.parse(await readFile(options.manifest, "utf8")) as unknown;
   assertManifest(manifest);
-  if (!Number.isInteger(options.minimum) || options.minimum < 1 || manifest.cases.length < options.minimum) {
-    throw new Error(`Corpus has ${manifest.cases.length} cases; this gate requires at least ${options.minimum}`);
-  }
-  const kinds = new Set(manifest.cases.map((entry) => entry.kind));
-  for (const kind of ["psd", "psb", "raw"] as const) if (!kinds.has(kind)) throw new Error(`Corpus is missing ${kind.toUpperCase()} coverage`);
-
-  const root = dirname(options.manifest);
-  const results: CaseResult[] = [];
-  for (const entry of manifest.cases) {
+  const root = manifest.sourceRoot
+    ? resolve(dirname(options.manifest), manifest.sourceRoot)
+    : dirname(options.manifest);
+  if (options.workerCase) {
+    const entry = manifest.cases.find((candidate) => candidate.id === options.workerCase);
+    if (!entry) throw new Error(`Corpus worker case not found: ${options.workerCase}`);
     const result = await runCase(root, entry);
+    console.log(`${WORKER_RESULT_PREFIX}${JSON.stringify(result)}`);
+    return;
+  }
+  const selectedIds = new Set(options.caseIds);
+  const cases = selectedIds.size
+    ? manifest.cases.filter((entry) => selectedIds.has(entry.id))
+    : manifest.cases;
+  if (selectedIds.size) {
+    const missing = [...selectedIds].filter((id) => !cases.some((entry) => entry.id === id));
+    if (missing.length) throw new Error(`Corpus case${missing.length === 1 ? "" : "s"} not found: ${missing.join(", ")}`);
+  }
+  if (!Number.isInteger(options.minimum) || options.minimum < 1 || cases.length < options.minimum) {
+    throw new Error(`Corpus run has ${cases.length} cases; this gate requires at least ${options.minimum}`);
+  }
+  const kinds = new Set(cases.map((entry) => entry.kind));
+  for (const kind of options.requiredKinds) {
+    if (!["psd", "psb", "raw"].includes(kind)) throw new Error(`Unknown required corpus kind: ${kind}`);
+    if (!kinds.has(kind)) throw new Error(`Corpus is missing ${kind.toUpperCase()} coverage`);
+  }
+  const results: CaseResult[] = [];
+  for (const entry of cases) {
+    const result = await runCaseIsolated(options.manifest, entry);
     results.push(result);
     console.log(`${result.status === "pass" ? "PASS" : "FAIL"} ${entry.id}: ${result.detail}`);
   }

@@ -44,6 +44,7 @@ import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
 import { readRecoveryWorkspace, writeRecoveryWorkspace } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
 import { installGlobalDiagnostics, localDiagnostics } from "@/app/engine/diagnostics";
+import { createCrashReporterFromEnv } from "@/app/engine/crash-reporting";
 import { assertFileSize, assertSafePhotoshopHeader, assertSafeRasterHeader } from "@/app/engine/input-limits";
 import { exceedsBrowserCanvas } from "@/app/engine/large-documents";
 import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
@@ -2063,6 +2064,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   useEffect(() => {
     if (!studio) return;
+    const crashReporter = createCrashReporterFromEnv(desktop ? "pro" : "web");
     return installGlobalDiagnostics({
       context: () => ({
         edition: desktop ? "pro" : "web",
@@ -2078,6 +2080,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           layers: studio.doc.layers.length,
         });
       },
+      onRecord: crashReporter.enabled ? async (event) => { await crashReporter.report(event); } : undefined,
     });
   }, [studio, desktop]);
 

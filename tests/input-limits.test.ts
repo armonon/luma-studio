@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertSafePhotoshopHeader,
+  assertSafePhotoshopDecodeBudget,
+  estimatePhotoshopDecodeBytes,
   assertSafeRasterHeader,
   inspectPhotoshopHeader,
   inspectRasterHeader,
@@ -79,4 +81,22 @@ test("PSD and PSB headers are bounded before the codec sees them", () => {
   const malformed = photoshopHeader(800, 600);
   new DataView(malformed.buffer).setUint32(26, 1000, false);
   assert.throws(() => inspectPhotoshopHeader(malformed), /Malformed Photoshop section length/);
+});
+
+test("layered Photoshop files are refused before their decoded planes cross the memory ceiling", () => {
+  const locallyBounded = {
+    container: "psd" as const,
+    channels: 3,
+    width: 3600,
+    height: 3600,
+    depth: 8,
+    colorMode: 3,
+    layers: 4,
+  };
+  assert.ok(estimatePhotoshopDecodeBytes(locallyBounded, 6 * 1024 * 1024) < 2 * 1024 * 1024 * 1024);
+  assert.doesNotThrow(() => assertSafePhotoshopDecodeBudget(locallyBounded, 6 * 1024 * 1024));
+  assert.throws(
+    () => assertSafePhotoshopDecodeBudget({ ...locallyBounded, width: 4800, height: 6000, layers: 8 }, 64 * 1024 * 1024),
+    /approximately .* safe import ceiling/i,
+  );
 });

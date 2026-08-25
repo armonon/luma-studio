@@ -43,6 +43,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/artifacts/
 
 # Tauri (pro edition) build artefacts
 /src-tauri/target

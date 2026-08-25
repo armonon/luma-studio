@@ -5,6 +5,8 @@ export const FILE_INPUT_LIMITS = {
   pluginBytes: 8 * 1024 * 1024,
 } as const;
 
+export const PHOTOSHOP_DECODE_MEMORY_CEILING = 2 * 1024 * 1024 * 1024;
+
 const IMAGE_HEADER_SCAN_BYTES = 16 * 1024 * 1024;
 export type CanvasLimitCheck = (width: number, height: number) => boolean;
 
@@ -23,6 +25,35 @@ export type PhotoshopHeader = {
   colorMode: number;
   layers: number;
 };
+
+export function estimatePhotoshopDecodeBytes(header: PhotoshopHeader, sourceBytes: number) {
+  const sampleBytes = header.depth === 32 ? 4 : header.depth === 16 ? 2 : 1;
+  const pixels = header.width * header.height;
+  const decodedPlanes = pixels * 4 * sampleBytes * Math.max(1, header.layers);
+  const documentPlane = pixels * 4 * sampleBytes;
+  // ag-psd materializes raw channels, ImageData and a canvas backing store,
+  // while Luma creates its local bitmap/surface master. Real 4,800×6,000
+  // corpus files measured close to four decoded-plane working sets plus three
+  // full-document scratch/composite planes during import. Keep the estimate
+  // deliberately conservative until the streaming decoder replaces ag-psd.
+  return decodedPlanes * 4 + documentPlane * 3 + sourceBytes * 3 + 256 * 1024 * 1024;
+}
+
+export function assertSafePhotoshopDecodeBudget(
+  header: PhotoshopHeader,
+  sourceBytes: number,
+  ceiling = PHOTOSHOP_DECODE_MEMORY_CEILING,
+) {
+  const estimated = estimatePhotoshopDecodeBytes(header, sourceBytes);
+  if (!Number.isSafeInteger(estimated) || estimated > ceiling) {
+    throw new Error(
+      `Photoshop decode would require approximately ${Math.ceil(estimated / 1024 / 1024)} MB; `
+      + `the safe import ceiling is ${Math.floor(ceiling / 1024 / 1024)} MB. `
+      + "Flatten or reduce the layer count in Photoshop before importing.",
+    );
+  }
+  return estimated;
+}
 
 function u16(bytes: Uint8Array, offset: number, littleEndian: boolean) {
   if (offset < 0 || offset + 2 > bytes.byteLength) return null;
@@ -217,6 +248,7 @@ export function assertSafePhotoshopHeader(source: ArrayBuffer | Uint8Array, name
   if (exceedsCanvas(header.width, header.height)) {
     throw new Error(`${name} exceeds the safe PSD/PSB import canvas; convert it to a tiled Luma project first`);
   }
+  assertSafePhotoshopDecodeBudget(header, source.byteLength);
   return header;
 }
 
