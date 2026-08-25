@@ -861,7 +861,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setFocusState(next);
     setActiveLayerId(layerId);
     setAssetsOpen(true);
-    if (target === "mask" && layer.mask) {
+    if (target === "mask" && (layer.maskSurface || layer.mask)) {
       setWorkspace("mask");
       setActiveTool("mask-add");
     }

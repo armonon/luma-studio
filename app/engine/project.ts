@@ -18,12 +18,16 @@ import {
 } from "./operation-history";
 import type {
   HistoryEntry,
+  LayerMaskTilePatch,
   LayerSnapshot,
   PixelPatch,
   SelectionTranslationPatch,
   SurfaceTilePatch,
 } from "./studio";
+import type { AlphaTileRecord } from "./alpha-surface";
 import { PixelFormat, PrecisionTileSurface } from "./tile-store";
+import { SparseAlphaSurface } from "./alpha-surface";
+import { alphaSurfaceFromCanvas } from "./selection";
 import type { WorkingColorSpace } from "./color";
 import { importPsd } from "./psd";
 import {
@@ -33,8 +37,8 @@ import {
   setPhotoshopLayerMetadata,
 } from "./psd-metadata";
 
-export const LUMA_PROJECT_VERSION = 4 as const;
-const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, LUMA_PROJECT_VERSION]);
+export const LUMA_PROJECT_VERSION = 5 as const;
+const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, 4, LUMA_PROJECT_VERSION]);
 const RESTORED_HISTORY_LIMIT = 80;
 
 export const LUMA_PROJECT_LIMITS = {
@@ -92,14 +96,30 @@ type SerializedPrecisionSurface = {
   tiles: Array<{ key: string; asset: string }>;
 };
 
+type SerializedAlphaSurface = {
+  width: number;
+  height: number;
+  tileSize: number;
+  defaultAlpha: number;
+  tiles: Array<{ key: string; uniform?: number; asset?: string }>;
+};
+
+type SerializedSelection = {
+  bounds: Selection["bounds"];
+  surface?: SerializedAlphaSurface;
+  /** v1-v4 selection storage. */
+  asset?: string;
+};
+
 type SerializedRawSource = Omit<NonNullable<Layer["raw"]>, "original"> & {
   asset: string;
 };
 
-type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "raw" | "subjectMask"> & {
+type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "maskSurface" | "raw" | "subjectMask"> & {
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
+  maskSurface?: SerializedAlphaSurface;
   raw?: SerializedRawSource;
 };
 
@@ -110,14 +130,15 @@ type SerializedCapturedBrush = Omit<CapturedBrushAsset, "bitmap"> & {
 type SerializedDocument = Omit<Document, "layers" | "selection" | "capturedBrushes"> & {
   layers: SerializedLayer[];
   capturedBrushes?: SerializedCapturedBrush[];
-  selection?: { asset: string; bounds: Selection["bounds"] };
+  selection?: SerializedSelection;
   photoshopSourceAsset?: string;
 };
 
-type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "raw"> & {
+type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "maskSurface" | "raw"> & {
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
+  maskSurface?: SerializedAlphaSurface;
   raw?: SerializedRawSource;
 };
 
@@ -135,6 +156,12 @@ type SerializedSurfaceTilePatch = Omit<SurfaceTilePatch, "before" | "after"> & {
   afterAsset?: string;
 };
 
+type SerializedAlphaTileRecord = { uniform?: number; asset?: string } | null;
+type SerializedLayerMaskTilePatch = Omit<LayerMaskTilePatch, "before" | "after"> & {
+  before: SerializedAlphaTileRecord;
+  after: SerializedAlphaTileRecord;
+};
+
 type SerializedHistoryEntry = {
   label: string;
   before: SerializedLayerSnapshot[];
@@ -143,11 +170,12 @@ type SerializedHistoryEntry = {
   layersAfter?: SerializedLayer[];
   layerOrderBefore?: string[];
   layerOrderAfter?: string[];
-  selectionBefore?: { asset: string; bounds: Selection["bounds"] } | null;
-  selectionAfter?: { asset: string; bounds: Selection["bounds"] } | null;
+  selectionBefore?: SerializedSelection | null;
+  selectionAfter?: SerializedSelection | null;
   selectionTranslation?: SerializedSelectionTranslationPatch;
   pixelPatches?: SerializedPixelPatch[];
   surfacePatches?: SerializedSurfaceTilePatch[];
+  maskSurfacePatches?: SerializedLayerMaskTilePatch[];
   guidesBefore?: Guide[];
   guidesAfter?: Guide[];
   documentBefore?: SerializedDocument;
@@ -164,7 +192,7 @@ type SerializedOperationHistory = Omit<OperationHistorySnapshot<HistoryEntry>, "
 
 type ProjectManifest = {
   format: "luma-project";
-  version: 1 | 2 | 3 | typeof LUMA_PROJECT_VERSION;
+  version: 1 | 2 | 3 | 4 | typeof LUMA_PROJECT_VERSION;
   name: string;
   savedAt: string;
   document: SerializedDocument;
@@ -363,18 +391,92 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
   );
 }
 
+async function serializeAlphaSurface(
+  surface: SparseAlphaSurface,
+  context: EncodeContext,
+): Promise<SerializedAlphaSurface> {
+  const tiles: SerializedAlphaSurface["tiles"] = [];
+  for (const key of surface.keys()) {
+    const record = surface.record(key);
+    if (typeof record === "number") tiles.push({ key, uniform: record });
+    else if (record) tiles.push({ key, asset: await addPrecisionAsset(context, record) });
+  }
+  return {
+    width: surface.width,
+    height: surface.height,
+    tileSize: surface.tileSize,
+    defaultAlpha: surface.defaultAlpha,
+    tiles,
+  };
+}
+
+async function deserializeAlphaSurface(source: SerializedAlphaSurface, zip: JSZip) {
+  if (!source || !Number.isInteger(source.width) || !Number.isInteger(source.height) ||
+      source.width <= 0 || source.height <= 0 ||
+      source.width > LUMA_PROJECT_LIMITS.dimension || source.height > LUMA_PROJECT_LIMITS.dimension ||
+      !Number.isInteger(source.tileSize) || source.tileSize < 32 || source.tileSize > 2048 ||
+      !Number.isInteger(source.defaultAlpha) || source.defaultAlpha < 0 || source.defaultAlpha > 255 ||
+      !Array.isArray(source.tiles) || source.tiles.length > LUMA_PROJECT_LIMITS.entries) {
+    throw new Error("Invalid sparse alpha surface");
+  }
+  const surface = new SparseAlphaSurface(source.width, source.height, {
+    tileSize: source.tileSize,
+    defaultAlpha: source.defaultAlpha,
+  });
+  const seen = new Set<string>();
+  for (const tile of source.tiles) {
+    if (!tile || typeof tile.key !== "string" || seen.has(tile.key) ||
+        (tile.uniform === undefined) === (tile.asset === undefined)) {
+      throw new Error("Invalid sparse alpha tile");
+    }
+    seen.add(tile.key);
+    if (tile.uniform !== undefined) {
+      if (!Number.isInteger(tile.uniform) || tile.uniform < 0 || tile.uniform > 255) {
+        throw new Error("Invalid sparse alpha value");
+      }
+      surface.writeUniform(tile.key, tile.uniform);
+    } else {
+      surface.writeTile(tile.key, await readPrecisionAsset(zip, tile.asset!));
+    }
+  }
+  return surface;
+}
+
+async function serializeSelection(selection: Selection, context: EncodeContext): Promise<SerializedSelection> {
+  const surface = selection.surface ?? (selection.mask
+    ? alphaSurfaceFromCanvas(selection.mask)
+    : null);
+  if (!surface) throw new Error("Selection has no alpha storage");
+  return {
+    bounds: { ...selection.bounds },
+    surface: await serializeAlphaSurface(surface, context),
+  };
+}
+
+async function deserializeSelection(source: SerializedSelection, zip: JSZip): Promise<Selection> {
+  if (!source || !source.bounds) throw new Error("Invalid project selection");
+  if (source.surface) {
+    return { surface: await deserializeAlphaSurface(source.surface, zip), bounds: { ...source.bounds } };
+  }
+  if (source.asset) {
+    return { mask: await readCanvasAsset(zip, source.asset), bounds: { ...source.bounds } };
+  }
+  throw new Error("Project selection has no alpha storage");
+}
+
 async function serializeLayer(layer: Layer, context: EncodeContext): Promise<SerializedLayer> {
   // subjectMask is a canvas and derived data — recomputable from the layer by
   // the same model that produced it. Left in the spread it went through
   // JSON.stringify as `{}`, which is truthy but has no getContext, so a
   // reopened document threw the moment a subject-restricted effect drew.
-  const { bitmap, surface, mask, raw, subjectMask, ...metadata } = layer;
+  const { bitmap, surface, mask, maskSurface, raw, subjectMask, ...metadata } = layer;
   void subjectMask;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
+    maskSurface: maskSurface ? await serializeAlphaSurface(maskSurface, context) : undefined,
     raw: raw ? {
       ...raw,
       settings: { ...raw.settings, customWhiteBalance: [...raw.settings.customWhiteBalance] },
@@ -390,7 +492,7 @@ async function deserializeLayer(
   preserveId: boolean,
   idMap?: Map<string, string>,
 ): Promise<Layer> {
-  const { bitmapAsset, surface, maskAsset, raw, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, maskSurface, raw, ...metadata } = source;
   const id = preserveId ? metadata.id : nextId(metadata.kind);
   if (preserveId) reserveId(id);
   else idMap?.set(metadata.id, id);
@@ -402,6 +504,7 @@ async function deserializeLayer(
   if (bitmapAsset) layer.bitmap = await readCanvasAsset(zip, bitmapAsset);
   if (surface) layer.surface = await deserializePrecisionSurface(surface, zip);
   if (maskAsset) layer.mask = await readCanvasAsset(zip, maskAsset);
+  if (maskSurface) layer.maskSurface = await deserializeAlphaSurface(maskSurface, zip);
   if (raw) {
     const { asset, ...rawMetadata } = raw;
     layer.raw = {
@@ -421,9 +524,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     bitmapAsset: await addCanvasAsset(context, bitmap),
   })));
   const photoshopSource = getPhotoshopDocumentMetadata(doc)?.originalSource;
-  const selection = doc.selection
-    ? { asset: await addCanvasAsset(context, doc.selection.mask), bounds: { ...doc.selection.bounds } }
-    : undefined;
+  const selection = doc.selection ? await serializeSelection(doc.selection, context) : undefined;
   return {
     width: doc.width,
     height: doc.height,
@@ -467,10 +568,7 @@ async function deserializeDocument(
 
   let selection: Selection | null = null;
   if (source.selection) {
-    selection = {
-      mask: await readCanvasAsset(zip, source.selection.asset),
-      bounds: { ...source.selection.bounds },
-    };
+    selection = await deserializeSelection(source.selection, zip);
   }
   const capturedBrushSources = Array.isArray(source.capturedBrushes)
     ? source.capturedBrushes.slice(-MAX_CAPTURED_BRUSHES)
@@ -581,12 +679,13 @@ async function serializeLayerSnapshot(
   snapshot: LayerSnapshot,
   context: EncodeContext,
 ): Promise<SerializedLayerSnapshot> {
-  const { bitmap, surface, mask, raw, ...metadata } = snapshot;
+  const { bitmap, surface, mask, maskSurface, raw, ...metadata } = snapshot;
   return {
     ...metadata,
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
+    maskSurface: maskSurface ? await serializeAlphaSurface(maskSurface, context) : undefined,
     raw: raw ? {
       ...raw,
       settings: { ...raw.settings, customWhiteBalance: [...raw.settings.customWhiteBalance] },
@@ -600,12 +699,13 @@ async function deserializeLayerSnapshot(
   source: SerializedLayerSnapshot,
   zip: JSZip,
 ): Promise<LayerSnapshot> {
-  const { bitmapAsset, surface, maskAsset, raw, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, maskSurface, raw, ...metadata } = source;
   return {
     ...metadata,
     bitmap: bitmapAsset ? await readCanvasAsset(zip, bitmapAsset) : undefined,
     surface: surface ? await deserializePrecisionSurface(surface, zip) : undefined,
     mask: maskAsset ? await readCanvasAsset(zip, maskAsset) : undefined,
+    maskSurface: maskSurface ? await deserializeAlphaSurface(maskSurface, zip) : undefined,
     raw: raw ? await (async () => {
       const { asset, ...rawMetadata } = raw;
       return {
@@ -629,6 +729,29 @@ async function readImageDataAsset(zip: JSZip, asset: string) {
   return canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
 }
 
+async function serializeAlphaTileRecord(
+  record: AlphaTileRecord | null,
+  context: EncodeContext,
+): Promise<SerializedAlphaTileRecord> {
+  if (record === null) return null;
+  return typeof record === "number"
+    ? { uniform: record }
+    : { asset: await addPrecisionAsset(context, record) };
+}
+
+async function deserializeAlphaTileRecord(
+  record: SerializedAlphaTileRecord,
+  zip: JSZip,
+): Promise<AlphaTileRecord | null> {
+  if (record === null) return null;
+  if ((record.uniform === undefined) === (record.asset === undefined)) throw new Error("Invalid alpha history tile");
+  if (record.uniform !== undefined) {
+    if (!Number.isInteger(record.uniform) || record.uniform < 0 || record.uniform > 255) throw new Error("Invalid alpha history value");
+    return record.uniform;
+  }
+  return readPrecisionAsset(zip, record.asset!);
+}
+
 async function serializeHistoryEntry(
   entry: HistoryEntry,
   context: EncodeContext,
@@ -648,18 +771,12 @@ async function serializeHistoryEntry(
   if (entry.layerOrderAfter) serialized.layerOrderAfter = [...entry.layerOrderAfter];
   if ("selectionBefore" in entry) {
     serialized.selectionBefore = entry.selectionBefore
-      ? {
-          asset: await addCanvasAsset(context, entry.selectionBefore.mask),
-          bounds: { ...entry.selectionBefore.bounds },
-        }
+      ? await serializeSelection(entry.selectionBefore, context)
       : null;
   }
   if ("selectionAfter" in entry) {
     serialized.selectionAfter = entry.selectionAfter
-      ? {
-          asset: await addCanvasAsset(context, entry.selectionAfter.mask),
-          bounds: { ...entry.selectionAfter.bounds },
-        }
+      ? await serializeSelection(entry.selectionAfter, context)
       : null;
   }
   if (entry.selectionTranslation) {
@@ -690,6 +807,14 @@ async function serializeHistoryEntry(
       afterAsset: patch.after ? await addPrecisionAsset(context, patch.after) : undefined,
     })));
   }
+  if (entry.maskSurfacePatches) {
+    serialized.maskSurfacePatches = await Promise.all(entry.maskSurfacePatches.map(async (patch) => ({
+      layerId: patch.layerId,
+      key: patch.key,
+      before: await serializeAlphaTileRecord(patch.before, context),
+      after: await serializeAlphaTileRecord(patch.after, context),
+    })));
+  }
   if (entry.guidesBefore) serialized.guidesBefore = entry.guidesBefore.map((guide) => ({ ...guide }));
   if (entry.guidesAfter) serialized.guidesAfter = entry.guidesAfter.map((guide) => ({ ...guide }));
   if (entry.documentBefore) serialized.documentBefore = await serializeDocument(entry.documentBefore, context);
@@ -716,18 +841,12 @@ async function deserializeHistoryEntry(
   if (source.layerOrderAfter) entry.layerOrderAfter = [...source.layerOrderAfter];
   if ("selectionBefore" in source) {
     entry.selectionBefore = source.selectionBefore
-      ? {
-          mask: await readCanvasAsset(zip, source.selectionBefore.asset),
-          bounds: { ...source.selectionBefore.bounds },
-        }
+      ? await deserializeSelection(source.selectionBefore, zip)
       : null;
   }
   if ("selectionAfter" in source) {
     entry.selectionAfter = source.selectionAfter
-      ? {
-          mask: await readCanvasAsset(zip, source.selectionAfter.asset),
-          bounds: { ...source.selectionAfter.bounds },
-        }
+      ? await deserializeSelection(source.selectionAfter, zip)
       : null;
   }
   if (source.selectionTranslation) {
@@ -756,6 +875,14 @@ async function deserializeHistoryEntry(
       updateBitmap: patch.updateBitmap,
       before: patch.beforeAsset ? await readPrecisionAsset(zip, patch.beforeAsset) : null,
       after: patch.afterAsset ? await readPrecisionAsset(zip, patch.afterAsset) : null,
+    })));
+  }
+  if (source.maskSurfacePatches) {
+    entry.maskSurfacePatches = await Promise.all(source.maskSurfacePatches.map(async (patch) => ({
+      layerId: patch.layerId,
+      key: patch.key,
+      before: await deserializeAlphaTileRecord(patch.before, zip),
+      after: await deserializeAlphaTileRecord(patch.after, zip),
     })));
   }
   if (source.guidesBefore) entry.guidesBefore = source.guidesBefore.map((guide) => ({ ...guide }));

@@ -4,6 +4,7 @@ import {
   PrecisionTileSurface,
   SparseTileStore,
   TileGrid,
+  TileMemoryLimitError,
   float16ToFloat32,
   float32ToFloat16,
 } from "../app/engine/tile-store.ts";
@@ -74,6 +75,17 @@ test("sparse store rejects malformed keys and incorrect payload sizes", () => {
   assert.throws(() => store.read("bad"), /Invalid tile key/);
   assert.throws(() => store.write("0:0", new Uint8Array(3)), /expected 1024 bytes/);
   assert.throws(() => store.write("9:9", new Uint8Array(1024)), /out of bounds/);
+});
+
+test("pixel surfaces enforce a resident-memory ceiling before large mutations", () => {
+  const grid = new TileGrid(50_000, 50_000);
+  const store = new SparseTileStore(grid, "rgba8", 8 * 1024 * 1024);
+  assert.throws(
+    () => store.assertRegionCapacity({ x: 0, y: 0, width: 50_000, height: 50_000 }),
+    TileMemoryLimitError,
+  );
+  assert.equal(store.stats().residentBytes, 0);
+  assert.equal(store.stats().residentTiles, 0);
 });
 
 test("half-float encoding preserves HDR, negative, and fractional values", () => {

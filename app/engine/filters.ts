@@ -3,10 +3,12 @@ import {
   Layer,
   SmartFilter,
   SmartFilterKind,
+  affineForLayerTransform,
   inverseAffineForLayerTransform,
   newCanvas,
   transformPoint,
 } from "./document";
+import { selectionRegionCanvas } from "./selection";
 
 export type FilterRegion = {
   x: number;
@@ -128,6 +130,20 @@ function applyPixelFilter(
     const localSelectionContext = localSelection.getContext("2d")!;
     const inverse = inverseAffineForLayerTransform(layer.transform);
     if (!inverse) return;
+    const forward = affineForLayerTransform(layer.transform);
+    const corners = [
+      transformPoint(forward, region.x, region.y),
+      transformPoint(forward, region.x + region.width, region.y),
+      transformPoint(forward, region.x, region.y + region.height),
+      transformPoint(forward, region.x + region.width, region.y + region.height),
+    ];
+    const minX = Math.floor(Math.min(...corners.map((point) => point.x))) - 1;
+    const minY = Math.floor(Math.min(...corners.map((point) => point.y))) - 1;
+    const maxX = Math.ceil(Math.max(...corners.map((point) => point.x))) + 1;
+    const maxY = Math.ceil(Math.max(...corners.map((point) => point.y))) + 1;
+    const selectionRect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    const selection = selectionRegionCanvas(doc, selectionRect);
+    if (!selection) return;
     localSelectionContext.setTransform(
       inverse.a,
       inverse.b,
@@ -136,7 +152,7 @@ function applyPixelFilter(
       inverse.e - region.x,
       inverse.f - region.y,
     );
-    localSelectionContext.drawImage(doc.selection.mask, 0, 0);
+    localSelectionContext.drawImage(selection, selectionRect.x, selectionRect.y);
     const selData = localSelectionContext.getImageData(0, 0, region.width, region.height).data;
     const outData = output.data;
     const srcData = input.data;

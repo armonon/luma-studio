@@ -49,7 +49,6 @@ import {
   createRasterLayer,
   createShapeLayer,
   createTextLayer,
-  ensureMask,
   newCanvas,
   nextId,
   resolvedBlendPasses,
@@ -102,12 +101,16 @@ import {
   invertSelection,
   refineSelection,
   selectAll,
-  selectByColor,
+  selectByColorTiled,
   selectEllipse,
   selectLasso,
+  selectTransformedMask,
   selectText,
   selectRect,
+  selectionRegionCanvas,
+  selectionSurface,
 } from "./selection";
+import { SparseAlphaSurface, type AlphaTileRecord } from "./alpha-surface";
 import {
   desaturate,
   filterRegionForSelection,
@@ -132,6 +135,12 @@ import {
   snapshotLayer,
 } from "./history-payload";
 import { paintTarget } from "./stroke-target";
+import {
+  hasLayerMask,
+  layerMaskRegionCanvas,
+  layerMaskSurface,
+  setLayerMaskFromCanvas,
+} from "./layer-mask";
 import { applyLayerSnapshot } from "./layer-snapshot-apply";
 import {
   AdjustmentKind,
@@ -141,7 +150,7 @@ import {
   isAdjustmentLayer,
   snapshotForAdjustment,
 } from "./layer-mutations";
-import { autoLumaMaskInPlace, clearMaskInPlace, invertMaskInPlace } from "./mask-ops";
+import { autoLumaMaskInPlace, clearMaskInPlace, featherMaskInPlace, invertMaskInPlace } from "./mask-ops";
 import { withSelectionCommit } from "./selection-driver";
 import type {
   PhotoshopCompatibilityReport,
@@ -196,7 +205,9 @@ export type LayerSnapshot = {
   layerId: string;
   bitmap?: HTMLCanvasElement;
   surface?: PrecisionTileSurface;
+  maskSurface?: SparseAlphaSurface;
   mask?: HTMLCanvasElement;
+  maskPresent?: boolean;
   tone?: ToneParams;
   curves?: Curves;
   levels?: LevelsParams;
@@ -251,6 +262,7 @@ export type HistoryEntry = {
   selectionTranslation?: SelectionTranslationPatch;
   pixelPatches?: PixelPatch[];
   surfacePatches?: SurfaceTilePatch[];
+  maskSurfacePatches?: LayerMaskTilePatch[];
   guidesBefore?: Guide[];
   guidesAfter?: Guide[];
   documentBefore?: Document;
@@ -264,6 +276,13 @@ export type SurfaceTilePatch = {
   after: Uint8Array | null;
   /** Pixel patches already own the exact display mirror for this operation. */
   updateBitmap?: boolean;
+};
+
+export type LayerMaskTilePatch = {
+  layerId: string;
+  key: string;
+  before: AlphaTileRecord | null;
+  after: AlphaTileRecord | null;
 };
 
 export type SelectionTranslationPatch = {
@@ -316,7 +335,7 @@ export type SelectionContentMovePlan = {
 
 /**
  * Bounds temporary content-aware-move storage by selection size. Selection
- * masks remain document-sized until the document model itself becomes tiled.
+ * alpha and its undo state remain sparse throughout the operation.
  */
 export function planSelectionContentMove(
   bounds: Selection["bounds"],
@@ -483,6 +502,10 @@ export class Studio {
     params: BrushParams;
     points: BrushPoint[];
     before: Map<string, Uint8Array | null>;
+  } | null = null;
+  private maskStroke: {
+    layerId: string;
+    before: Map<string, AlphaTileRecord | null>;
   } | null = null;
   private retouchStroke: {
     layerId: string;
@@ -722,7 +745,7 @@ export class Studio {
   }
   engineState() {
     const surfaces = this.doc.layers.flatMap((layer) => [layer.bitmap, layer.mask]).filter(Boolean) as HTMLCanvasElement[];
-    if (this.doc.selection) surfaces.push(this.doc.selection.mask);
+    if (this.doc.selection?.mask) surfaces.push(this.doc.selection.mask);
     let tiles = 0;
     let workingSetBytes = 0;
     for (const surface of surfaces) {
@@ -732,13 +755,25 @@ export class Studio {
     }
     let precisionTiles = 0;
     let precisionBytes = 0;
+    let alphaTiles = 0;
+    let alphaBytes = 0;
     for (const layer of this.doc.layers) {
       if (!layer.surface) continue;
       const stats = layer.surface.stats();
       precisionTiles += stats.residentTiles;
       precisionBytes += stats.residentBytes;
     }
+    for (const surface of [
+      ...this.doc.layers.map((layer) => layer.maskSurface),
+      this.doc.selection?.surface,
+    ]) {
+      if (!surface) continue;
+      const stats = surface.stats();
+      alphaTiles += stats.residentTiles;
+      alphaBytes += stats.residentBytes;
+    }
     workingSetBytes += precisionBytes;
+    workingSetBytes += alphaBytes;
     const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     const photoshopMetadata = getPhotoshopDocumentMetadata(this.doc);
@@ -762,6 +797,8 @@ export class Studio {
       tiles,
       precisionTiles,
       precisionBytes,
+      alphaTiles,
+      alphaBytes,
       surfaces: surfaces.length,
       workingSetBytes,
       layers: this.doc.layers.length,
@@ -902,7 +939,13 @@ export class Studio {
       const context = branchBitmap.getContext("2d")!;
       context.save();
       context.globalCompositeOperation = "destination-in";
-      context.drawImage(this.doc.selection.mask, -bounds.x, -bounds.y);
+      const selection = selectionRegionCanvas(this.doc, {
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.w,
+        height: bounds.h,
+      });
+      if (selection) context.drawImage(selection, 0, 0);
       context.restore();
     }
     const node = this.history.tree().find((candidate) => candidate.id === nodeId);
@@ -946,6 +989,7 @@ export class Studio {
     if (entry.selectionTranslation) this.applySelectionTranslation(entry.selectionTranslation, side);
     if (entry.pixelPatches) this.applyPixelPatches(entry.pixelPatches, side);
     if (entry.surfacePatches) this.applySurfacePatches(entry.surfacePatches, side);
+    if (entry.maskSurfacePatches) this.applyMaskSurfacePatches(entry.maskSurfacePatches, side);
     const guides = side === "before" ? entry.guidesBefore : entry.guidesAfter;
     if (guides) this.doc.guides = guides.map((guide) => ({ ...guide }));
     this.checkpointDocumentSurfaces(true);
@@ -963,6 +1007,18 @@ export class Studio {
   private applyPixelPatches(patches: PixelPatch[], side: "before" | "after") {
     for (const patch of patches) {
       const layer = this.findLayer(patch.layerId);
+      if (patch.target === "mask" && layer) {
+        const image = patch[side];
+        const alpha = new Uint8Array(image.width * image.height);
+        for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
+        layerMaskSurface(layer, this.doc.width, this.doc.height, true)!.writeRegion({
+          x: patch.x,
+          y: patch.y,
+          width: image.width,
+          height: image.height,
+        }, alpha);
+        continue;
+      }
       const canvas = patch.target === "bitmap" ? layer?.bitmap : layer?.mask;
       if (!canvas) continue;
       canvas.getContext("2d")!.putImageData(patch[side], patch.x, patch.y);
@@ -989,20 +1045,29 @@ export class Studio {
     }
   }
 
+  private applyMaskSurfacePatches(patches: LayerMaskTilePatch[], side: "before" | "after") {
+    for (const patch of patches) {
+      const layer = this.findLayer(patch.layerId);
+      if (!layer) continue;
+      const surface = layerMaskSurface(layer, this.doc.width, this.doc.height, true)!;
+      surface.applyPatch({ key: patch.key, before: patch.before, after: patch.after }, side);
+    }
+  }
+
   private applySelectionTranslation(patch: SelectionTranslationPatch, side: "before" | "after") {
-    const mask = newCanvas(this.doc.width, this.doc.height);
-    const context = mask.getContext("2d")!;
+    const surface = new SparseAlphaSurface(this.doc.width, this.doc.height);
     if (patch.source) {
-      if (side === "before") {
-        context.putImageData(patch.source, patch.sourceX, patch.sourceY);
-      } else {
-        const source = newCanvas(patch.source.width, patch.source.height);
-        source.getContext("2d")!.putImageData(patch.source, 0, 0);
-        context.drawImage(source, patch.sourceX + patch.deltaX, patch.sourceY + patch.deltaY);
-      }
+      const alpha = new Uint8Array(patch.source.width * patch.source.height);
+      for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = patch.source.data[pixel * 4 + 3];
+      surface.writeRegion({
+        x: patch.sourceX + (side === "after" ? patch.deltaX : 0),
+        y: patch.sourceY + (side === "after" ? patch.deltaY : 0),
+        width: patch.source.width,
+        height: patch.source.height,
+      }, alpha);
     }
     this.doc.selection = {
-      mask,
+      surface,
       bounds: { ...(side === "before" ? patch.beforeBounds : patch.afterBounds) },
     };
   }
@@ -1286,10 +1351,9 @@ export class Studio {
     const before = cloneDocument(this.doc);
     for (const layer of this.doc.layers) {
       layer.transform = { ...layer.transform, tx: layer.transform.tx - x, ty: layer.transform.ty - y };
-      if (layer.mask) {
-        const mask = newCanvas(width, height);
-        mask.getContext("2d")!.drawImage(layer.mask, -x, -y);
-        layer.mask = mask;
+      if (hasLayerMask(layer)) {
+        layer.maskSurface = layerMaskSurface(layer, this.doc.width, this.doc.height)!.cropped(x, y, width, height);
+        layer.mask = undefined;
       }
     }
     this.doc.width = width;
@@ -1381,7 +1445,13 @@ export class Studio {
     if (this.doc.selection) {
       const context = generated.getContext("2d")!;
       context.globalCompositeOperation = "destination-in";
-      context.drawImage(this.doc.selection.mask, 0, 0);
+      const selection = selectionRegionCanvas(this.doc, {
+        x: 0,
+        y: 0,
+        width: generated.width,
+        height: generated.height,
+      });
+      if (selection) context.drawImage(selection, 0, 0);
       context.globalCompositeOperation = "source-over";
     }
     const inverse = inverseAffineForLayerTransform(layer.transform);
@@ -1465,6 +1535,8 @@ export class Studio {
     const layer = this.findLayer(layerId);
     const selection = this.doc.selection;
     if (!layer?.bitmap || !selection || layer.locked) return false;
+    selectionSurface(this.doc);
+    const selectionBefore = cloneSelection(selection);
     const plan = planSelectionContentMove(
       selection.bounds,
       this.doc.width,
@@ -1498,27 +1570,11 @@ export class Studio {
       }
       for (const key of touchedSurfaceKeys) surfaceBefore.set(key, layer.surface.store.read(key));
     }
-    const selectionSourceRect = plan?.contentScratch ?? null;
-    const selectionTranslation: SelectionTranslationPatch = {
-      sourceX: selectionSourceRect?.x ?? 0,
-      sourceY: selectionSourceRect?.y ?? 0,
-      source: selectionSourceRect
-        ? selection.mask.getContext("2d")!.getImageData(
-          selectionSourceRect.x,
-          selectionSourceRect.y,
-          selectionSourceRect.width,
-          selectionSourceRect.height,
-        )
-        : null,
-      deltaX,
-      deltaY,
-      beforeBounds: { ...selection.bounds },
-      afterBounds: {
-        x: selection.bounds.x + deltaX,
-        y: selection.bounds.y + deltaY,
-        w: selection.bounds.w,
-        h: selection.bounds.h,
-      },
+    const afterBounds = {
+      x: selection.bounds.x + deltaX,
+      y: selection.bounds.y + deltaY,
+      w: selection.bounds.w,
+      h: selection.bounds.h,
     };
     let content: HTMLCanvasElement | null = null;
     if (plan) {
@@ -1537,12 +1593,16 @@ export class Studio {
         scratch.height,
       );
       contentContext.globalCompositeOperation = "destination-in";
-      contentContext.drawImage(selection.mask, -scratch.x, -scratch.y);
+      const scratchSelection = selectionRegionCanvas(this.doc, scratch);
+      if (scratchSelection) contentContext.drawImage(scratchSelection, 0, 0);
     }
 
     context.save();
     context.globalCompositeOperation = "destination-out";
-    context.drawImage(selection.mask, 0, 0);
+    if (plan) {
+      const contentSelection = selectionRegionCanvas(this.doc, plan.content);
+      if (contentSelection) context.drawImage(contentSelection, plan.content.x, plan.content.y);
+    }
     context.restore();
     if (plan?.healWork) {
       const work = plan.healWork;
@@ -1569,7 +1629,8 @@ export class Studio {
       }
       fillContext.filter = "none";
       fillContext.globalCompositeOperation = "destination-in";
-      fillContext.drawImage(selection.mask, -work.x, -work.y);
+      const workSelection = selectionRegionCanvas(this.doc, work);
+      if (workSelection) fillContext.drawImage(workSelection, 0, 0);
       context.drawImage(
         fill,
         plan.content.x - work.x,
@@ -1585,11 +1646,10 @@ export class Studio {
     if (content && plan) {
       context.drawImage(content, plan.contentScratch.x + deltaX, plan.contentScratch.y + deltaY);
     }
-    const movedMask = newCanvas(this.doc.width, this.doc.height);
-    movedMask.getContext("2d")!.drawImage(selection.mask, deltaX, deltaY);
+    const movedSurface = selectionSurface(this.doc)!.translated(deltaX, deltaY);
     this.doc.selection = {
-      mask: movedMask,
-      bounds: { ...selectionTranslation.afterBounds },
+      surface: movedSurface,
+      bounds: afterBounds,
     };
     bumpBitmapVersion(layer.bitmap);
     if (mutationRegions.length) {
@@ -1614,14 +1674,14 @@ export class Studio {
       after: [],
       pixelPatches,
       surfacePatches,
-      selectionTranslation,
+      selectionBefore,
+      selectionAfter: cloneSelection(this.doc.selection),
     });
     this.requestRender(plan?.affected);
     return true;
   }
 
   selectTextMask(text: string, x: number, y: number, font: string, vertical = false) {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     const before = cloneSelection(this.doc.selection);
     selectText(this.doc, text, x, y, font, "replace", vertical);
     const after = cloneSelection(this.doc.selection);
@@ -1662,10 +1722,9 @@ export class Studio {
       if (layer.bitmap) {
         layer.transform = { ...layer.transform, tx: layer.transform.tx * sx, ty: layer.transform.ty * sy };
       }
-      if (layer.mask) {
-        const mask = newCanvas(width, height);
-        mask.getContext("2d")!.drawImage(layer.mask, 0, 0, width, height);
-        layer.mask = mask;
+      if (hasLayerMask(layer)) {
+        layer.maskSurface = layerMaskSurface(layer, this.doc.width, this.doc.height)!.resized(width, height);
+        layer.mask = undefined;
       }
       if (layer.effects) {
         const scale = (sx + sy) / 2;
@@ -1678,10 +1737,9 @@ export class Studio {
       }
     }
     if (this.doc.selection) {
-      const mask = newCanvas(width, height);
-      mask.getContext("2d")!.drawImage(this.doc.selection.mask, 0, 0, width, height);
+      const surface = selectionSurface(this.doc)!.resized(width, height);
       const b = this.doc.selection.bounds;
-      this.doc.selection = { mask, bounds: { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy } };
+      this.doc.selection = { surface, bounds: { x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy } };
     }
     this.doc.guides = this.doc.guides.map((guide) => ({ ...guide, position: guide.position * (guide.orientation === "vertical" ? sx : sy) }));
     this.doc.artboards = this.doc.artboards?.map((artboard) => ({
@@ -2767,17 +2825,17 @@ export class Studio {
   addFrame(x: number, y: number, width: number, height: number, ellipse = false) {
     if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
     const group = createGroupLayer(ellipse ? "Ellipse frame" : "Rectangle frame");
-    const mask = newCanvas(this.doc.width, this.doc.height);
+    const mask = newCanvas(Math.max(1, Math.ceil(Math.abs(width)) + 2), Math.max(1, Math.ceil(Math.abs(height)) + 2));
     const maskContext = mask.getContext("2d")!;
     maskContext.fillStyle = "white";
     if (ellipse) {
       maskContext.beginPath();
-      maskContext.ellipse(x + width / 2, y + height / 2, Math.abs(width) / 2, Math.abs(height) / 2, 0, 0, Math.PI * 2);
+      maskContext.ellipse(mask.width / 2, mask.height / 2, Math.abs(width) / 2, Math.abs(height) / 2, 0, 0, Math.PI * 2);
       maskContext.fill();
     } else {
-      maskContext.fillRect(x, y, width, height);
+      maskContext.fillRect(1, 1, Math.abs(width), Math.abs(height));
     }
-    group.mask = mask;
+    setLayerMaskFromCanvas(group, mask, this.doc.width, this.doc.height, Math.floor(Math.min(x, x + width)) - 1, Math.floor(Math.min(y, y + height)) - 1);
     const placeholderCanvas = newCanvas(this.doc.width, this.doc.height);
     const placeholderContext = placeholderCanvas.getContext("2d")!;
     const gradient = placeholderContext.createLinearGradient(x, y, x + width, y + height);
@@ -3395,22 +3453,38 @@ export class Studio {
     if (!this.doc.selection) return null;
     const inverse = inverseAffineForLayerTransform(layer.transform);
     if (!inverse) return null;
+    const forward = affineForLayerTransform(layer.transform);
+    const corners = [
+      transformPoint(forward, x, y),
+      transformPoint(forward, x + width, y),
+      transformPoint(forward, x, y + height),
+      transformPoint(forward, x + width, y + height),
+    ];
+    const minX = Math.floor(Math.min(...corners.map((point) => point.x))) - 1;
+    const minY = Math.floor(Math.min(...corners.map((point) => point.y))) - 1;
+    const maxX = Math.ceil(Math.max(...corners.map((point) => point.x))) + 1;
+    const maxY = Math.ceil(Math.max(...corners.map((point) => point.y))) + 1;
+    const region = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    const selection = selectionRegionCanvas(this.doc, region);
+    if (!selection) return null;
     const local = newCanvas(width, height);
     const context = local.getContext("2d")!;
     context.setTransform(inverse.a, inverse.b, inverse.c, inverse.d, inverse.e - x, inverse.f - y);
-    context.drawImage(this.doc.selection.mask, 0, 0);
+    context.drawImage(selection, region.x, region.y);
     return context.getImageData(0, 0, width, height).data;
   }
 
   beginStroke(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
-    if ((params.mode === "mask-add" || params.mode === "mask-remove") && exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
+    const maskPaint = params.mode === "mask-add" || params.mode === "mask-remove";
+    if (maskPaint) layerMaskSurface(layer, this.doc.width, this.doc.height, true);
     const localPoint = this.layerStrokePoint(layer, params, point);
     if (!localPoint) return;
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
-    if (!precisionPaint && !paintTarget(layer, params, this.doc.width, this.doc.height)) return;
+    if (!precisionPaint && !maskPaint && !paintTarget(layer, params)) return;
     this.strokeTiles = new Map();
+    this.maskStroke = maskPaint ? { layerId, before: new Map() } : null;
     this.precisionStroke = precisionPaint ? {
       layerId,
       params: { ...params },
@@ -3436,9 +3510,10 @@ export class Studio {
   private paintToLayer(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer) return;
+    const maskPaint = params.mode === "mask-add" || params.mode === "mask-remove";
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
-    const target = precisionPaint ? null : paintTarget(layer, params, this.doc.width, this.doc.height);
-    if (!precisionPaint && !target) return;
+    const target = precisionPaint || maskPaint ? null : paintTarget(layer, params);
+    if (!precisionPaint && !maskPaint && !target) return;
     const prev = this.lastPoint ?? point;
     const stabilization = Math.max(0, Math.min(0.95, params.smoothing ?? 0));
     const response = 1 - stabilization * 0.9;
@@ -3451,6 +3526,12 @@ export class Studio {
       azimuth: point.azimuth,
     } : point;
     const dirtyRegion = this.strokeDirtyRegion(layer, params, prev, next);
+    if (maskPaint) {
+      this.paintMaskSegment(layer, params, prev, next, dirtyRegion);
+      this.lastPoint = next;
+      this.requestRender(dirtyRegion);
+      return;
+    }
     if (precisionPaint) {
       this.paintPrecisionStroke(layer, params, next);
       this.lastPoint = next;
@@ -3500,9 +3581,7 @@ export class Studio {
     } else {
       paintSegment(ctx, prev, next, params, this.paintSegmentState ?? undefined);
     }
-    if (params.mode === "mask-add" || params.mode === "mask-remove") {
-      if (layer.mask) bumpBitmapVersion(layer.mask);
-    } else if (layer.bitmap) {
+    if (layer.bitmap) {
       bumpBitmapVersion(layer.bitmap);
     }
     this.lastPoint = next;
@@ -3541,6 +3620,20 @@ export class Studio {
       params.mode === "mask-add" ? "Mask paint (add)" :
       params.mode === "mask-remove" ? "Mask paint (remove)" :
       "Brush stroke";
+    if (this.maskStroke && this.maskStroke.layerId === layerId && layer.maskSurface) {
+      const maskSurfacePatches: LayerMaskTilePatch[] = [...this.maskStroke.before].map(([key, before]) => ({
+        layerId,
+        key,
+        before,
+        after: layer.maskSurface!.record(key),
+      }));
+      this.commit({ label, before: [], after: [], maskSurfacePatches });
+      this.strokeTiles = null;
+      this.maskStroke = null;
+      this.lastPoint = null;
+      this.paintSegmentState = null;
+      return;
+    }
     if (this.precisionStroke && layer.surface) {
       const surfacePatches: SurfaceTilePatch[] = [...this.precisionStroke.before].map(([key, before]) => ({
         layerId,
@@ -3576,8 +3669,45 @@ export class Studio {
     this.checkpointLayerSurface(layer);
     this.strokeTiles = null;
     this.precisionStroke = null;
+    this.maskStroke = null;
     this.lastPoint = null;
     this.paintSegmentState = null;
+  }
+
+  private paintMaskSegment(
+    layer: Layer,
+    params: BrushParams,
+    from: BrushPoint,
+    to: BrushPoint,
+    dirty: PixelRect,
+  ) {
+    const surface = layerMaskSurface(layer, this.doc.width, this.doc.height, true)!;
+    const x = Math.max(0, Math.floor(dirty.x));
+    const y = Math.max(0, Math.floor(dirty.y));
+    const right = Math.min(this.doc.width, Math.ceil(dirty.x + dirty.width));
+    const bottom = Math.min(this.doc.height, Math.ceil(dirty.y + dirty.height));
+    if (right <= x || bottom <= y) return;
+    const region = { x, y, width: right - x, height: bottom - y };
+    for (const address of surface.grid.tilesIntersecting(region)) {
+      if (!this.maskStroke?.before.has(address.key)) {
+        this.maskStroke?.before.set(address.key, surface.record(address.key));
+      }
+    }
+    const scratch = layerMaskRegionCanvas(layer, this.doc.width, this.doc.height, region)!;
+    const context = scratch.getContext("2d")!;
+    context.translate(-x, -y);
+    paintSegment(
+      context,
+      from,
+      to,
+      { ...params, mode: params.mode === "mask-remove" ? "erase" : "mask-add" },
+      this.paintSegmentState ?? undefined,
+    );
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    const rgba = context.getImageData(0, 0, region.width, region.height).data;
+    const alpha = new Uint8Array(region.width * region.height);
+    for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = rgba[pixel * 4 + 3];
+    surface.writeRegion(region, alpha);
   }
 
   private paintPrecisionStroke(layer: Layer, params: BrushParams, point: BrushPoint) {
@@ -3883,20 +4013,46 @@ export class Studio {
 
   invertMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
-    const before = [snapshotLayer(layer)];
+    if (!layer) return;
+    const before = [this.maskSnapshot(layer)];
     invertMaskInPlace(layer, this.doc.width, this.doc.height);
-    this.commit({ label: "Mask inverted", before, after: [snapshotLayer(layer)] });
+    this.commit({ label: "Mask inverted", before, after: [this.maskSnapshot(layer)] });
     this.requestRender();
   }
 
   clearMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer || !layer.mask) return;
-    const before = [snapshotLayer(layer)];
+    if (!layer || !hasLayerMask(layer)) return;
+    const before = [this.maskSnapshot(layer)];
     clearMaskInPlace(layer, this.doc.width, this.doc.height);
-    this.commit({ label: "Mask cleared", before, after: [snapshotLayer(layer)] });
+    this.commit({ label: "Mask cleared", before, after: [this.maskSnapshot(layer)] });
     this.requestRender();
+  }
+
+  featherMask(layerId: string, radius: number) {
+    const layer = this.findLayer(layerId);
+    if (!layer || !hasLayerMask(layer) || !Number.isFinite(radius) || radius <= 0) return false;
+    const before = layerMaskSurface(layer, this.doc.width, this.doc.height)!.clone();
+    featherMaskInPlace(layer, this.doc.width, this.doc.height, radius);
+    const keys = new Set([...before.keys(), ...layer.maskSurface!.keys()]);
+    const maskSurfacePatches = [...keys].map((key): LayerMaskTilePatch => ({
+      layerId,
+      key,
+      before: before.record(key),
+      after: layer.maskSurface!.record(key),
+    }));
+    this.commit({ label: `Mask feather ${radius}px`, before: [], after: [], maskSurfacePatches });
+    this.requestRender();
+    return true;
+  }
+
+  private maskSnapshot(layer: Layer): LayerSnapshot {
+    const present = hasLayerMask(layer);
+    return {
+      layerId: layer.id,
+      maskPresent: present,
+      maskSurface: present ? layerMaskSurface(layer, this.doc.width, this.doc.height)!.clone() : undefined,
+    };
   }
 
   // Neural subject mask via MODNet. Falls back to the luma threshold if the
@@ -3909,24 +4065,15 @@ export class Studio {
     if (!layer || layer.kind !== "raster" || !layer.bitmap) {
       throw new Error("Neural subject needs a raster layer");
     }
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) throw new Error("Sparse layer masks are not available for this document size yet");
     try {
       const { neuralMatte } = await import("./neural");
       const matte = await neuralMatte(layer.bitmap, onProgress);
-      const before = [snapshotLayer(layer)];
-      ensureMask(layer, this.doc.width, this.doc.height);
-      const mctx = layer.mask!.getContext("2d")!;
-      mctx.save();
-      mctx.setTransform(1, 0, 0, 1, 0, 0);
-      mctx.globalCompositeOperation = "source-over";
-      mctx.clearRect(0, 0, layer.mask!.width, layer.mask!.height);
-      mctx.drawImage(matte, 0, 0);
-      mctx.restore();
-      bumpBitmapVersion(layer.mask!);
+      const before = [this.maskSnapshot(layer)];
+      setLayerMaskFromCanvas(layer, matte, this.doc.width, this.doc.height);
       this.commit({
         label: "Neural subject mask",
         before,
-        after: [snapshotLayer(layer)],
+        after: [this.maskSnapshot(layer)],
       });
       this.actions.push({ op: "autoSubject" });
       this.requestRender();
@@ -4001,15 +4148,13 @@ export class Studio {
     if (this.doc.selection) {
       const localMask = newCanvas(work.outputWidth, work.outputHeight);
       const localContext = localMask.getContext("2d")!;
-      localContext.setTransform(
-        work.outputWidth / work.width,
-        0,
-        0,
-        work.outputHeight / work.height,
-        -work.x * work.outputWidth / work.width,
-        -work.y * work.outputHeight / work.height,
-      );
-      localContext.drawImage(this.doc.selection.mask, 0, 0);
+      const selection = selectionRegionCanvas(this.doc, {
+        x: work.x,
+        y: work.y,
+        width: work.width,
+        height: work.height,
+      });
+      if (selection) localContext.drawImage(selection, 0, 0, work.outputWidth, work.outputHeight);
       const input = localContext.getImageData(0, 0, work.outputWidth, work.outputHeight);
       const alpha = new Uint8Array(work.outputWidth * work.outputHeight);
       for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = input.data[pixel * 4 + 3];
@@ -4123,15 +4268,7 @@ export class Studio {
       const { samClickMask } = await import("./neural");
       const mask = await samClickMask(layer.bitmap, x, y, onProgress);
       const before = cloneSelection(this.doc.selection);
-      if (mode === "replace" || !this.doc.selection) {
-        this.doc.selection = { mask, bounds: { x: 0, y: 0, w: this.doc.width, h: this.doc.height } };
-      } else {
-        const current = this.doc.selection.mask;
-        const cctx = current.getContext("2d")!;
-        cctx.globalCompositeOperation = mode === "add" ? "source-over" : mode === "subtract" ? "destination-out" : "destination-in";
-        cctx.drawImage(mask, 0, 0);
-        cctx.globalCompositeOperation = "source-over";
-      }
+      selectTransformedMask(this.doc, mask, layer.transform, mode);
       const after = cloneSelection(this.doc.selection);
       this.commit({ label: "SAM click select", before: [], after: [], selectionBefore: before, selectionAfter: after });
       this.requestRender();
@@ -4145,10 +4282,10 @@ export class Studio {
 
   autoLumaMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind !== "raster" || !layer.bitmap || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
-    const before = [snapshotLayer(layer)];
+    if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
+    const before = [this.maskSnapshot(layer)];
     if (!autoLumaMaskInPlace(layer, this.doc.width, this.doc.height)) return;
-    this.commit({ label: "Auto subject mask", before, after: [snapshotLayer(layer)] });
+    this.commit({ label: "Auto subject mask", before, after: [this.maskSnapshot(layer)] });
     this.actions.push({ op: "autoSubject" });
     this.requestRender();
   }
@@ -4160,30 +4297,37 @@ export class Studio {
   }
 
   selectRect(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection", () => selectRect(this.doc, x, y, w, h, mode, feather));
     return true;
   }
   selectEllipse(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection (ellipse)", () => selectEllipse(this.doc, x, y, w, h, mode, feather));
     return true;
   }
   selectLasso(points: Array<{ x: number; y: number }>, mode: SelectionMode = "replace", feather = 0) {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection (lasso)", () => selectLasso(this.doc, points, mode, feather));
     return true;
   }
   selectByColor(layerId: string, x: number, y: number, tolerance: number, mode: SelectionMode = "replace", contiguous = true) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind !== "raster" || !layer.bitmap || exceedsBrowserCanvas(this.doc.width, this.doc.height) || layer.bitmap.width * layer.bitmap.height > 16_000_000) return false;
-    const documentLayer = newCanvas(this.doc.width, this.doc.height);
-    drawLayerContentManaged(documentLayer.getContext("2d")!, layer);
-    this.commitSelection("Magic wand", () => selectByColor(this.doc, documentLayer, x, y, tolerance, mode, contiguous));
+    if (!layer || layer.kind !== "raster" || (!layer.bitmap && !layer.surface)) return false;
+    this.commitSelection("Magic wand", () => selectByColorTiled(this.doc, {
+      readRegion: (rect) => {
+        const tile = newCanvas(rect.width, rect.height);
+        drawLayerContentManaged(tile.getContext("2d")!, layer, {
+          a: 1,
+          b: 0,
+          c: 0,
+          d: 1,
+          e: -rect.x,
+          f: -rect.y,
+        });
+        return tile.getContext("2d")!.getImageData(0, 0, rect.width, rect.height);
+      },
+    }, x, y, tolerance, mode, contiguous));
     return true;
   }
   selectAll() {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Select all", () => selectAll(this.doc));
     this.actions.push({ op: "selectAll" });
     return true;
@@ -4194,7 +4338,6 @@ export class Studio {
     this.actions.push({ op: "deselect" });
   }
   invertSelectionArea() {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Invert selection", () => invertSelection(this.doc));
     this.actions.push({ op: "invertSelection" });
     return true;
@@ -4467,13 +4610,13 @@ export class Studio {
         // has it baked in — in the CPU renderer's order, which decides whether
         // effects fall outside it — so applying it again would square the
         // coverage at every soft edge.
-        if (layer.mask && direct) {
+        if (hasLayerMask(layer) && direct) {
           maskAlpha = maskCache.get(layer.id);
           if (!maskAlpha) {
-            const mask = layer.mask.getContext("2d")!
-              .getImageData(address.x, address.y, address.width, address.height).data;
+            const mask = layerMaskSurface(layer, this.doc.width, this.doc.height)!
+              .readRegion({ x: address.x, y: address.y, width: address.width, height: address.height });
             maskAlpha = new Float32Array(address.width * address.height);
-            for (let pixel = 0; pixel < maskAlpha.length; pixel += 1) maskAlpha[pixel] = mask[pixel * 4 + 3] / 255;
+            for (let pixel = 0; pixel < maskAlpha.length; pixel += 1) maskAlpha[pixel] = mask[pixel] / 255;
             maskCache.set(layer.id, maskAlpha);
           }
         }

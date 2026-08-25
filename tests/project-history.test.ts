@@ -247,7 +247,7 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.equal(recoveredState.doc.layers[0].surface!.readPixel(0, 0)[0], 1.5);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
-  assert.equal(LUMA_PROJECT_VERSION, 4);
+  assert.equal(LUMA_PROJECT_VERSION, 5);
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);

@@ -4,9 +4,11 @@ import "./canvas-harness.ts";
 import { createDocument } from "../app/engine/document.ts";
 import {
   featherSelection,
+  alphaSurfaceFromCanvas,
   planFeatherSelection,
   refineSelection,
   refineSelectionAlpha,
+  selectionRegionCanvas,
 } from "../app/engine/selection.ts";
 import { testCanvas } from "./canvas-harness.ts";
 
@@ -15,12 +17,6 @@ function maskAlpha(mask: HTMLCanvasElement) {
   const alpha = new Uint8ClampedArray(mask.width * mask.height);
   for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
   return alpha;
-}
-
-function maskPixels(mask: HTMLCanvasElement) {
-  return new Uint8ClampedArray(
-    mask.getContext("2d")!.getImageData(0, 0, mask.width, mask.height).data,
-  );
 }
 
 function alphaBounds(alpha: Uint8ClampedArray, width: number, height: number) {
@@ -45,6 +41,12 @@ function rectangularMask(width: number, height: number, x: number, y: number, w:
   const context = mask.getContext("2d")!;
   context.fillStyle = "white";
   context.fillRect(x, y, w, h);
+  return mask;
+}
+
+function currentSelectionMask(doc: ReturnType<typeof createDocument>) {
+  const mask = selectionRegionCanvas(doc, { x: 0, y: 0, width: doc.width, height: doc.height });
+  assert.ok(mask);
   return mask;
 }
 
@@ -123,7 +125,7 @@ for (const scenario of [
     const originalAlpha = maskAlpha(mask);
     const expected = refineSelectionAlpha(originalAlpha, width, height, scenario.params);
     const doc = createDocument(width, height);
-    doc.selection = { mask, bounds: { ...scenario.bounds } };
+    doc.selection = { surface: alphaSurfaceFromCanvas(mask), bounds: { ...scenario.bounds } };
     const context = mask.getContext("2d")!;
     const originalGetImageData = context.getImageData.bind(context);
     const reads: number[][] = [];
@@ -135,9 +137,8 @@ for (const scenario of [
     assert.equal(refineSelection(doc, scenario.params), true);
     context.getImageData = originalGetImageData as typeof context.getImageData;
 
-    assert.equal(reads.length, 1);
-    assert.ok(reads[0][2] * reads[0][3] < width * height / 4);
-    assert.deepEqual(maskAlpha(mask), expected);
+    assert.equal(reads.length, 0, "tilewise refinement must not revisit the legacy document canvas");
+    assert.deepEqual(maskAlpha(currentSelectionMask(doc)), expected);
     assert.deepEqual(doc.selection?.bounds, alphaBounds(expected, width, height));
   });
 }
@@ -191,17 +192,15 @@ for (const scenario of [
     );
     const expectedMask = fullCanvasFeather(mask, scenario.radius);
     const expectedAlpha = maskAlpha(expectedMask);
-    const expectedPixels = maskPixels(expectedMask);
     const doc = createDocument(width, height);
     doc.selection = { mask, bounds: { ...scenario.bounds } };
 
     featherSelection(doc, scenario.radius);
 
-    assert.equal(doc.selection?.mask, mask);
-    assert.equal(mask.width, width);
-    assert.equal(mask.height, height);
-    assert.deepEqual(maskPixels(mask), expectedPixels);
-    assert.deepEqual(maskAlpha(mask), expectedAlpha);
+    const actualMask = currentSelectionMask(doc);
+    assert.equal(actualMask.width, width);
+    assert.equal(actualMask.height, height);
+    assert.deepEqual(maskAlpha(actualMask), expectedAlpha);
     assert.deepEqual(doc.selection?.bounds, alphaBounds(expectedAlpha, width, height));
   });
 }
@@ -216,7 +215,7 @@ test("feather scratch allocation depends on selection and radius, not document a
   assert.ok(plan.work.w * plan.work.h < (50_000 * 50_000) / 40_000);
 });
 
-test("empty selection feathering leaves the full-size mask untouched", () => {
+test("empty selection feathering leaves legacy storage untouched", () => {
   const mask = testCanvas(640, 480);
   const doc = createDocument(640, 480);
   doc.selection = { mask, bounds: { x: 0, y: 0, w: 0, h: 0 } };
@@ -224,5 +223,6 @@ test("empty selection feathering leaves the full-size mask untouched", () => {
   featherSelection(doc, 32);
 
   assert.equal(doc.selection.mask, mask);
+  assert.equal(doc.selection.surface, undefined);
   assert.deepEqual(doc.selection.bounds, { x: 0, y: 0, w: 0, h: 0 });
 });

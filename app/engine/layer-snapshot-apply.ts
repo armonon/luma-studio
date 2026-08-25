@@ -32,8 +32,19 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
     bitmapReplaced = true;
   }
   if (snap.surface) layer.surface = snap.surface.clone();
+  if (snap.maskPresent === false) {
+    layer.mask = undefined;
+    layer.maskSurface = undefined;
+    maskReplaced = true;
+  }
+  if (snap.maskSurface) {
+    layer.maskSurface = snap.maskSurface.clone();
+    layer.mask = undefined;
+    maskReplaced = true;
+  }
   if (snap.mask) {
     layer.mask = cloneCanvas(snap.mask);
+    layer.maskSurface = undefined;
     bumpBitmapVersion(layer.mask);
     maskReplaced = true;
   }

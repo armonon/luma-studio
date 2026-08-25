@@ -1,4 +1,10 @@
-import { Document, Selection, newCanvas } from "./document";
+import { Document, Selection, Transform, affineForLayerTransform, newCanvas, transformPoint } from "./document";
+import {
+  SparseAlphaSurface,
+  AlphaMemoryLimitError,
+  assertAlphaScratch,
+} from "./alpha-surface";
+import type { PixelRect, TileAddress } from "./tile-store";
 
 export type SelectionMode = "replace" | "add" | "subtract" | "intersect";
 
@@ -8,46 +14,154 @@ export type RefineSelectionParams = {
   shiftEdge: number;
 };
 
-// Convert path-defined selection into an alpha mask on `doc.selection`.
-// `path` is a callback that draws into a 2D ctx with the source mask fill.
-function combine(
-  doc: Document,
-  build: (ctx: CanvasRenderingContext2D) => void,
-  mode: SelectionMode,
-) {
-  const w = doc.width;
-  const h = doc.height;
-  const newMask = newCanvas(w, h);
-  const nctx = newMask.getContext("2d")!;
-  nctx.fillStyle = "white";
-  build(nctx);
+function alphaFromImageData(image: ImageData) {
+  const alpha = new Uint8Array(image.width * image.height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
+  return alpha;
+}
 
-  if (mode === "replace" || !doc.selection) {
-    doc.selection = { mask: newMask, bounds: boundsOf(newMask) };
-    return;
+function imageDataFromAlpha(context: CanvasRenderingContext2D, alpha: Uint8Array | Uint8ClampedArray, width: number, height: number) {
+  const image = context.createImageData(width, height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) {
+    const offset = pixel * 4;
+    image.data[offset] = 255;
+    image.data[offset + 1] = 255;
+    image.data[offset + 2] = 255;
+    image.data[offset + 3] = alpha[pixel];
   }
-  const current = doc.selection.mask;
-  const cctx = current.getContext("2d")!;
-  if (mode === "add") {
-    cctx.globalCompositeOperation = "source-over";
-    cctx.drawImage(newMask, 0, 0);
-  } else if (mode === "subtract") {
-    cctx.globalCompositeOperation = "destination-out";
-    cctx.drawImage(newMask, 0, 0);
-  } else if (mode === "intersect") {
-    cctx.globalCompositeOperation = "destination-in";
-    cctx.drawImage(newMask, 0, 0);
+  return image;
+}
+
+export function alphaSurfaceFromCanvas(mask: HTMLCanvasElement, width = mask.width, height = mask.height) {
+  if (mask.width !== width || mask.height !== height) throw new Error("Selection mask dimensions do not match the document");
+  const surface = new SparseAlphaSurface(width, height);
+  const context = mask.getContext("2d")!;
+  for (let row = 0; row < surface.grid.rows; row += 1) {
+    for (let column = 0; column < surface.grid.columns; column += 1) {
+      const address = surface.grid.address(column, row);
+      surface.writeTile(address.key, alphaFromImageData(context.getImageData(address.x, address.y, address.width, address.height)));
+    }
   }
-  cctx.globalCompositeOperation = "source-over";
-  doc.selection = { mask: current, bounds: boundsOf(current) };
+  return surface;
+}
+
+export function selectionSurface(doc: Pick<Document, "width" | "height" | "selection">) {
+  if (!doc.selection) return null;
+  if (!doc.selection.surface) {
+    if (!doc.selection.mask) throw new Error("Selection has no alpha storage");
+    doc.selection.surface = alphaSurfaceFromCanvas(doc.selection.mask, doc.width, doc.height);
+  }
+  // The canvas is a v1-v4/interchange bridge, not a second live copy. Once
+  // tiled alpha exists, releasing it prevents history from cloning a full
+  // document mask alongside the sparse surface.
+  doc.selection.mask = undefined;
+  return doc.selection.surface;
+}
+
+export function alphaSurfaceRegionCanvas(surface: SparseAlphaSurface, rect: PixelRect) {
+  const width = Math.max(0, Math.ceil(rect.width));
+  const height = Math.max(0, Math.ceil(rect.height));
+  const canvas = newCanvas(Math.max(1, width), Math.max(1, height));
+  if (!width || !height) return canvas;
+  const context = canvas.getContext("2d")!;
+  const alpha = surface.readRegion(rect);
+  context.putImageData(imageDataFromAlpha(context, alpha, width, height), 0, 0);
+  return canvas;
+}
+
+export function selectionRegionCanvas(doc: Pick<Document, "width" | "height" | "selection">, rect: PixelRect) {
+  const surface = selectionSurface(doc);
+  if (!surface) return null;
+  return alphaSurfaceRegionCanvas(surface, rect);
+}
+
+function installSelection(doc: Document, incoming: SparseAlphaSurface, mode: SelectionMode) {
+  const current = selectionSurface(doc);
+  const surface = mode === "replace" || !current ? incoming : current.combined(incoming, mode);
+  doc.selection = { surface, bounds: surface.bounds() };
+}
+
+function normalizedShapeBounds(x: number, y: number, width: number, height: number) {
+  const left = Math.min(x, x + width);
+  const top = Math.min(y, y + height);
+  return { x: left, y: top, width: Math.abs(width), height: Math.abs(height) };
+}
+
+function rasterizeShape(
+  doc: Pick<Document, "width" | "height">,
+  shapeBounds: PixelRect,
+  feather: number,
+  build: (context: CanvasRenderingContext2D) => void,
+) {
+  const surface = new SparseAlphaSurface(doc.width, doc.height);
+  const radius = Number.isFinite(feather) ? Math.max(0, feather) : 0;
+  const support = radius > 0 ? Math.ceil(radius * 4) + 2 : 0;
+  const care = expandSelectionRegion(
+    { x: shapeBounds.x, y: shapeBounds.y, w: shapeBounds.width, h: shapeBounds.height },
+    support,
+    doc.width,
+    doc.height,
+  );
+  if (!care.w || !care.h) return surface;
+  const addresses = surface.grid.tilesIntersecting({ x: care.x, y: care.y, width: care.w, height: care.h });
+  const workPadding = support ? support * 2 : 0;
+  assertAlphaScratch((surface.tileSize + workPadding * 2) ** 2 * 8);
+  for (const address of addresses) {
+    const work = {
+      x: address.x - workPadding,
+      y: address.y - workPadding,
+      width: address.width + workPadding * 2,
+      height: address.height + workPadding * 2,
+    };
+    const canvas = newCanvas(work.width, work.height);
+    const context = canvas.getContext("2d")!;
+    context.translate(-work.x, -work.y);
+    context.fillStyle = "white";
+    if (radius) context.filter = `blur(${radius}px)`;
+    build(context);
+    context.filter = "none";
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    const image = context.getImageData(address.x - work.x, address.y - work.y, address.width, address.height);
+    surface.writeTile(address.key, alphaFromImageData(image));
+  }
+  return surface;
 }
 
 export function selectMask(doc: Document, mask: HTMLCanvasElement, mode: SelectionMode = "replace") {
-  if (mode === "replace" || !doc.selection) {
-    doc.selection = { mask, bounds: boundsOf(mask) };
-  } else {
-    combine(doc, (context) => context.drawImage(mask, 0, 0), mode);
+  installSelection(doc, alphaSurfaceFromCanvas(mask, doc.width, doc.height), mode);
+}
+
+export function selectTransformedMask(
+  doc: Document,
+  mask: HTMLCanvasElement,
+  transform: Transform,
+  mode: SelectionMode = "replace",
+) {
+  const matrix = affineForLayerTransform(transform);
+  const corners = [
+    transformPoint(matrix, 0, 0),
+    transformPoint(matrix, mask.width, 0),
+    transformPoint(matrix, 0, mask.height),
+    transformPoint(matrix, mask.width, mask.height),
+  ];
+  const minX = Math.floor(Math.min(...corners.map((point) => point.x))) - 1;
+  const minY = Math.floor(Math.min(...corners.map((point) => point.y))) - 1;
+  const maxX = Math.ceil(Math.max(...corners.map((point) => point.x))) + 1;
+  const maxY = Math.ceil(Math.max(...corners.map((point) => point.y))) + 1;
+  const surface = new SparseAlphaSurface(doc.width, doc.height);
+  for (const address of surface.grid.tilesIntersecting({
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+  })) {
+    const tile = newCanvas(address.width, address.height);
+    const context = tile.getContext("2d")!;
+    context.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e - address.x, matrix.f - address.y);
+    context.drawImage(mask, 0, 0);
+    surface.writeTile(address.key, alphaFromImageData(context.getImageData(0, 0, address.width, address.height)));
   }
+  installSelection(doc, surface, mode);
 }
 
 export function selectText(
@@ -59,21 +173,19 @@ export function selectText(
   mode: SelectionMode = "replace",
   vertical = false,
 ) {
-  const mask = newCanvas(doc.width, doc.height);
-  const context = mask.getContext("2d")!;
-  context.fillStyle = "white";
-  context.font = font;
-  context.textBaseline = "alphabetic";
-  if (vertical) {
-    const size = Number(/([\d.]+)px/.exec(font)?.[1] ?? 16);
-    [...text].forEach((character, index) => context.fillText(character, x, y + index * size));
-  } else {
-    text.split("\n").forEach((line, index) => {
-      const size = Number(/([\d.]+)px/.exec(font)?.[1] ?? 16);
-      context.fillText(line, x, y + index * size * 1.2);
-    });
-  }
-  selectMask(doc, mask, mode);
+  const size = Number(/([\d.]+)px/.exec(font)?.[1] ?? 16);
+  const measure = newCanvas(1, 1).getContext("2d")!;
+  measure.font = font;
+  const lines = text.split("\n");
+  const width = vertical ? size * 1.5 : Math.max(size, ...lines.map((line) => measure.measureText(line).width));
+  const height = vertical ? Math.max(1, [...text].length) * size : Math.max(1, lines.length) * size * 1.2;
+  const surface = rasterizeShape(doc, { x: x - 2, y: y - size - 2, width: width + 4, height: height + size + 4 }, 0, (context) => {
+    context.font = font;
+    context.textBaseline = "alphabetic";
+    if (vertical) [...text].forEach((character, index) => context.fillText(character, x, y + index * size));
+    else lines.forEach((line, index) => context.fillText(line, x, y + index * size * 1.2));
+  });
+  installSelection(doc, surface, mode);
 }
 
 export function selectRect(
@@ -85,15 +197,14 @@ export function selectRect(
   mode: SelectionMode = "replace",
   feather = 0,
 ) {
-  combine(
-    doc,
-    (ctx) => {
-      if (feather > 0) ctx.filter = `blur(${feather}px)`;
-      ctx.fillRect(x, y, w, h);
-      ctx.filter = "none";
-    },
-    mode,
-  );
+  const bounds = normalizedShapeBounds(x, y, w, h);
+  const surface = new SparseAlphaSurface(doc.width, doc.height);
+  if (feather > 0) {
+    installSelection(doc, rasterizeShape(doc, bounds, feather, (context) => context.fillRect(bounds.x, bounds.y, bounds.width, bounds.height)), mode);
+  } else {
+    surface.fillRect(bounds, 255);
+    installSelection(doc, surface, mode);
+  }
 }
 
 export function selectEllipse(
@@ -105,25 +216,13 @@ export function selectEllipse(
   mode: SelectionMode = "replace",
   feather = 0,
 ) {
-  combine(
-    doc,
-    (ctx) => {
-      if (feather > 0) ctx.filter = `blur(${feather}px)`;
-      ctx.beginPath();
-      ctx.ellipse(
-        x + w / 2,
-        y + h / 2,
-        Math.abs(w) / 2,
-        Math.abs(h) / 2,
-        0,
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      ctx.filter = "none";
-    },
-    mode,
-  );
+  const bounds = normalizedShapeBounds(x, y, w, h);
+  const surface = rasterizeShape(doc, bounds, feather, (context) => {
+    context.beginPath();
+    context.ellipse(x + w / 2, y + h / 2, Math.abs(w) / 2, Math.abs(h) / 2, 0, 0, Math.PI * 2);
+    context.fill();
+  });
+  installSelection(doc, surface, mode);
 }
 
 export function selectLasso(
@@ -133,19 +232,18 @@ export function selectLasso(
   feather = 0,
 ) {
   if (points.length < 3) return;
-  combine(
-    doc,
-    (ctx) => {
-      if (feather > 0) ctx.filter = `blur(${feather}px)`;
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.filter = "none";
-    },
-    mode,
-  );
+  const minX = Math.min(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const maxY = Math.max(...points.map((point) => point.y));
+  const surface = rasterizeShape(doc, { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }, feather, (context) => {
+    context.beginPath();
+    context.moveTo(points[0].x, points[0].y);
+    for (let index = 1; index < points.length; index += 1) context.lineTo(points[index].x, points[index].y);
+    context.closePath();
+    context.fill();
+  });
+  installSelection(doc, surface, mode);
 }
 
 // Magic wand: pick color at (x,y) in the given source bitmap and flood-select
@@ -159,71 +257,139 @@ export function selectByColor(
   mode: SelectionMode = "replace",
   contiguous = true,
 ) {
-  const sctx = source.getContext("2d")!;
-  const img = sctx.getImageData(0, 0, source.width, source.height);
-  const d = img.data;
-  const w = source.width;
-  const h = source.height;
-  const ix = Math.max(0, Math.min(w - 1, Math.round(x)));
-  const iy = Math.max(0, Math.min(h - 1, Math.round(y)));
-  const seed = (iy * w + ix) * 4;
-  const sr = d[seed];
-  const sg = d[seed + 1];
-  const sb = d[seed + 2];
-  const tol = tolerance * tolerance * 3;
+  if (source.width !== doc.width || source.height !== doc.height) throw new Error("Magic-wand source must be in document coordinates");
+  selectByColorTiled(doc, {
+    readRegion: (rect) => source.getContext("2d")!.getImageData(rect.x, rect.y, rect.width, rect.height),
+  }, x, y, tolerance, mode, contiguous);
+}
 
-  const out = new Uint8ClampedArray(w * h * 4);
-  const match = (i: number) => {
-    const dr = d[i] - sr;
-    const dg = d[i + 1] - sg;
-    const db = d[i + 2] - sb;
-    return dr * dr + dg * dg + db * db <= tol;
+export type TiledColorSource = {
+  readRegion(rect: { x: number; y: number; width: number; height: number }): ImageData;
+};
+
+/** Tile-cached scanline flood fill. Source and visited data are never stored as
+ * document-sized arrays; dense pathological selections hit the alpha surface's
+ * explicit memory ceiling and an oversized frontier fails before installation. */
+export function selectByColorTiled(
+  doc: Document,
+  source: TiledColorSource,
+  x: number,
+  y: number,
+  tolerance: number,
+  mode: SelectionMode = "replace",
+  contiguous = true,
+) {
+  const surface = new SparseAlphaSurface(doc.width, doc.height);
+  const sourceCache = new Map<string, ImageData>();
+  const alphaCache = new Map<string, { data: Uint8Array; dirty: boolean }>();
+  const cacheLimit = 32;
+  const touch = <T>(cache: Map<string, T>, key: string, value: T) => {
+    cache.delete(key);
+    cache.set(key, value);
+  };
+  const flushAlpha = (key: string, entry: { data: Uint8Array; dirty: boolean }) => {
+    if (entry.dirty) surface.writeTile(key, entry.data);
+  };
+  const trim = () => {
+    while (sourceCache.size > cacheLimit) sourceCache.delete(sourceCache.keys().next().value!);
+    while (alphaCache.size > cacheLimit) {
+      const key = alphaCache.keys().next().value!;
+      const entry = alphaCache.get(key)!;
+      flushAlpha(key, entry);
+      alphaCache.delete(key);
+    }
+  };
+  const sourceTile = (px: number, py: number) => {
+    const address = surface.grid.addressForPixel(px, py)!;
+    let image = sourceCache.get(address.key);
+    if (!image) image = source.readRegion(address);
+    touch(sourceCache, address.key, image);
+    trim();
+    return { address, image };
+  };
+  const rgbaAt = (px: number, py: number) => {
+    const { address, image } = sourceTile(px, py);
+    const offset = ((py - address.y) * address.width + px - address.x) * 4;
+    return [image.data[offset], image.data[offset + 1], image.data[offset + 2]] as const;
+  };
+  const alphaTile = (px: number, py: number) => {
+    const address = surface.grid.addressForPixel(px, py)!;
+    let entry = alphaCache.get(address.key);
+    if (!entry) entry = { data: surface.readTile(address.key), dirty: false };
+    touch(alphaCache, address.key, entry);
+    trim();
+    return { address, entry };
+  };
+  const selected = (px: number, py: number) => {
+    const { address, entry } = alphaTile(px, py);
+    return entry.data[(py - address.y) * address.width + px - address.x] > 0;
+  };
+  const mark = (px: number, py: number) => {
+    const { address, entry } = alphaTile(px, py);
+    entry.data[(py - address.y) * address.width + px - address.x] = 255;
+    entry.dirty = true;
+  };
+  const seedX = Math.max(0, Math.min(doc.width - 1, Math.round(x)));
+  const seedY = Math.max(0, Math.min(doc.height - 1, Math.round(y)));
+  const seed = rgbaAt(seedX, seedY);
+  const threshold = Math.max(0, tolerance) ** 2 * 3;
+  const matches = (px: number, py: number) => {
+    const color = rgbaAt(px, py);
+    const dr = color[0] - seed[0];
+    const dg = color[1] - seed[1];
+    const db = color[2] - seed[2];
+    return dr * dr + dg * dg + db * db <= threshold;
   };
 
   if (contiguous) {
-    // Iterative flood fill using a Uint32 stack of pixel indices.
-    const stack: number[] = [iy * w + ix];
-    const seen = new Uint8Array(w * h);
+    const stack: number[] = [seedY * doc.width + seedX];
+    const stackCeiling = 4_000_000;
+    const push = (px: number, py: number) => {
+      if (stack.length >= stackCeiling) throw new AlphaMemoryLimitError("Magic Wand frontier exceeds its 32 MB safety ceiling");
+      stack.push(py * doc.width + px);
+    };
     while (stack.length) {
-      const p = stack.pop()!;
-      if (seen[p]) continue;
-      seen[p] = 1;
-      const i = p * 4;
-      if (!match(i)) continue;
-      out[i] = 255;
-      out[i + 1] = 255;
-      out[i + 2] = 255;
-      out[i + 3] = 255;
-      const px = p % w;
-      const py = (p - px) / w;
-      if (px > 0) stack.push(p - 1);
-      if (px < w - 1) stack.push(p + 1);
-      if (py > 0) stack.push(p - w);
-      if (py < h - 1) stack.push(p + w);
-    }
-  } else {
-    for (let p = 0; p < w * h; p++) {
-      const i = p * 4;
-      if (match(i)) {
-        out[i] = 255;
-        out[i + 1] = 255;
-        out[i + 2] = 255;
-        out[i + 3] = 255;
+      const point = stack.pop()!;
+      const py = Math.floor(point / doc.width);
+      const px = point - py * doc.width;
+      if (selected(px, py) || !matches(px, py)) continue;
+      let left = px;
+      while (left > 0 && !selected(left - 1, py) && matches(left - 1, py)) left -= 1;
+      let spanUp = false;
+      let spanDown = false;
+      for (let scan = left; scan < doc.width && !selected(scan, py) && matches(scan, py); scan += 1) {
+        mark(scan, py);
+        if (py > 0) {
+          const matchUp = !selected(scan, py - 1) && matches(scan, py - 1);
+          if (matchUp && !spanUp) push(scan, py - 1);
+          spanUp = matchUp;
+        }
+        if (py + 1 < doc.height) {
+          const matchDown = !selected(scan, py + 1) && matches(scan, py + 1);
+          if (matchDown && !spanDown) push(scan, py + 1);
+          spanDown = matchDown;
+        }
       }
     }
-  }
-
-  const mask = newCanvas(w, h);
-  mask.getContext("2d")!.putImageData(new ImageData(out, w, h), 0, 0);
-  if (mode === "replace" || !doc.selection) {
-    doc.selection = { mask, bounds: boundsOf(mask) };
   } else {
-    combine(doc, (ctx) => ctx.drawImage(mask, 0, 0), mode);
+    for (let row = 0; row < surface.grid.rows; row += 1) for (let column = 0; column < surface.grid.columns; column += 1) {
+      const address = surface.grid.address(column, row);
+      const alpha = new Uint8Array(address.width * address.height);
+      for (let py = address.y; py < address.y + address.height; py += 1) for (let px = address.x; px < address.x + address.width; px += 1) {
+        if (matches(px, py)) alpha[(py - address.y) * address.width + px - address.x] = 255;
+      }
+      surface.writeTile(address.key, alpha);
+    }
   }
+  for (const [key, entry] of alphaCache) flushAlpha(key, entry);
+  installSelection(doc, surface, mode);
 }
 
 export function selectAll(doc: Document) {
-  selectRect(doc, 0, 0, doc.width, doc.height, "replace", 0);
+  doc.selection = {
+    surface: new SparseAlphaSurface(doc.width, doc.height, { defaultAlpha: 255 }),
+    bounds: { x: 0, y: 0, w: doc.width, h: doc.height },
+  };
 }
 
 export function deselect(doc: Document) {
@@ -231,16 +397,9 @@ export function deselect(doc: Document) {
 }
 
 export function invertSelection(doc: Document) {
-  const inv = newCanvas(doc.width, doc.height);
-  const ctx = inv.getContext("2d")!;
-  ctx.fillStyle = "white";
-  ctx.fillRect(0, 0, doc.width, doc.height);
-  if (doc.selection) {
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.drawImage(doc.selection.mask, 0, 0);
-    ctx.globalCompositeOperation = "source-over";
-  }
-  doc.selection = { mask: inv, bounds: boundsOf(inv) };
+  const current = selectionSurface(doc) ?? new SparseAlphaSurface(doc.width, doc.height);
+  const surface = current.inverted();
+  doc.selection = { surface, bounds: surface.bounds() };
 }
 
 type SelectionRegion = { x: number; y: number; w: number; h: number };
@@ -291,66 +450,46 @@ export function planFeatherSelection(
 
 export function featherSelection(doc: Document, radius: number) {
   if (!doc.selection || radius <= 0 || !Number.isFinite(radius)) return;
-  const mask = doc.selection.mask;
   const currentBounds = doc.selection.bounds;
   if (currentBounds.w <= 0 || currentBounds.h <= 0) return;
-  const { care, work } = planFeatherSelection(
-    currentBounds,
-    mask.width,
-    mask.height,
-    radius,
-  );
-  const source = newCanvas(work.w, work.h);
-  const sourceContext = source.getContext("2d")!;
-  const sourceX = Math.max(0, work.x);
-  const sourceY = Math.max(0, work.y);
-  const sourceRight = Math.min(mask.width, work.x + work.w);
-  const sourceBottom = Math.min(mask.height, work.y + work.h);
-  const sourceWidth = Math.max(0, sourceRight - sourceX);
-  const sourceHeight = Math.max(0, sourceBottom - sourceY);
-  if (sourceWidth > 0 && sourceHeight > 0) {
-    sourceContext.drawImage(
-      mask,
-      sourceX,
-      sourceY,
-      sourceWidth,
-      sourceHeight,
-      sourceX - work.x,
-      sourceY - work.y,
-      sourceWidth,
-      sourceHeight,
-    );
-  }
+  const surface = selectionSurface(doc)!;
+  const result = featherAlphaSurface(surface, currentBounds, radius);
+  doc.selection = { surface: result, bounds: result.bounds() };
+}
 
-  const blurred = newCanvas(work.w, work.h);
-  const blurredContext = blurred.getContext("2d")!;
-  blurredContext.filter = `blur(${radius}px)`;
-  blurredContext.drawImage(source, 0, 0);
-  blurredContext.filter = "none";
-  const localCareX = care.x - work.x;
-  const localCareY = care.y - work.y;
-  const image = blurredContext.getImageData(localCareX, localCareY, care.w, care.h);
-  mask.getContext("2d")!.putImageData(image, care.x, care.y);
-
-  let minX = care.x + care.w;
-  let minY = care.y + care.h;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < care.h; y += 1) for (let x = 0; x < care.w; x += 1) {
-    if (image.data[(y * care.w + x) * 4 + 3] === 0) continue;
-    const documentX = care.x + x;
-    const documentY = care.y + y;
-    minX = Math.min(minX, documentX);
-    minY = Math.min(minY, documentY);
-    maxX = Math.max(maxX, documentX);
-    maxY = Math.max(maxY, documentY);
+export function featherAlphaSurface(
+  surface: SparseAlphaSurface,
+  bounds: Selection["bounds"],
+  radius: number,
+) {
+  if (radius <= 0 || !Number.isFinite(radius) || bounds.w <= 0 || bounds.h <= 0) return surface.clone();
+  const support = Math.max(1, Math.ceil(radius * 4) + 2);
+  const workPadding = support * 2;
+  assertAlphaScratch((surface.tileSize + workPadding * 2) ** 2 * 8);
+  const candidates = new Map<string, TileAddress>();
+  for (const address of surface.addressesAroundRecords(support)) candidates.set(address.key, address);
+  if (surface.defaultAlpha > 0) for (const address of surface.edgeAddresses()) candidates.set(address.key, address);
+  const result = surface.clone();
+  for (const address of candidates.values()) {
+    const work = {
+      x: address.x - workPadding,
+      y: address.y - workPadding,
+      width: address.width + workPadding * 2,
+      height: address.height + workPadding * 2,
+    };
+    const sourceCanvas = newCanvas(work.width, work.height);
+    const sourceContext = sourceCanvas.getContext("2d")!;
+    const sourceAlpha = surface.readRegion(work);
+    sourceContext.putImageData(imageDataFromAlpha(sourceContext, sourceAlpha, work.width, work.height), 0, 0);
+    const blurred = newCanvas(work.width, work.height);
+    const blurredContext = blurred.getContext("2d")!;
+    blurredContext.filter = `blur(${radius}px)`;
+    blurredContext.drawImage(sourceCanvas, 0, 0);
+    blurredContext.filter = "none";
+    const image = blurredContext.getImageData(workPadding, workPadding, address.width, address.height);
+    result.writeTile(address.key, alphaFromImageData(image));
   }
-  doc.selection = {
-    mask,
-    bounds: maxX < 0
-      ? { x: 0, y: 0, w: 0, h: 0 }
-      : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
-  };
+  return result;
 }
 
 function boxPass(source: Uint8ClampedArray, width: number, height: number, radius: number, horizontal: boolean) {
@@ -428,9 +567,9 @@ export function refineSelectionAlpha(
 
 export function refineSelection(doc: Document, params: RefineSelectionParams) {
   if (!doc.selection) return false;
-  const mask = doc.selection.mask;
   const currentBounds = doc.selection.bounds;
   if (currentBounds.w <= 0 || currentBounds.h <= 0) return true;
+  const surface = selectionSurface(doc)!;
 
   const requestedShiftRadius = Math.min(16, Math.round(Math.abs(params.shiftEdge) / 6.25));
   const requestedSmoothRadius = Math.min(32, Math.round(params.smooth));
@@ -440,66 +579,30 @@ export function refineSelection(doc: Document, params: RefineSelectionParams) {
   // Contraction cannot, though a following smooth pass can spread its result.
   const supportExpansion = (params.shiftEdge > 0 ? shiftRadius : 0) + smoothRadius;
   const dependencyRadius = shiftRadius + smoothRadius;
-  const care = expandSelectionRegion(
-    currentBounds,
-    supportExpansion,
-    mask.width,
-    mask.height,
-  );
-  // The refinement kernels need source context outside the area that can
-  // become non-zero. Keeping a complete dependency halo makes this cropped
-  // run byte-identical to running the same passes over the whole mask.
-  const work = expandSelectionRegion(
-    care,
-    dependencyRadius,
-    mask.width,
-    mask.height,
-  );
-  const context = mask.getContext("2d")!;
-  const image = context.getImageData(work.x, work.y, work.w, work.h);
-  const alpha = new Uint8ClampedArray(work.w * work.h);
-  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = image.data[pixel * 4 + 3];
-  const refined = refineSelectionAlpha(alpha, work.w, work.h, params);
-  const localCareX = care.x - work.x;
-  const localCareY = care.y - work.y;
-  let minX = care.x + care.w;
-  let minY = care.y + care.h;
-  let maxX = -1;
-  let maxY = -1;
-  for (let y = 0; y < care.h; y += 1) {
-    for (let x = 0; x < care.w; x += 1) {
-      const pixel = (localCareY + y) * work.w + localCareX + x;
-      const offset = pixel * 4;
-      const value = refined[pixel];
-      image.data[offset] = 255;
-      image.data[offset + 1] = 255;
-      image.data[offset + 2] = 255;
-      image.data[offset + 3] = value;
-      if (value > 0) {
-        const documentX = care.x + x;
-        const documentY = care.y + y;
-        if (documentX < minX) minX = documentX;
-        if (documentY < minY) minY = documentY;
-        if (documentX > maxX) maxX = documentX;
-        if (documentY > maxY) maxY = documentY;
-      }
+  assertAlphaScratch((surface.tileSize + dependencyRadius * 2) ** 2 * 4);
+  const result = surface.clone();
+  const candidates = surface.addressesAroundRecords(supportExpansion);
+  for (const address of candidates) {
+    const work = expandSelectionRegion(
+      { x: address.x, y: address.y, w: address.width, h: address.height },
+      dependencyRadius,
+      surface.width,
+      surface.height,
+    );
+    const alpha = surface.readRegion({ x: work.x, y: work.y, width: work.w, height: work.h });
+    const refined = refineSelectionAlpha(alpha, work.w, work.h, params);
+    const tile = new Uint8Array(address.width * address.height);
+    const localX = address.x - work.x;
+    const localY = address.y - work.y;
+    for (let y = 0; y < address.height; y += 1) {
+      tile.set(
+        refined.subarray((localY + y) * work.w + localX, (localY + y) * work.w + localX + address.width),
+        y * address.width,
+      );
     }
+    result.writeTile(address.key, tile);
   }
-  context.putImageData(
-    image,
-    work.x,
-    work.y,
-    localCareX,
-    localCareY,
-    care.w,
-    care.h,
-  );
-  doc.selection = {
-    mask,
-    bounds: maxX < 0
-      ? { x: 0, y: 0, w: 0, h: 0 }
-      : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 },
-  };
+  doc.selection = { surface: result, bounds: result.bounds() };
   return true;
 }
 

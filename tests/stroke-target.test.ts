@@ -19,9 +19,9 @@ function fakeCanvas(w: number, h: number): HTMLCanvasElement {
 test("paint/erase modes return the layer bitmap (or null when absent)", () => {
   const bitmap = fakeCanvas(10, 10);
   const layer = { id: "l1", bitmap } as unknown as Layer;
-  assert.equal(paintTarget(layer, params("paint"), 10, 10), bitmap);
-  assert.equal(paintTarget(layer, params("erase"), 10, 10), bitmap);
+  assert.equal(paintTarget(layer, params("paint")), bitmap);
+  assert.equal(paintTarget(layer, params("erase")), bitmap);
 
   const empty = { id: "l2" } as unknown as Layer;
-  assert.equal(paintTarget(empty, params("paint"), 10, 10), null);
+  assert.equal(paintTarget(empty, params("paint")), null);
 });

@@ -6,6 +6,7 @@ import {
   rotateLayerTransformAround,
 } from "../app/engine/document.ts";
 import { Studio } from "../app/engine/studio.ts";
+import { selectionSurface } from "../app/engine/selection.ts";
 import type { BrushParams } from "../app/engine/brush.ts";
 import { pixelAt, testCanvas } from "./canvas-harness.ts";
 
@@ -107,7 +108,7 @@ test("painting and magic-wand selection operate in transformed layer space", () 
   assert.ok(layer.surface!.sampleBilinearWorking(1.5, 1.5)[1] > 0.8);
 
   studio.selectByColor(layer.id, 7, 5, 16, "replace", true);
-  const selected = studio.doc.selection!.mask.getContext("2d")!.getImageData(7, 5, 1, 1).data[3];
+  const selected = selectionSurface(studio.doc)!.sample(7, 5);
   assert.equal(selected, 255);
   studio.dispose();
 });

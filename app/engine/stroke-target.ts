@@ -1,4 +1,4 @@
-import { Layer, ensureMask } from "./document";
+import { Layer } from "./document";
 import type { BrushParams } from "./brush";
 
 // Picks the destination canvas for a stroke based on brush mode. Mask brushes
@@ -8,11 +8,11 @@ import type { BrushParams } from "./brush";
 export function paintTarget(
   layer: Layer,
   params: BrushParams,
-  width: number,
-  height: number,
 ): HTMLCanvasElement | null {
   if (params.mode === "mask-add" || params.mode === "mask-remove") {
-    return ensureMask(layer, width, height);
+    // Sparse mask strokes are handled directly by Studio; returning a canvas
+    // here would reintroduce a document-sized compatibility allocation.
+    return null;
   }
   return layer.bitmap ?? null;
 }

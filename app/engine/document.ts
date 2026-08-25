@@ -1,4 +1,5 @@
 import type { PrecisionTileSurface } from "./tile-store";
+import { SparseAlphaSurface } from "./alpha-surface";
 import type { RawDevelopSettings } from "./raw-develop";
 import type { AiEditQuality, AiOperationControls, AiSelectionGuide } from "./ai-edit";
 import { cloneProAdjustment, type ProAdjustmentParams } from "./pro-adjustments";
@@ -1087,6 +1088,9 @@ export type Layer = {
   bitmap?: HTMLCanvasElement;
   /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
   surface?: PrecisionTileSurface;
+  /** Sparse 8-bit layer-mask edit master. Missing tiles inherit default alpha. */
+  maskSurface?: SparseAlphaSurface;
+  /** Legacy/interchange mask canvas; released after migration to maskSurface. */
   mask?: HTMLCanvasElement;
   tone?: ToneParams;
   curves?: Curves;
@@ -1175,7 +1179,10 @@ export function resolvedBlendIf(layer: Pick<Layer, "blendIf">): BlendIf {
 
 export type Selection = {
   // Grayscale mask; alpha 255 = fully selected.
-  mask: HTMLCanvasElement;
+  /** Sparse edit master. New selection operations always populate this. */
+  surface?: SparseAlphaSurface;
+  /** Legacy/project interchange mirror. Never required for large documents. */
+  mask?: HTMLCanvasElement;
   // Bounding rect for quick reject / drawing marching ants.
   bounds: { x: number; y: number; w: number; h: number };
 };
@@ -1651,13 +1658,22 @@ export function applyCurvesToImageData(img: ImageData, curves: Curves): ImageDat
 }
 
 export function ensureMask(layer: Layer, width: number, height: number) {
-  if (!layer.mask) {
-    layer.mask = newCanvas(width, height);
-    const ctx = layer.mask.getContext("2d")!;
-    ctx.fillStyle = "rgba(0,0,0,1)";
-    ctx.fillRect(0, 0, width, height);
+  if (!layer.maskSurface && layer.mask) {
+    if (layer.mask.width !== width || layer.mask.height !== height) throw new Error("Layer mask dimensions do not match the document");
+    const surface = new SparseAlphaSurface(width, height);
+    const context = layer.mask.getContext("2d")!;
+    for (let row = 0; row < surface.grid.rows; row += 1) for (let column = 0; column < surface.grid.columns; column += 1) {
+      const address = surface.grid.address(column, row);
+      const rgba = context.getImageData(address.x, address.y, address.width, address.height).data;
+      const alpha = new Uint8Array(address.width * address.height);
+      for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = rgba[pixel * 4 + 3];
+      surface.writeTile(address.key, alpha);
+    }
+    layer.maskSurface = surface;
+    layer.mask = undefined;
   }
-  return layer.mask;
+  if (!layer.maskSurface) layer.maskSurface = new SparseAlphaSurface(width, height, { defaultAlpha: 255 });
+  return layer.maskSurface;
 }
 
 // Draw a layer onto the given ctx at its transformed position. Used by both

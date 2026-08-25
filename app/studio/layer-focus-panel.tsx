@@ -47,13 +47,13 @@ function layerBadge(layer: Layer) {
   if (layer.kind === "text") return { label: "Text", Icon: Type };
   if (layer.kind === "shape" || layer.kind === "path") return { label: "Vector", Icon: Shapes };
   if (layer.kind.startsWith("adjustment")) return { label: "Adjustment", Icon: SlidersHorizontal };
-  if (layer.mask) return { label: "Mask", Icon: CircleDashed };
+  if (layer.maskSurface || layer.mask) return { label: "Mask", Icon: CircleDashed };
   return null;
 }
 
 function layerRevision(layer: Layer) {
   const version = (canvas?: HTMLCanvasElement) => (canvas as unknown as { __v?: number } | undefined)?.__v ?? 0;
-  return `${version(layer.bitmap)}:${version(layer.mask)}:${layer.opacity}:${layer.visible}:${layer.transform.tx}:${layer.transform.ty}:${layer.transform.sx}:${layer.transform.sy}:${layer.transform.rotation}:${layer.text?.text ?? ""}:${layer.text?.color ?? ""}:${layer.shape?.kind ?? ""}:${layer.shape?.fill ?? ""}:${layer.path?.anchors.length ?? 0}`;
+  return `${version(layer.bitmap)}:${version(layer.mask)}:${layer.maskSurface?.revision ?? 0}:${layer.opacity}:${layer.visible}:${layer.transform.tx}:${layer.transform.ty}:${layer.transform.sx}:${layer.transform.sy}:${layer.transform.rotation}:${layer.text?.text ?? ""}:${layer.text?.color ?? ""}:${layer.shape?.kind ?? ""}:${layer.shape?.fill ?? ""}:${layer.path?.anchors.length ?? 0}`;
 }
 
 function FocusThumbnail({ layer, previewLayer }: { layer: Layer; previewLayer?: Layer }) {
@@ -146,7 +146,7 @@ function FocusCard({
       </button>
       <div className="focus-card-actions">
         <button onClick={() => onFocus()} title={`Focus ${item.layer.name}`}><ScanSearch size={12} strokeWidth={1.7} /><span>Focus</span></button>
-        {item.layer.mask && <button onClick={() => onFocus("mask")} title={`Focus ${item.layer.name} mask`}><CircleDashed size={12} strokeWidth={1.7} /></button>}
+        {(item.layer.maskSurface || item.layer.mask) && <button onClick={() => onFocus("mask")} title={`Focus ${item.layer.name} mask`}><CircleDashed size={12} strokeWidth={1.7} /></button>}
         <button onClick={onPin} title={item.pinned ? "Unpin from Focus" : "Pin in Focus"}>{item.pinned ? <PinOff size={12} /> : <Pin size={12} />}</button>
       </div>
     </article>

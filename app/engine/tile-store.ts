@@ -6,6 +6,14 @@ import {
 } from "./color";
 
 export const DEFAULT_TILE_SIZE = 256;
+export const DEFAULT_SURFACE_MEMORY_CEILING = 512 * 1024 * 1024;
+
+export class TileMemoryLimitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TileMemoryLimitError";
+  }
+}
 
 export type PixelFormat = "rgba8" | "rgba16f" | "rgba32f";
 
@@ -140,6 +148,7 @@ export class TileGrid {
 export class SparseTileStore {
   readonly grid: TileGrid;
   readonly format: PixelFormat;
+  readonly memoryCeiling: number;
 
   private readonly tiles = new Map<string, Uint8Array>();
   private readonly dirty = new Map<string, number>();
@@ -147,9 +156,10 @@ export class SparseTileStore {
   private revision = 0;
   private residentBytes = 0;
 
-  constructor(grid: TileGrid, format: PixelFormat = "rgba8") {
+  constructor(grid: TileGrid, format: PixelFormat = "rgba8", memoryCeiling = DEFAULT_SURFACE_MEMORY_CEILING) {
     this.grid = grid;
     this.format = format;
+    this.memoryCeiling = memoryCeiling;
   }
 
   has(key: string) { return this.tiles.has(key); }
@@ -168,6 +178,33 @@ export class SparseTileStore {
     }
     const data = new Uint8Array(source.buffer, source.byteOffset, source.byteLength).slice();
     return this[COMMIT_OWNED_TILE](key, data);
+  }
+
+  assertRegionCapacity(rect: PixelRect) {
+    if (this.residentBytes === 0) {
+      const width = Math.max(0, Math.min(this.grid.width, Math.ceil(rect.x + Math.max(0, rect.width))) - Math.max(0, Math.floor(rect.x)));
+      const height = Math.max(0, Math.min(this.grid.height, Math.ceil(rect.y + Math.max(0, rect.height))) - Math.max(0, Math.floor(rect.y)));
+      // Tile-edge padding makes this deliberately conservative by less than
+      // two tiles per axis and lets extreme operations fail before building a
+      // million-address planning array.
+      const columns = Math.ceil(width / this.grid.tileSize) + (width ? 1 : 0);
+      const rows = Math.ceil(height / this.grid.tileSize) + (height ? 1 : 0);
+      const conservative = columns * rows * this.grid.tileSize * this.grid.tileSize * BYTES_PER_PIXEL[this.format];
+      this.assertResidentBytes(conservative);
+    }
+    let additional = 0;
+    for (const address of this.grid.tilesIntersecting(rect)) {
+      if (!this.tiles.has(address.key)) additional += this.grid.byteLength(address, this.format);
+    }
+    this.assertResidentBytes(this.residentBytes + additional);
+  }
+
+  assertResidentBytes(bytes: number) {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.memoryCeiling) {
+      throw new TileMemoryLimitError(
+        `Pixel surface would require ${Math.ceil(bytes / 1024 / 1024)} MB; its resident-memory ceiling is ${Math.floor(this.memoryCeiling / 1024 / 1024)} MB`,
+      );
+    }
   }
 
   delete(key: string) {
@@ -227,6 +264,7 @@ export class SparseTileStore {
       residentTiles: this.tiles.size,
       totalTiles: this.grid.totalTiles,
       residentBytes: this.residentBytes,
+      memoryCeiling: this.memoryCeiling,
       dirtyTiles: this.dirty.size,
       revision: this.revision,
     };
@@ -242,6 +280,7 @@ export class SparseTileStore {
 
   [COMMIT_OWNED_TILE](key: string, data: Uint8Array) {
     const previous = this.tiles.get(key);
+    this.assertResidentBytes(this.residentBytes + data.byteLength - (previous?.byteLength ?? 0));
     this.tiles.set(key, data);
     this.residentBytes += data.byteLength - (previous?.byteLength ?? 0);
     this.revision += 1;
@@ -345,11 +384,12 @@ export class PrecisionTileSurface {
     format: PixelFormat = "rgba8",
     colorSpace: WorkingColorSpace = "srgb",
     tileSize = DEFAULT_TILE_SIZE,
+    memoryCeiling = DEFAULT_SURFACE_MEMORY_CEILING,
   ) {
     this.grid = new TileGrid(width, height, tileSize);
     this.format = format;
     this.colorSpace = colorSpace;
-    this.store = new SparseTileStore(this.grid, format);
+    this.store = new SparseTileStore(this.grid, format, memoryCeiling);
   }
 
   static fromImageData(
@@ -372,6 +412,7 @@ export class PrecisionTileSurface {
     tiles: ReadonlyArray<{ key: string; data: Uint8Array }>,
   ) {
     const surface = new PrecisionTileSurface(width, height, format, colorSpace, tileSize);
+    surface.store.assertResidentBytes(tiles.reduce((bytes, tile) => bytes + tile.data.byteLength, 0));
     for (const tile of tiles) surface.store.write(tile.key, tile.data);
     surface.store.drainDirty();
     return surface;
@@ -384,6 +425,7 @@ export class PrecisionTileSurface {
       this.format,
       this.colorSpace,
       this.grid.tileSize,
+      this.store.memoryCeiling,
     );
     for (const [key, data] of this.store[BORROWED_ENTRIES]()) {
       clone.store[COMMIT_OWNED_TILE](key, data.slice());
@@ -393,6 +435,7 @@ export class PrecisionTileSurface {
   }
 
   updateFromImageData(image: PixelBuffer, destX = 0, destY = 0) {
+    this.store.assertRegionCapacity({ x: destX, y: destY, width: image.width, height: image.height });
     const affected = this.grid.tilesIntersecting({ x: destX, y: destY, width: image.width, height: image.height });
     for (const address of affected) {
       const bytes = this.store.read(address.key) ?? new Uint8Array(this.grid.byteLength(address, this.format));
@@ -429,6 +472,7 @@ export class PrecisionTileSurface {
     if (image.data.length !== image.width * image.height * 4) {
       throw new Error("Working float image payload does not match its dimensions");
     }
+    this.store.assertRegionCapacity({ x: destX, y: destY, width: image.width, height: image.height });
     const affected = this.grid.tilesIntersecting({ x: destX, y: destY, width: image.width, height: image.height });
     for (const address of affected) {
       const values = this.tileToWorkingFloat32(address.key);

@@ -29,6 +29,7 @@ import {
   createProofingTransform,
 } from "./color-management";
 import { applyProAdjustmentToImageData } from "./pro-adjustments";
+import { hasLayerMask, layerMaskRegionCanvas } from "./layer-mask";
 
 type Scratch = {
   a: HTMLCanvasElement;
@@ -448,16 +449,16 @@ function renderCompositeRegion(
   const focusedLayer = focus ? doc.layers.find((layer) => layer.id === focus.layerId) : null;
   if (!focus || !focusedLayer || focus.context === "full") {
     renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
-    if (focus?.target === "mask" && focusedLayer?.mask) {
-      drawMaskOverlay(composite, s, focusedLayer, frame, false);
+    if (focus?.target === "mask" && focusedLayer && hasLayerMask(focusedLayer)) {
+      drawMaskOverlay(composite, s, doc, focusedLayer, frame, false);
     }
-  } else if (focus.target === "mask" && focusedLayer.mask) {
+  } else if (focus.target === "mask" && hasLayerMask(focusedLayer)) {
     if (focus.context === "ghost") {
       renderLayerSequence(composite, s, doc, frame, preparedLayers, undefined, 0);
       muteComposite(composite, s, frame);
-      drawMaskOverlay(composite, s, focusedLayer, frame, true);
+      drawMaskOverlay(composite, s, doc, focusedLayer, frame, true);
     } else {
-      drawMaskSolo(composite, s, focusedLayer, frame);
+      drawMaskSolo(composite, s, doc, focusedLayer, frame);
     }
   } else {
     const included = focusLayerSet(doc, focusedLayer.id);
@@ -516,9 +517,19 @@ function muteComposite(composite: CanvasRenderingContext2D, s: Scratch, frame: R
   composite.restore();
 }
 
-function drawMaskSource(target: CanvasRenderingContext2D, layer: Layer, frame: RenderFrame) {
-  if (!layer.mask) return;
-  drawProjectedCanvas(target, layer.mask, frame);
+function drawLayerMaskProjected(target: CanvasRenderingContext2D, doc: Document, layer: Layer, frame: RenderFrame) {
+  const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, {
+    x: frame.x,
+    y: frame.y,
+    width: frame.width,
+    height: frame.height,
+  });
+  if (mask) target.drawImage(mask, 0, 0, frame.outputWidth, frame.outputHeight);
+}
+
+function drawMaskSource(target: CanvasRenderingContext2D, doc: Document, layer: Layer, frame: RenderFrame) {
+  if (!hasLayerMask(layer)) return;
+  drawLayerMaskProjected(target, doc, layer, frame);
   target.save();
   target.globalCompositeOperation = "source-in";
   target.fillStyle = "white";
@@ -526,26 +537,27 @@ function drawMaskSource(target: CanvasRenderingContext2D, layer: Layer, frame: R
   target.restore();
 }
 
-function drawMaskSolo(composite: CanvasRenderingContext2D, s: Scratch, layer: Layer, frame: RenderFrame) {
+function drawMaskSolo(composite: CanvasRenderingContext2D, s: Scratch, doc: Document, layer: Layer, frame: RenderFrame) {
   composite.save();
   composite.fillStyle = "#24262c";
   composite.fillRect(0, 0, frame.outputWidth, frame.outputHeight);
   composite.restore();
   const maskCanvas = groupBuffer(s, 30, frame.outputWidth, frame.outputHeight);
-  drawMaskSource(maskCanvas.getContext("2d")!, layer, frame);
+  drawMaskSource(maskCanvas.getContext("2d")!, doc, layer, frame);
   composite.drawImage(maskCanvas, 0, 0);
 }
 
 function drawMaskOverlay(
   composite: CanvasRenderingContext2D,
   s: Scratch,
+  doc: Document,
   layer: Layer,
   frame: RenderFrame,
   prominent: boolean,
 ) {
   const maskCanvas = groupBuffer(s, 30, frame.outputWidth, frame.outputHeight);
   const maskContext = maskCanvas.getContext("2d")!;
-  drawMaskSource(maskContext, layer, frame);
+  drawMaskSource(maskContext, doc, layer, frame);
   maskContext.save();
   maskContext.globalCompositeOperation = "source-in";
   maskContext.fillStyle = prominent ? "rgba(105,87,245,.58)" : "rgba(105,87,245,.34)";
@@ -597,9 +609,9 @@ function renderLayerSequence(
         const groupCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const groupContext = groupCanvas.getContext("2d")!;
         renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1, included, rootComposite);
-        if (layer.mask) {
+        if (hasLayerMask(layer)) {
           groupContext.globalCompositeOperation = "destination-in";
-          drawProjectedCanvas(groupContext, layer.mask, frame);
+          drawLayerMaskProjected(groupContext, doc, layer, frame);
           groupContext.globalCompositeOperation = "source-over";
         }
         // A group takes a layer style like any other layer — Photoshop styles
@@ -692,7 +704,7 @@ function isNoOpToneAdjustment(layer: Layer) {
   const tone = layer.tone;
   if (!tone || Object.keys(NEUTRAL_TONE).some((key) => tone[key as keyof ToneParams] !== 0)) return false;
   const passes = resolvedBlendPasses(layer);
-  return !layer.mask
+  return !hasLayerMask(layer)
     && !layer.vectorMask
     && !layer.clipping
     && !layer.effects?.some((effect) => effect.enabled)
@@ -705,7 +717,7 @@ function isNoOpToneAdjustment(layer: Layer) {
 
 function groupIsPassThrough(layer: Layer) {
   const passes = resolvedBlendPasses(layer);
-  return layer.opacity === 1 && resolvedFillOpacity(layer) === 1 && !layer.mask &&
+  return layer.opacity === 1 && resolvedFillOpacity(layer) === 1 && !hasLayerMask(layer) &&
     !(layer.effects?.some((effect) => effect.enabled)) &&
     !(layer.filters?.some((filter) => filter.enabled)) &&
     passes.length === 1 && passes[0].enabled && passes[0].mode === "source-over" && passes[0].opacity === 1;
@@ -953,9 +965,9 @@ function drawContentLayer(
   // before the style runs gives that; masking the finished buffer afterwards
   // gives the "on" behaviour, which is all we used to do.
   const maskHidesEffects = layer.maskHidesEffects ?? false;
-  if (layer.mask && !maskHidesEffects) {
+  if (hasLayerMask(layer) && !maskHidesEffects) {
     contentCtx.globalCompositeOperation = "destination-in";
-    drawProjectedCanvas(contentCtx, layer.mask, frame);
+    drawLayerMaskProjected(contentCtx, doc, layer, frame);
     contentCtx.globalCompositeOperation = "source-over";
   }
   // The vector mask carries its own switch, because a layer can have both and
@@ -1005,9 +1017,9 @@ function drawContentLayer(
       bctx.globalCompositeOperation = "source-over";
     }
   }
-  if (layer.mask && maskHidesEffects) {
+  if (hasLayerMask(layer) && maskHidesEffects) {
     bctx.globalCompositeOperation = "destination-in";
-    drawProjectedCanvas(bctx, layer.mask, frame);
+    drawLayerMaskProjected(bctx, doc, layer, frame);
     bctx.globalCompositeOperation = "source-over";
   }
   if (vectorMask && vectorHidesEffects) {
@@ -1141,12 +1153,12 @@ function compositeAdjustment(
     ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
     : null;
   let adjusted = source;
-  if (layer.mask || vectorMask) {
+  if (hasLayerMask(layer) || vectorMask) {
     const bctx = s.layerBuf.getContext("2d")!;
     clearContext(bctx, frame.outputWidth, frame.outputHeight);
     bctx.drawImage(source, 0, 0);
     bctx.globalCompositeOperation = "destination-in";
-    if (layer.mask) drawProjectedCanvas(bctx, layer.mask, frame);
+    if (hasLayerMask(layer)) drawLayerMaskProjected(bctx, doc, layer, frame);
     if (vectorMask) drawProjectedCanvas(bctx, vectorMask, frame);
     bctx.globalCompositeOperation = "source-over";
     adjusted = s.layerBuf;

@@ -28,7 +28,7 @@ function layerGlyph(layer: Layer) {
 
 function layerDetails(layer: Layer) {
   const parts: string[] = [layer.kind];
-  if (layer.mask) parts.push("mask");
+  if (layer.maskSurface || layer.mask) parts.push("mask");
   const fx = (layer.filters?.length ?? 0) + (layer.effects?.length ?? 0);
   if (fx) parts.push(`fx ${fx}`);
   const passes = resolvedBlendPasses(layer).length;

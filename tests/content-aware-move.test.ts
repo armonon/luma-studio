@@ -3,12 +3,31 @@ import test from "node:test";
 import "./canvas-harness.ts";
 import { Studio, planSelectionContentMove } from "../app/engine/studio.ts";
 import { PrecisionTileSurface } from "../app/engine/tile-store.ts";
+import { selectionRegionCanvas } from "../app/engine/selection.ts";
 import { testCanvas } from "./canvas-harness.ts";
 
 function pixels(canvas: HTMLCanvasElement) {
   return new Uint8ClampedArray(
     canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data,
   );
+}
+
+function alphaPixels(canvas: HTMLCanvasElement) {
+  const rgba = pixels(canvas);
+  const alpha = new Uint8ClampedArray(canvas.width * canvas.height);
+  for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = rgba[pixel * 4 + 3];
+  return alpha;
+}
+
+function selectionAlpha(studio: Studio) {
+  const mask = selectionRegionCanvas(studio.doc, {
+    x: 0,
+    y: 0,
+    width: studio.doc.width,
+    height: studio.doc.height,
+  });
+  assert.ok(mask);
+  return alphaPixels(mask);
 }
 
 function patternedCanvas(width: number, height: number) {
@@ -126,7 +145,7 @@ for (const scenario of [
 
     assert.equal(studio.moveSelectionContent(layer.id, scenario.dx, scenario.dy, scenario.heal), true);
     assert.deepEqual(pixels(layer.bitmap!), pixels(expected.bitmap));
-    assert.deepEqual(pixels(studio.doc.selection!.mask), pixels(expected.movedMask));
+    assert.deepEqual(selectionAlpha(studio), alphaPixels(expected.movedMask));
     assert.deepEqual(studio.doc.selection!.bounds, {
       x: scenario.bounds.x + scenario.dx,
       y: scenario.bounds.y + scenario.dy,
@@ -160,15 +179,15 @@ test("bounded content-aware move preserves feathered mask pixels exactly", () =>
 
   assert.equal(studio.moveSelectionContent(layer.id, 13.5, -7.25, true), true);
   assert.deepEqual(pixels(layer.bitmap!), pixels(expected.bitmap));
-  assert.deepEqual(pixels(studio.doc.selection!.mask), pixels(expected.movedMask));
+  assert.deepEqual(selectionAlpha(studio), alphaPixels(expected.movedMask));
   const movedPixels = pixels(layer.bitmap!);
-  const movedMask = pixels(studio.doc.selection!.mask);
+  const movedMask = selectionAlpha(studio);
   studio.undo();
   assert.deepEqual(pixels(studio.findLayer(layer.id)!.bitmap!), pixels(source));
-  assert.deepEqual(pixels(studio.doc.selection!.mask), pixels(mask));
+  assert.deepEqual(selectionAlpha(studio), alphaPixels(mask));
   studio.redo();
   assert.deepEqual(pixels(studio.findLayer(layer.id)!.bitmap!), movedPixels);
-  assert.deepEqual(pixels(studio.doc.selection!.mask), movedMask);
+  assert.deepEqual(selectionAlpha(studio), movedMask);
   studio.dispose();
 });
 
@@ -178,11 +197,11 @@ test("content-aware move preserves undo, redo, and the precision surface", () =>
   const bounds = { x: 246, y: 24, w: 19, h: 17 };
   const { studio, layer, mask } = configuredStudio(width, height, bounds);
   const beforePixels = pixels(layer.bitmap!);
-  const beforeMask = pixels(mask);
+  const beforeMask = alphaPixels(mask);
 
   assert.equal(studio.moveSelectionContent(layer.id, 31, 8, true), true);
   const movedPixels = pixels(layer.bitmap!);
-  const movedMask = pixels(studio.doc.selection!.mask);
+  const movedMask = selectionAlpha(studio);
   const expectedSurface = PrecisionTileSurface.fromImageData(
     layer.bitmap!.getContext("2d")!.getImageData(0, 0, width, height),
   );
@@ -190,12 +209,12 @@ test("content-aware move preserves undo, redo, and the precision surface", () =>
 
   studio.undo();
   assert.deepEqual(pixels(studio.findLayer(layer.id)!.bitmap!), beforePixels);
-  assert.deepEqual(pixels(studio.doc.selection!.mask), beforeMask);
+  assert.deepEqual(selectionAlpha(studio), beforeMask);
   assert.deepEqual(studio.doc.selection!.bounds, bounds);
 
   studio.redo();
   assert.deepEqual(pixels(studio.findLayer(layer.id)!.bitmap!), movedPixels);
-  assert.deepEqual(pixels(studio.doc.selection!.mask), movedMask);
+  assert.deepEqual(selectionAlpha(studio), movedMask);
   assert.deepEqual(studio.doc.selection!.bounds, { x: 277, y: 32, w: 19, h: 17 });
   studio.dispose();
 });
@@ -243,20 +262,19 @@ test("content and heal scratch allocation scales with selection, not document ar
     documentObject.createElement = originalCreateElement as typeof documentObject.createElement;
   }
 
-  assert.equal(moveDimensions.filter((size) => size === `${width}x${height}`).length, 1,
-    "only the new live selection mask may remain document-sized");
+  assert.equal(moveDimensions.filter((size) => size === `${width}x${height}`).length, 0,
+    "sparse selection movement must not allocate a document-sized mask");
   assert.ok(moveDimensions.includes("21x17"), "selected content uses a guarded cropped scratch");
   assert.ok(moveDimensions.includes("133x129"), "healing uses a padded cropped scratch");
   assert.deepEqual(
     undoDimensions.filter((size) => size === `${width}x${height}`),
-    [`${width}x${height}`],
-    "undo allocates only its replacement live selection mask at document size",
+    [],
+    "undo restores sparse selection state without a document-sized mask",
   );
   assert.deepEqual(
     redoDimensions.filter((size) => size === `${width}x${height}`),
-    [`${width}x${height}`],
-    "redo allocates only its replacement live selection mask at document size",
+    [],
+    "redo restores sparse selection state without a document-sized mask",
   );
-  assert.ok(redoDimensions.includes("21x17"), "redo translates the compact mask source");
   studio.dispose();
 });

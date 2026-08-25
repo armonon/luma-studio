@@ -58,6 +58,13 @@ import {
   setPhotoshopLayerMetadata,
 } from "./psd-metadata";
 import { drawLayerContentManaged } from "./precision-renderer";
+import {
+  hasLayerMask,
+  layerMaskRegionCanvas,
+  layerMaskSurface,
+  setLayerMaskFromCanvas,
+} from "./layer-mask";
+import type { SparseAlphaSurface } from "./alpha-surface";
 import { PrecisionTileSurface } from "./tile-store";
 import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 import { exceedsBrowserCanvas } from "./large-documents";
@@ -588,6 +595,21 @@ function precisionSurfaceFingerprint(surface: PrecisionTileSurface | undefined) 
   return fingerprintResult(hash);
 }
 
+function alphaSurfaceFingerprint(surface: SparseAlphaSurface | undefined) {
+  if (!surface) return undefined;
+  let hash = hashText(0x811c9dc5, `${surface.width}x${surface.height}:${surface.tileSize}:${surface.defaultAlpha}`);
+  for (const key of surface.keys().sort()) {
+    const record = surface.record(key);
+    hash = hashText(hash, key);
+    hash = typeof record === "number" ? hashBytes(hash, [record]) : record ? hashBytes(hash, record) : hash;
+  }
+  return fingerprintResult(hash);
+}
+
+function layerMaskFingerprint(layer: Layer) {
+  return alphaSurfaceFingerprint(layer.maskSurface) ?? canvasFingerprint(layer.mask);
+}
+
 function layerPixelFingerprint(layer: Layer) {
   return precisionSurfaceFingerprint(layer.surface) ?? canvasFingerprint(layer.bitmap);
 }
@@ -793,24 +815,23 @@ function normalizedPixelValue(value: number, depth: number) {
 
 function applyImportedMask(target: Layer, source: PsdLayer, doc: Pick<Document, "width" | "height" | "bitDepth">) {
   if ((!source.mask?.canvas && !source.mask?.imageData) || source.mask.disabled) return;
-  const mask = newCanvas(doc.width, doc.height);
-  const context = mask.getContext("2d")!;
-  if ((source.mask.defaultColor ?? 255) > 0) {
-    context.fillStyle = "#ffffff";
-    context.fillRect(0, 0, doc.width, doc.height);
-  }
+  const left = source.mask.left ?? 0;
+  const top = source.mask.top ?? 0;
+  const defaultAlpha = source.mask.defaultColor ?? 255;
   if (source.mask.canvas) {
-    context.drawImage(source.mask.canvas, source.mask.left ?? 0, source.mask.top ?? 0);
+    setLayerMaskFromCanvas(target, source.mask.canvas, doc.width, doc.height, left, top, defaultAlpha);
   } else if (source.mask.imageData) {
     const sourceData = source.mask.imageData;
+    const mask = newCanvas(sourceData.width, sourceData.height);
+    const context = mask.getContext("2d")!;
     const image = context.createImageData(sourceData.width, sourceData.height);
     for (let pixel = 0; pixel < sourceData.width * sourceData.height; pixel += 1) {
       const alpha = Math.round(Math.max(0, Math.min(1, normalizedPixelValue(sourceData.data[pixel * 4], doc.bitDepth))) * 255);
       image.data.set([255, 255, 255, alpha], pixel * 4);
     }
-    context.putImageData(image, source.mask.left ?? 0, source.mask.top ?? 0);
+    context.putImageData(image, 0, 0);
+    setLayerMaskFromCanvas(target, mask, doc.width, doc.height, left, top, defaultAlpha);
   }
-  target.mask = mask;
 }
 
 export function precisionSurfaceFromPsdPixels(
@@ -1095,7 +1116,7 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
       originalEffectsFingerprint: effectsFingerprint(target),
       originalStateFingerprint: layerStateFingerprint(target),
       originalSurfaceFingerprint: layerPixelFingerprint(target),
-      originalMaskFingerprint: canvasFingerprint(target.mask),
+      originalMaskFingerprint: layerMaskFingerprint(target),
       originalParentSourceIndex: target.parentId ? sourceIndexByLayerId.get(target.parentId) : undefined,
       preservation,
     });
@@ -1199,16 +1220,22 @@ export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
 
 function psdMask(doc: Document, layer: Layer): PsdLayer["mask"] {
   const preserved = getPhotoshopLayerMetadata(layer)?.source.mask;
-  if (!layer.mask) return preserved ? { ...preserved } : undefined;
+  if (!hasLayerMask(layer)) return preserved ? { ...preserved } : undefined;
+  const surface = layerMaskSurface(layer, doc.width, doc.height)!;
+  const records = surface.recordBounds();
+  const region = records.width && records.height
+    ? records
+    : { x: 0, y: 0, width: 1, height: 1 };
+  const canvas = layerMaskRegionCanvas(layer, doc.width, doc.height, region)!;
   return {
     ...preserved,
-    canvas: layer.mask,
+    canvas,
     imageData: undefined,
-    top: 0,
-    left: 0,
-    bottom: doc.height,
-    right: doc.width,
-    defaultColor: preserved?.defaultColor ?? 255,
+    top: region.y,
+    left: region.x,
+    bottom: region.y + region.height,
+    right: region.x + region.width,
+    defaultColor: surface.defaultAlpha,
     disabled: false,
   };
 }
@@ -1599,7 +1626,7 @@ function native16BitEligibility(doc: Document): Native16BitEligibility {
   const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
   if (!layer.visible || layer.opacity !== 1 || resolvedFillOpacity(layer) !== 1 || passes.length !== 1 ||
       passes[0].mode !== "source-over" || passes[0].opacity !== 1 || layer.clipping || layer.blendIf ||
-      layer.mask || layer.filters?.some((filter) => filter.enabled) || layer.effects?.some((effect) => effect.enabled)) {
+      hasLayerMask(layer) || layer.filters?.some((filter) => filter.enabled) || layer.effects?.some((effect) => effect.enabled)) {
     return { eligible: false, reason: "the layer requires high-depth compositing, masking, or effects" };
   }
   const source = getPhotoshopLayerMetadata(layer)?.source;
@@ -1652,7 +1679,7 @@ function canReturnOriginalPhotoshopSource(doc: Document, container: PhotoshopCon
     if (layerMetadata.originalStateFingerprint !== layerStateFingerprint(layer)) return false;
 
     const surfaceFingerprint = layerPixelFingerprint(layer);
-    const maskFingerprint = canvasFingerprint(layer.mask);
+    const maskFingerprint = layerMaskFingerprint(layer);
     if (layerMetadata.originalSurfaceFingerprint === "unreadable" || surfaceFingerprint === "unreadable") return false;
     if (layerMetadata.originalMaskFingerprint === "unreadable" || maskFingerprint === "unreadable") return false;
     if (layerMetadata.originalSurfaceFingerprint !== surfaceFingerprint) return false;
@@ -1973,10 +2000,11 @@ function flattenLayerBitmap(doc: Document, layer: Layer): HTMLCanvasElement | nu
   if ((layer.kind === "raster" || layer.kind === "smart-object") && !layer.bitmap && !layer.surface) return null;
   if (layer.surface) drawLayerContentManaged(ctx, layer);
   else drawLayerContent(ctx, layer);
-  if (layer.mask) {
+  if (hasLayerMask(layer)) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = "destination-in";
-    ctx.drawImage(layer.mask, 0, 0);
+    const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, { x: 0, y: 0, width: doc.width, height: doc.height });
+    if (mask) ctx.drawImage(mask, 0, 0);
   }
   return c;
 }

@@ -18,6 +18,7 @@ import { applySmartFilters } from "./filters";
 import { composeLayerWithEffects, effectNeedsBackdrop } from "./layer-effects";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, READBACK_FS, VS } from "./gl-shaders";
+import { hasLayerMask, layerMaskRegionCanvas } from "./layer-mask";
 
 // A single-doc-size WebGL2 float compositor.
 // Design: ping-pong RGBA16F FBOs `A`/`B`. Bottom-up over layers, each pass
@@ -434,12 +435,15 @@ export function rasterizeLayer(
     ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
     : null;
   const vectorHidesEffects = layer.vectorMaskHidesEffects ?? false;
+  const layerMask = hasLayerMask(layer)
+    ? layerMaskRegionCanvas(layer, doc.width, doc.height, { x: 0, y: 0, width: doc.width, height: doc.height })
+    : null;
   const clipTo = (target: CanvasRenderingContext2D, mask: HTMLCanvasElement) => {
     target.globalCompositeOperation = "destination-in";
     target.drawImage(mask, 0, 0);
     target.globalCompositeOperation = "source-over";
   };
-  if (layer.mask && !maskHidesEffects) clipTo(contentCtx, layer.mask);
+  if (layerMask && !maskHidesEffects) clipTo(contentCtx, layerMask);
   if (vectorMask && !vectorHidesEffects) clipTo(contentCtx, vectorMask);
   // Shared with the CPU renderer so GPU export cannot diverge from CPU export.
   // Effects are unscaled here: this rasterizes at document resolution.
@@ -454,7 +458,7 @@ export function rasterizeLayer(
     doc.globalLight,
     backdrop,
   );
-  if (layer.mask && maskHidesEffects) clipTo(ctx, layer.mask);
+  if (layerMask && maskHidesEffects) clipTo(ctx, layerMask);
   if (vectorMask && vectorHidesEffects) clipTo(ctx, vectorMask);
 
   if (layer.clipping) {
@@ -586,9 +590,14 @@ function ensureMaskTex(
   gl: WebGL2RenderingContext,
   c: Cache,
   layer: Layer,
+  doc: Document,
 ): WebGLTexture | null {
-  if (!layer.mask) return null;
-  const version = `mask:${(layer.mask as unknown as { __v?: number }).__v ?? "0"}`;
+  if (!hasLayerMask(layer)) return null;
+  const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, { x: 0, y: 0, width: doc.width, height: doc.height });
+  if (!mask) return null;
+  const version = layer.maskSurface
+    ? `mask-sparse:${layer.maskSurface.revision}`
+    : `mask:${(layer.mask as unknown as { __v?: number }).__v ?? "0"}`;
   const cached = c.maskTex.get(layer.id);
   gpuTextureClock += 1;
   if (cached && cached.version === version) {
@@ -597,9 +606,9 @@ function ensureMaskTex(
     return cached.tex;
   }
   gpuTextureMisses += 1;
-  const bytes = layer.mask.width * layer.mask.height * 4;
+  const bytes = mask.width * mask.height * 4;
   const tex = cached?.tex ?? gl.createTexture()!;
-  uploadCanvasTex(gl, tex, layer.mask);
+  uploadCanvasTex(gl, tex, mask);
   if (cached) {
     c.maskTex.delete(layer.id);
     c.textureBytes -= cached.bytes;
@@ -637,7 +646,7 @@ function evictGpuTextures(gl: WebGL2RenderingContext, c: Cache, requiredBytes: n
 
 function pruneGpuTextures(gl: WebGL2RenderingContext, c: Cache, doc: Document) {
   const liveLayers = new Set(doc.layers.map((layer) => layer.id));
-  const liveMasks = new Set(doc.layers.filter((layer) => !!layer.mask).map((layer) => layer.id));
+  const liveMasks = new Set(doc.layers.filter(hasLayerMask).map((layer) => layer.id));
   for (const [key, entry] of c.layerTex) {
     if (liveLayers.has(key)) continue;
     c.layerTex.delete(key);
@@ -760,7 +769,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, composite.tex);
       gl.uniform1i(c.levels.uniforms["u_src"], 0);
-      const maskTex = ensureMaskTex(gl, c, layer);
+      const maskTex = ensureMaskTex(gl, c, layer, doc);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.levels.uniforms["u_mask"], 1);
@@ -778,7 +787,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, composite.tex);
       gl.uniform1i(c.hsl.uniforms["u_src"], 0);
-      const maskTex = ensureMaskTex(gl, c, layer);
+      const maskTex = ensureMaskTex(gl, c, layer, doc);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.hsl.uniforms["u_mask"], 1);
@@ -798,7 +807,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, c.curvesLut);
       gl.uniform1i(c.curves.uniforms["u_lut"], 1);
-      const maskTex = ensureMaskTex(gl, c, layer);
+      const maskTex = ensureMaskTex(gl, c, layer, doc);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.curves.uniforms["u_mask"], 2);
@@ -811,7 +820,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, composite.tex);
       gl.uniform1i(c.adj.uniforms["u_src"], 0);
-      const maskTex = ensureMaskTex(gl, c, layer);
+      const maskTex = ensureMaskTex(gl, c, layer, doc);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, maskTex ?? c.neutralMask);
       gl.uniform1i(c.adj.uniforms["u_mask"], 1);
@@ -837,7 +846,7 @@ export function renderGL(doc: Document, target: HTMLCanvasElement, proofing = tr
       // Only the direct-upload path leaves the mask outstanding; a rasterized
       // layer has it baked in already, and binding it here would square the
       // coverage at every soft edge.
-      const maskTex = canUploadPrecisionDirect(layer, doc) ? ensureMaskTex(gl, c, layer) : null;
+      const maskTex = canUploadPrecisionDirect(layer, doc) ? ensureMaskTex(gl, c, layer, doc) : null;
       if (maskTex) c.pinnedTex.add(maskTex);
       const blendIf = resolvedBlendIf(layer);
       const blendIfChannels = (["gray", "red", "green", "blue"] as const).map((channel) => blendIf.channels[channel]);

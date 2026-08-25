@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "photoshop-layered-rgb8",
+      "file": "approved/photoshop-layered-rgb8.psd",
+      "kind": "psd",
+      "expected": {
+        "outcome": "pass",
+        "minimumLayers": 5,
+        "maximumWarnings": 0,
+        "maximumPsdMeanError": 2
+      }
+    },
+    {
+      "id": "photoshop-large-document",
+      "file": "approved/photoshop-large-document.psb",
+      "kind": "psb",
+      "expected": {
+        "outcome": "pass",
+        "minimumLayers": 2,
+        "maximumPsdMeanError": 3
+      }
+    },
+    {
+      "id": "camera-dng-sensor",
+      "file": "approved/camera-sensor.dng",
+      "kind": "raw",
+      "expected": {
+        "outcome": "pass",
+        "rawMode": "developed-raw"
+      }
+    },
+    {
+      "id": "truncated-psd",
+      "file": "malformed/truncated.psd",
+      "kind": "psd",
+      "expected": {
+        "outcome": "reject",
+        "errorPattern": "truncated|invalid|malformed"
+      }
+    }
+  ]
+}

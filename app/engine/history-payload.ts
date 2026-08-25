@@ -25,6 +25,7 @@ import {
 import type { LayerSnapshot, HistoryEntry, PixelPatch, SurfaceTilePatch } from "./studio";
 import type { RawDevelopSettings } from "./raw-develop";
 import { cloneProAdjustment } from "./pro-adjustments";
+import { alphaTileRecordBytes, type SparseAlphaSurface } from "./alpha-surface";
 
 // ---------- byte accounting ----------
 
@@ -38,15 +39,16 @@ export function surfaceTilePatchBytes(p: SurfaceTilePatch) {
   return (p.before?.byteLength ?? 0) + (p.after?.byteLength ?? 0);
 }
 export function layerSnapshotBytes(snap: LayerSnapshot) {
-  return bitmapBytes(snap.bitmap) + bitmapBytes(snap.mask);
+  return bitmapBytes(snap.bitmap) + bitmapBytes(snap.mask) + (snap.maskSurface?.stats().residentBytes ?? 0);
 }
 export function documentSnapshotBytes(doc: Document | undefined) {
   if (!doc) return 0;
   let total = 0;
   for (const layer of doc.layers) {
-    total += bitmapBytes(layer.bitmap) + bitmapBytes(layer.mask);
+    total += bitmapBytes(layer.bitmap) + bitmapBytes(layer.mask) + (layer.maskSurface?.stats().residentBytes ?? 0);
   }
   if (doc.selection?.mask) total += bitmapBytes(doc.selection.mask);
+  if (doc.selection?.surface) total += doc.selection.surface.stats().residentBytes;
   return total;
 }
 
@@ -62,6 +64,7 @@ export function documentSnapshotBytes(doc: Document | undefined) {
  */
 export function historyEntrySize(entry: HistoryEntry): number {
   const seen = new Set<HTMLCanvasElement>();
+  const seenAlpha = new Set<SparseAlphaSurface>();
   let total = 128; // fixed overhead per entry (labels, hashmap, refs)
 
   const bill = (canvas: HTMLCanvasElement | undefined) => {
@@ -69,19 +72,27 @@ export function historyEntrySize(entry: HistoryEntry): number {
     seen.add(canvas);
     total += bitmapBytes(canvas);
   };
+  const billAlpha = (surface: SparseAlphaSurface | undefined) => {
+    if (!surface || seenAlpha.has(surface)) return;
+    seenAlpha.add(surface);
+    total += surface.stats().residentBytes;
+  };
 
-  for (const s of entry.before) { bill(s.bitmap); bill(s.mask); }
-  for (const s of entry.after) { bill(s.bitmap); bill(s.mask); }
-  if (entry.layersBefore) for (const l of entry.layersBefore) { bill(l.bitmap); bill(l.mask); }
-  if (entry.layersAfter) for (const l of entry.layersAfter) { bill(l.bitmap); bill(l.mask); }
+  for (const s of entry.before) { bill(s.bitmap); bill(s.mask); billAlpha(s.maskSurface); }
+  for (const s of entry.after) { bill(s.bitmap); bill(s.mask); billAlpha(s.maskSurface); }
+  if (entry.layersBefore) for (const l of entry.layersBefore) { bill(l.bitmap); bill(l.mask); billAlpha(l.maskSurface); }
+  if (entry.layersAfter) for (const l of entry.layersAfter) { bill(l.bitmap); bill(l.mask); billAlpha(l.maskSurface); }
   if (entry.layerOrderBefore) total += entry.layerOrderBefore.reduce((bytes, id) => bytes + 8 + id.length * 2, 0);
   if (entry.layerOrderAfter) total += entry.layerOrderAfter.reduce((bytes, id) => bytes + 8 + id.length * 2, 0);
   bill(entry.selectionBefore?.mask);
   bill(entry.selectionAfter?.mask);
+  billAlpha(entry.selectionBefore?.surface);
+  billAlpha(entry.selectionAfter?.surface);
   for (const doc of [entry.documentBefore, entry.documentAfter]) {
     if (!doc) continue;
-    for (const layer of doc.layers) { bill(layer.bitmap); bill(layer.mask); }
+    for (const layer of doc.layers) { bill(layer.bitmap); bill(layer.mask); billAlpha(layer.maskSurface); }
     bill(doc.selection?.mask);
+    billAlpha(doc.selection?.surface);
   }
 
   // Typed-array payloads are always exclusively owned by the entry.
@@ -90,6 +101,9 @@ export function historyEntrySize(entry: HistoryEntry): number {
   }
   if (entry.pixelPatches) for (const p of entry.pixelPatches) total += pixelPatchBytes(p);
   if (entry.surfacePatches) for (const p of entry.surfacePatches) total += surfaceTilePatchBytes(p);
+  if (entry.maskSurfacePatches) for (const patch of entry.maskSurfacePatches) {
+    total += alphaTileRecordBytes(patch.before) + alphaTileRecordBytes(patch.after);
+  }
   return total;
 }
 
@@ -154,7 +168,8 @@ export function deepClonePath(p: PathStyle): PathStyle {
 }
 export function cloneSelection(selection: Selection | null | undefined): Selection | null {
   return selection ? {
-    mask: cloneCanvas(selection.mask),
+    mask: selection.mask ? cloneCanvas(selection.mask) : undefined,
+    surface: selection.surface?.clone(),
     bounds: { ...selection.bounds },
   } : null;
 }
@@ -164,6 +179,7 @@ export function shallowCloneLayer(layer: Layer): Layer {
   return {
     ...layer,
     surface: layer.surface?.clone(),
+    maskSurface: layer.maskSurface?.clone(),
     source: layer.source ? {
       ...layer.source,
       colorProfile: layer.source.colorProfile ? {
@@ -209,9 +225,11 @@ export function cloneDocument(doc: Document): Document {
       ...shallowCloneLayer(layer),
       bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,
       mask: layer.mask ? cloneCanvas(layer.mask) : undefined,
+      maskSurface: layer.maskSurface?.clone(),
     })),
     selection: doc.selection ? {
-      mask: cloneCanvas(doc.selection.mask),
+      mask: doc.selection.mask ? cloneCanvas(doc.selection.mask) : undefined,
+      surface: doc.selection.surface?.clone(),
       bounds: { ...doc.selection.bounds },
     } : null,
   };
@@ -224,6 +242,8 @@ export function snapshotLayer(layer: Layer): LayerSnapshot {
     bitmap: layer.bitmap ? cloneCanvas(layer.bitmap) : undefined,
     surface: layer.surface?.clone(),
     mask: layer.mask ? cloneCanvas(layer.mask) : undefined,
+    maskSurface: layer.maskSurface?.clone(),
+    maskPresent: Boolean(layer.mask || layer.maskSurface),
     tone: layer.tone ? { ...layer.tone } : undefined,
     curves: layer.curves ? cloneCurves(layer.curves) : undefined,
     levels: layer.levels ? { ...layer.levels } : undefined,
