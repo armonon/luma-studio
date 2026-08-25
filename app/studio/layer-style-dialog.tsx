@@ -76,7 +76,7 @@ function ColorField({ label, value, onChange, withAlpha = true }: {
   );
 }
 
-function Slider({ label, value, min, max, step = 1, suffix = "", onChange }: {
+function Slider({ label, value, min, max, step = 1, suffix = "", onChange, onCommit }: {
   label: string;
   value: number;
   min: number;
@@ -84,6 +84,7 @@ function Slider({ label, value, min, max, step = 1, suffix = "", onChange }: {
   step?: number;
   suffix?: string;
   onChange: (value: number) => void;
+  onCommit?: (value: number) => void;
 }) {
   return (
     <label className="layer-style-slider">
@@ -95,6 +96,8 @@ function Slider({ label, value, min, max, step = 1, suffix = "", onChange }: {
         step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
+        onPointerUp={(event) => onCommit?.(Number(event.currentTarget.value))}
+        onBlur={(event) => onCommit?.(Number(event.currentTarget.value))}
         aria-label={label}
       />
       <output>{Math.round(value)}{suffix}</output>
@@ -178,8 +181,11 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
 }) {
   const patch = (next: Partial<Omit<LayerEffect, "id" | "kind">>) =>
     studio.updateLayerEffect(layerId, effect.id, next);
+  const livePatch = (next: Partial<Omit<LayerEffect, "id" | "kind">>) =>
+    studio.liveUpdateLayerEffect(layerId, effect.id, next);
+  const commitLive = () => studio.commitLiveLayerEffect(layerId, effect.id);
   return (
-    <div className="layer-style-effect">
+    <div className="layer-style-effect" onPointerUp={commitLive} onPointerCancel={commitLive} onBlur={commitLive}>
       <label className="layer-style-select">
         <span>Blend mode</span>
         <select
@@ -194,17 +200,17 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           ))}
         </select>
       </label>
-      <Slider label="Opacity" value={effect.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ opacity: v / 100 })} />
+      <Slider label="Opacity" value={effect.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => livePatch({ opacity: v / 100 })} />
       {effect.kind !== "bevel-emboss" && effect.kind !== "gradient-overlay" && (
         <ColorField label="Color" value={effect.color} onChange={(color) => patch({ color })} />
       )}
       {effectUses(effect.kind, "blur") && (
-        <Slider label={effect.kind === "bevel-emboss" ? "Soften" : "Blur"} value={effect.blur} min={0} max={120} onChange={(blur) => patch({ blur })} />
+        <Slider label={effect.kind === "bevel-emboss" ? "Soften" : "Blur"} value={effect.blur} min={0} max={120} onChange={(blur) => livePatch({ blur })} />
       )}
       {effectUses(effect.kind, "offset") && (
         <>
-          <Slider label="Offset X" value={effect.offsetX} min={-200} max={200} onChange={(offsetX) => patch({ offsetX })} />
-          <Slider label="Offset Y" value={effect.offsetY} min={-200} max={200} onChange={(offsetY) => patch({ offsetY })} />
+          <Slider label="Offset X" value={effect.offsetX} min={-200} max={200} onChange={(offsetX) => livePatch({ offsetX })} />
+          <Slider label="Offset Y" value={effect.offsetY} min={-200} max={200} onChange={(offsetY) => livePatch({ offsetY })} />
         </>
       )}
       {effectUses(effect.kind, "spread") && (
@@ -214,14 +220,14 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
           min={0}
           max={100}
           suffix="%"
-          onChange={(v) => patch({ spread: v / 100 })}
+          onChange={(v) => livePatch({ spread: v / 100 })}
         />
       )}
       {effectUses(effect.kind, "noise") && (
-        <Slider label="Noise" value={(effect.noise ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ noise: v / 100 })} />
+        <Slider label="Noise" value={(effect.noise ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => livePatch({ noise: v / 100 })} />
       )}
       {effectUses(effect.kind, "altitude") && (
-        <Slider label="Altitude" value={effect.altitude ?? 30} min={0} max={90} suffix="°" onChange={(altitude) => patch({ altitude })} />
+        <Slider label="Altitude" value={effect.altitude ?? 30} min={0} max={90} suffix="°" onChange={(altitude) => livePatch({ altitude })} />
       )}
       {effectUses(effect.kind, "contour") && (
         <label className="layer-style-select">
@@ -236,7 +242,7 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
         </label>
       )}
       {effectUses(effect.kind, "width") && (
-        <Slider label="Size" value={effect.width ?? 3} min={1} max={100} suffix="px" onChange={(width) => patch({ width })} />
+        <Slider label="Size" value={effect.width ?? 3} min={1} max={100} suffix="px" onChange={(width) => livePatch({ width })} />
       )}
       {effectUses(effect.kind, "position") && (
         <label className="layer-style-select">
@@ -253,10 +259,10 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
         </label>
       )}
       {effectUses(effect.kind, "depth") && (
-        <Slider label="Depth" value={effect.depth ?? 3} min={0} max={40} suffix="px" onChange={(depth) => patch({ depth })} />
+        <Slider label="Depth" value={effect.depth ?? 3} min={0} max={40} suffix="px" onChange={(depth) => livePatch({ depth })} />
       )}
       {effectUses(effect.kind, "angle") && (
-        <Slider label="Light angle" value={effect.angle ?? 135} min={0} max={360} suffix="°" onChange={(angle) => patch({ angle })} />
+        <Slider label="Light angle" value={effect.angle ?? 135} min={0} max={360} suffix="°" onChange={(angle) => livePatch({ angle })} />
       )}
       {effectUses(effect.kind, "bevelColors") && (
         <>
@@ -352,16 +358,16 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
         </label>
       )}
       {effectUses(effect.kind, "range") && (
-        <Slider label="Range" value={(effect.range ?? 1) * 100} min={5} max={100} suffix="%" onChange={(v) => patch({ range: v / 100 })} />
+        <Slider label="Range" value={(effect.range ?? 1) * 100} min={5} max={100} suffix="%" onChange={(v) => livePatch({ range: v / 100 })} />
       )}
       {effectUses(effect.kind, "dither") && (
-        <Slider label="Dither" value={(effect.dither ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ dither: v / 100 })} />
+        <Slider label="Dither" value={(effect.dither ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => livePatch({ dither: v / 100 })} />
       )}
       {/* Stroke switches these on with its Fill control; they are not in the
           field table because each is read only under one setting. */}
       {(effectUses(effect.kind, "gradientStops") || (effect.kind === "stroke" && effect.fillType === "gradient")) && (
         <>
-          <Slider label="Angle" value={effect.gradientAngle ?? 90} min={0} max={360} suffix="°" onChange={(gradientAngle) => patch({ gradientAngle })} />
+          <Slider label="Angle" value={effect.gradientAngle ?? 90} min={0} max={360} suffix="°" onChange={(gradientAngle) => livePatch({ gradientAngle })} />
           <label className="layer-style-select">
             <span>Style</span>
             <select
@@ -397,23 +403,23 @@ function EffectControls({ effect, layerId, studio, layerHasMatte }: {
               <option value="dots">Dots</option>
             </select>
           </label>
-          <Slider label="Scale" value={effect.patternScale ?? 16} min={2} max={128} suffix="px" onChange={(patternScale) => patch({ patternScale })} />
+          <Slider label="Scale" value={effect.patternScale ?? 16} min={2} max={128} suffix="px" onChange={(patternScale) => livePatch({ patternScale })} />
         </>
       )}
       {effectUses(effect.kind, "strength") && (
-        <Slider label="Strength" value={effect.strength ?? 12} min={0} max={80} suffix="px" onChange={(strength) => patch({ strength })} />
+        <Slider label="Strength" value={effect.strength ?? 12} min={0} max={80} suffix="px" onChange={(strength) => livePatch({ strength })} />
       )}
       {effectUses(effect.kind, "threshold") && (
-        <Slider label="Threshold" value={(effect.threshold ?? 0.7) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ threshold: v / 100 })} />
+        <Slider label="Threshold" value={(effect.threshold ?? 0.7) * 100} min={0} max={100} suffix="%" onChange={(v) => livePatch({ threshold: v / 100 })} />
       )}
       {effectUses(effect.kind, "steps") && (
-        <Slider label="Steps" value={effect.steps ?? 32} min={2} max={128} onChange={(steps) => patch({ steps })} />
+        <Slider label="Steps" value={effect.steps ?? 32} min={2} max={128} onChange={(steps) => livePatch({ steps })} />
       )}
       {effectUses(effect.kind, "saturation") && (
-        <Slider label="Saturation" value={(effect.saturation ?? 1.6) * 100} min={0} max={300} suffix="%" onChange={(v) => patch({ saturation: v / 100 })} />
+        <Slider label="Saturation" value={(effect.saturation ?? 1.6) * 100} min={0} max={300} suffix="%" onChange={(v) => livePatch({ saturation: v / 100 })} />
       )}
       {effectUses(effect.kind, "tint") && (
-        <Slider label="Tint" value={(effect.tint ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => patch({ tint: v / 100 })} />
+        <Slider label="Tint" value={(effect.tint ?? 0) * 100} min={0} max={100} suffix="%" onChange={(v) => livePatch({ tint: v / 100 })} />
       )}
       {effect.kind === "backdrop-blur" && (
         <p className="layer-style-hint">
@@ -501,8 +507,8 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
         <div className="blend-if-heading">
           <span><strong>Global light</strong><small>Shared by every effect opted in</small></span>
         </div>
-        <Slider label="Angle" value={light.angle} min={0} max={360} suffix="°" onChange={(angle) => studio.setGlobalLight({ angle })} />
-        <Slider label="Altitude" value={light.altitude} min={0} max={90} suffix="°" onChange={(altitude) => studio.setGlobalLight({ altitude })} />
+        <Slider label="Angle" value={light.angle} min={0} max={360} suffix="°" onChange={(angle) => studio.liveUpdateGlobalLight({ angle })} onCommit={(angle) => studio.setGlobalLight({ angle })} />
+        <Slider label="Altitude" value={light.altitude} min={0} max={90} suffix="°" onChange={(altitude) => studio.liveUpdateGlobalLight({ altitude })} onCommit={(altitude) => studio.setGlobalLight({ altitude })} />
       </div>
       <label className="layer-style-select">
         <span>Blend mode</span>
@@ -518,8 +524,8 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
           ))}
         </select>
       </label>
-      <Slider label="Opacity" value={layer.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => studio.setLayerProp(layer.id, "opacity", v / 100, "Layer opacity")} />
-      <Slider label="Fill opacity" value={fillOpacity * 100} min={0} max={100} suffix="%" onChange={(v) => studio.setLayerFillOpacity(layer.id, v / 100)} />
+      <Slider label="Opacity" value={layer.opacity * 100} min={0} max={100} suffix="%" onChange={(v) => studio.liveUpdateLayerProp(layer.id, "opacity", v / 100)} onCommit={(v) => studio.setLayerProp(layer.id, "opacity", v / 100, "Layer opacity")} />
+      <Slider label="Fill opacity" value={fillOpacity * 100} min={0} max={100} suffix="%" onChange={(v) => studio.liveUpdateLayerProp(layer.id, "fillOpacity", v / 100)} onCommit={(v) => studio.setLayerFillOpacity(layer.id, v / 100)} />
       <p className="layer-style-hint">
         Blend If hides tones instead of erasing them. Drag the black handles to drop shadows out of
         this layer, the white handles to drop highlights — the fade handles soften the cut.

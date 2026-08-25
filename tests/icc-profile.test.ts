@@ -8,10 +8,12 @@ import {
 import {
   IccProfileParseError,
   evaluateIccLut,
+  iccLabNormalizedToXyz,
   evaluateToneCurve,
   inferNativeWhitePoint,
   invertToneCurve,
   parseIccProfile,
+  xyzToIccLabNormalized,
 } from "../app/engine/icc-profile.ts";
 import { D65_WHITE } from "../app/engine/color-math.ts";
 import {
@@ -107,6 +109,22 @@ test("decodes ICC v4 mAB and mBA matrix-equivalent transforms", () => {
     assert.ok(Math.abs(toWorking.applyRgb(sample)[index] - expected) < 1.2e-4);
     assert.ok(Math.abs(fromWorking.applyRgb(sample)[index] - expected) < 1.2e-4);
   });
+});
+
+test("Lab PCS LUT profiles are executable and Lab/XYZ encoding round-trips", () => {
+  const profile = parseIccProfile(buildIcc([
+    { signature: "A2B1", bytes: identityClutMabTag() },
+  ], { pcs: "Lab " }));
+  assert.equal(profile.connectionSpace, "Lab");
+  assert.equal(profile.capabilities.model, "lut");
+  assert.equal(profile.capabilities.canUseAsSource, true);
+
+  const lab = [0.61, 0.42, 0.73] as const;
+  const xyz = iccLabNormalizedToXyz(lab);
+  const roundTrip = xyzToIccLabNormalized(xyz);
+  lab.forEach((expected, index) => assert.ok(Math.abs(roundTrip[index] - expected) < 1e-12));
+  const transformed = createColorTransform(profile, LINEAR_SRGB_PROFILE).applyRgb(lab);
+  assert.ok(transformed.every(Number.isFinite));
 });
 
 test("evaluates the permitted A-CLUT-B mAB processing model", () => {

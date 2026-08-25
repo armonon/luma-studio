@@ -1,6 +1,8 @@
 import type { Studio } from "@/app/engine/studio";
 import type { PathStyle } from "@/app/engine/document";
 import type { Point } from "@/app/engine/advanced-tools";
+import { preflightRasterFile } from "@/app/engine/input-limits";
+import { exceedsBrowserCanvas } from "@/app/engine/large-documents";
 
 export function mimeForFileName(fileName: string) {
   const extension = fileName.split(".").pop()?.toLowerCase();
@@ -50,9 +52,16 @@ export async function addImageFileAsLayer(studio: Studio, file: File) {
   if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(file.name)) {
     throw new Error(`${file.name} is not a supported image layer`);
   }
+  await preflightRasterFile(file, exceedsBrowserCanvas);
   const url = URL.createObjectURL(file);
   try {
     const image = await loadImage(url);
+    if (!Number.isInteger(image.naturalWidth) || !Number.isInteger(image.naturalHeight) || image.naturalWidth < 1 || image.naturalHeight < 1) {
+      throw new Error(`${file.name} has invalid image dimensions`);
+    }
+    if (exceedsBrowserCanvas(image.naturalWidth, image.naturalHeight)) {
+      throw new Error(`${file.name} is too large to decode as one image; import a tiled Luma/PSB document instead`);
+    }
     const name = file.name.replace(/\.[^/.]+$/, "") || "Imported Layer";
     const layer = studio.addRasterFromImage(name, image, {
       originalName: file.name,

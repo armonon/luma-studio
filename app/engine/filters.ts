@@ -34,6 +34,9 @@ export const SMART_FILTER_SPECS: Record<SmartFilterKind, SmartFilterSpec> = {
   "high-pass": { label: "High Pass", category: "Sharpen", defaults: { radius: 4 } },
   median: { label: "Median", category: "Noise", defaults: { radius: 2 } },
   "dust-scratches": { label: "Dust & Scratches", category: "Noise", defaults: { radius: 2, threshold: 18 } },
+  "reduce-noise": { label: "Reduce Noise", category: "Noise", defaults: { radius: 2, strength: 0.65, preserveDetail: 0.55, reduceColor: 0.7 } },
+  "lens-blur": { label: "Lens Blur", category: "Blur", defaults: { radius: 8, blades: 6, rotation: 0, highlights: 0.15 } },
+  displace: { label: "Displace", category: "Other", defaults: { amount: 12, scale: 48, angle: 0 } },
   maximum: { label: "Maximum", category: "Other", defaults: { radius: 2 } },
   minimum: { label: "Minimum", category: "Other", defaults: { radius: 2 } },
   invert: { label: "Invert", category: "Other", defaults: {} },
@@ -49,9 +52,10 @@ export function smartFilterInfluenceRadius(filter: Pick<SmartFilter, "kind" | "p
   if (filter.kind === "blur" || filter.kind === "sharpen" || filter.kind === "high-pass") {
     return gaussianInfluenceRadius(radius);
   }
-  if (["motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum"].includes(filter.kind)) {
+  if (["motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum", "lens-blur", "reduce-noise"].includes(filter.kind)) {
     return Math.ceil(radius);
   }
+  if (filter.kind === "displace") return Math.ceil(Math.abs(filter.params.amount ?? defaults.amount ?? 0)) + 2;
   return 0;
 }
 
@@ -420,6 +424,139 @@ export function surfaceBlur(doc: Document, layer: Layer, radius: number, thresho
   }, r);
 }
 
+/**
+ * Aperture-shaped blur with optional highlight bloom. The sample budget is
+ * capped so a large radius cannot turn one viewport tile into an unbounded
+ * quadratic operation; the influence radius remains exact for tile overscan.
+ */
+export function lensBlur(
+  doc: Document,
+  layer: Layer,
+  radius: number,
+  blades = 6,
+  rotationDegrees = 0,
+  highlights = 0.15,
+) {
+  const r = Math.max(1, Math.min(64, Math.round(radius)));
+  const sides = Math.max(3, Math.min(12, Math.round(blades)));
+  const rotation = rotationDegrees * Math.PI / 180;
+  const bloom = Math.max(0, Math.min(1, highlights));
+  const step = Math.max(1, Math.ceil(r / 12));
+  const offsets: Array<[number, number]> = [];
+  for (let y = -r; y <= r; y += step) for (let x = -r; x <= r; x += step) {
+    const distance = Math.hypot(x, y);
+    if (distance > r) continue;
+    // Radius of a regular polygon at this angle. This produces a visibly
+    // photographic aperture instead of another Gaussian under a new name.
+    const angle = Math.atan2(y, x) - rotation;
+    const sector = (angle + Math.PI * 4) % (Math.PI * 2 / sides) - Math.PI / sides;
+    const boundary = r * Math.cos(Math.PI / sides) / Math.max(1e-6, Math.cos(sector));
+    if (distance <= boundary) offsets.push([x, y]);
+  }
+  applyPixelFilter(doc, layer, (src) => {
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    for (let y = 0; y < src.height; y += 1) for (let x = 0; x < src.width; x += 1) {
+      const target = (y * src.width + x) * 4;
+      const sums = [0, 0, 0, 0];
+      let weight = 0;
+      for (const [ox, oy] of offsets) {
+        const source = pixelIndex(src.width, src.height, x + ox, y + oy);
+        const luma = (src.data[source] + src.data[source + 1] + src.data[source + 2]) / (255 * 3);
+        const sampleWeight = 1 + bloom * Math.max(0, luma - 0.65) * 4;
+        for (let channel = 0; channel < 4; channel += 1) sums[channel] += src.data[source + channel] * sampleWeight;
+        weight += sampleWeight;
+      }
+      for (let channel = 0; channel < 4; channel += 1) out.data[target + channel] = sums[channel] / Math.max(1, weight);
+    }
+    return out;
+  }, r);
+}
+
+/** Edge-aware luma/chroma denoise. Detail preservation controls the bilateral
+ * range threshold; color noise can be reduced more strongly than luminance. */
+export function reduceNoise(
+  doc: Document,
+  layer: Layer,
+  radius: number,
+  strength = 0.65,
+  preserveDetail = 0.55,
+  reduceColor = 0.7,
+) {
+  const r = Math.max(1, Math.min(6, Math.round(radius)));
+  const mix = Math.max(0, Math.min(1, strength));
+  const detail = Math.max(0, Math.min(1, preserveDetail));
+  const chromaMix = Math.max(0, Math.min(1, reduceColor));
+  const range = 8 + (1 - detail) * 96;
+  applyPixelFilter(doc, layer, (src) => {
+    const out = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
+    for (let y = 0; y < src.height; y += 1) for (let x = 0; x < src.width; x += 1) {
+      const target = (y * src.width + x) * 4;
+      const centerY = 0.2126 * src.data[target] + 0.7152 * src.data[target + 1] + 0.0722 * src.data[target + 2];
+      let sumY = 0;
+      let sumCb = 0;
+      let sumCr = 0;
+      let weight = 0;
+      for (let oy = -r; oy <= r; oy += 1) for (let ox = -r; ox <= r; ox += 1) {
+        const source = pixelIndex(src.width, src.height, x + ox, y + oy);
+        const red = src.data[source];
+        const green = src.data[source + 1];
+        const blue = src.data[source + 2];
+        const sampleY = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        const spatial = Math.exp(-(ox * ox + oy * oy) / Math.max(1, r * r));
+        const rangeWeight = Math.exp(-Math.abs(sampleY - centerY) / range);
+        const sampleWeight = spatial * rangeWeight;
+        sumY += sampleY * sampleWeight;
+        sumCb += (blue - sampleY) * sampleWeight;
+        sumCr += (red - sampleY) * sampleWeight;
+        weight += sampleWeight;
+      }
+      const smoothY = sumY / Math.max(1e-6, weight);
+      const smoothCb = sumCb / Math.max(1e-6, weight);
+      const smoothCr = sumCr / Math.max(1e-6, weight);
+      const sourceCb = src.data[target + 2] - centerY;
+      const sourceCr = src.data[target] - centerY;
+      const finalY = centerY * (1 - mix) + smoothY * mix;
+      const finalCb = sourceCb * (1 - chromaMix) + smoothCb * chromaMix;
+      const finalCr = sourceCr * (1 - chromaMix) + smoothCr * chromaMix;
+      out.data[target] = clamp(finalY + finalCr);
+      out.data[target + 2] = clamp(finalY + finalCb);
+      out.data[target + 1] = clamp((finalY - 0.2126 * out.data[target] - 0.0722 * out.data[target + 2]) / 0.7152);
+    }
+    return out;
+  }, r);
+}
+
+/** Procedural displacement map. Because the wave is analytic, it is fully
+ * serializable and deterministic in Actions and project files. */
+export function displace(
+  doc: Document,
+  layer: Layer,
+  amount: number,
+  scale = 48,
+  angleDegrees = 0,
+) {
+  const amplitude = Math.max(-128, Math.min(128, amount));
+  if (Math.abs(amplitude) < 0.01) return;
+  const wavelength = Math.max(4, Math.min(2048, scale));
+  const angle = angleDegrees * Math.PI / 180;
+  const directionX = Math.cos(angle);
+  const directionY = Math.sin(angle);
+  applyPixelFilter(doc, layer, (src) => {
+    const out = new ImageData(new Uint8ClampedArray(src.data.length), src.width, src.height);
+    for (let y = 0; y < src.height; y += 1) for (let x = 0; x < src.width; x += 1) {
+      const phase = (x * -directionY + y * directionX) * Math.PI * 2 / wavelength;
+      const offset = Math.sin(phase) * amplitude;
+      const source = pixelIndex(src.width, src.height, Math.round(x + directionX * offset), Math.round(y + directionY * offset));
+      const target = (y * src.width + x) * 4;
+      out.data[target] = src.data[source];
+      out.data[target + 1] = src.data[source + 1];
+      out.data[target + 2] = src.data[source + 2];
+      out.data[target + 3] = src.data[source + 3];
+    }
+    return out;
+  }, Math.ceil(Math.abs(amplitude)) + 2);
+}
+
 export function invertColors(doc: Document, layer: Layer) {
   applyPixelFilter(doc, layer, (src) => {
     const out = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
@@ -507,6 +644,9 @@ export function applySmartFilters(
     else if (filter.kind === "surface-blur") surfaceBlur(doc, layer, radius, filter.params.threshold ?? 24);
     else if (filter.kind === "median") medianFilter(doc, layer, radius);
     else if (filter.kind === "dust-scratches") dustAndScratches(doc, layer, radius, filter.params.threshold ?? 18);
+    else if (filter.kind === "reduce-noise") reduceNoise(doc, layer, radius, filter.params.strength ?? 0.65, filter.params.preserveDetail ?? 0.55, filter.params.reduceColor ?? 0.7);
+    else if (filter.kind === "lens-blur") lensBlur(doc, layer, radius, filter.params.blades ?? 6, filter.params.rotation ?? 0, filter.params.highlights ?? 0.15);
+    else if (filter.kind === "displace") displace(doc, layer, filter.params.amount ?? 12, filter.params.scale ?? 48, filter.params.angle ?? 0);
     else if (filter.kind === "maximum") maximumFilter(doc, layer, radius);
     else if (filter.kind === "minimum") minimumFilter(doc, layer, radius);
     else if (filter.kind === "invert") invertColors(doc, layer);

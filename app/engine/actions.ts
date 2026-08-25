@@ -5,7 +5,7 @@
 import type { ShapeStyle, SmartFilter, TextStyle, Transform } from "./document";
 
 export type ActionStep =
-  | { op: "fill"; layerId?: "active"; color: string }
+  | { op: "fill"; layerId?: "active"; color: string; opacity?: number }
   | { op: "clear"; layerId?: "active" }
   | { op: "invert"; layerId?: "active" }
   | { op: "blur"; layerId?: "active"; radius: number }
@@ -32,6 +32,8 @@ export type ActionStep =
 export type Action = {
   name: string;
   steps: ActionStep[];
+  /** Set for declarative actions contributed by an installed plugin. */
+  sourcePluginId?: string;
 };
 
 export class ActionRecorder {
@@ -57,6 +59,20 @@ export class ActionRecorder {
   list() {
     return this.saved.slice();
   }
+  install(action: Action, sourcePluginId: string) {
+    const installed: Action = {
+      name: action.name,
+      steps: action.steps.map((step) => ({ ...step })),
+      sourcePluginId,
+    };
+    this.saved.push(installed);
+    return installed;
+  }
+  removeFromPlugin(sourcePluginId: string) {
+    const before = this.saved.length;
+    this.saved = this.saved.filter((action) => action.sourcePluginId !== sourcePluginId);
+    return before - this.saved.length;
+  }
   remove(index: number) {
     this.saved.splice(index, 1);
   }
@@ -69,7 +85,17 @@ export class ActionRecorder {
   fromJSON(json: string) {
     try {
       const parsed = JSON.parse(json);
-      if (Array.isArray(parsed)) this.saved = parsed;
+      if (Array.isArray(parsed)) {
+        // Installed plugin actions belong to the running application, not to
+        // whichever project was just opened. Preserve the live package's
+        // current actions and discard serialized plugin copies, which could
+        // otherwise duplicate or resurrect an uninstalled package.
+        const installed = this.saved.filter((action) => action.sourcePluginId);
+        this.saved = [
+          ...parsed.filter((action) => !action?.sourcePluginId),
+          ...installed,
+        ];
+      }
     } catch {
       // ignore
     }

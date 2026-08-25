@@ -15,7 +15,9 @@ import {
   createMatrixTrcProfile,
   evaluateIccLut,
   evaluateToneCurve,
+  iccLabNormalizedToXyz,
   invertToneCurve,
+  xyzToIccLabNormalized,
   type ColorProfile,
   type IccLut3D,
   type RenderingIntent,
@@ -122,7 +124,9 @@ export function createColorTransform(
   const toPcs = (rgb: ColorVector3) => {
     if (sourceLut.lut) {
       const encoded = evaluateIccLut(sourceLut.lut, rgb);
-      return encoded.map((value) => value * ICC_XYZ_LUT_SCALE) as [number, number, number];
+      return source.connectionSpace === "Lab"
+        ? iccLabNormalizedToXyz(encoded)
+        : encoded.map((value) => value * ICC_XYZ_LUT_SCALE) as [number, number, number];
     }
     return multiplyMatrixVector(source.matrixToPcs!, [
       evaluateToneCurve(source.trc![0], rgb[0]),
@@ -134,7 +138,9 @@ export function createColorTransform(
     if (destinationLut.lut) {
       return evaluateIccLut(
         destinationLut.lut,
-        xyz.map((value) => value / ICC_XYZ_LUT_SCALE) as [number, number, number],
+        destination.connectionSpace === "Lab"
+          ? xyzToIccLabNormalized(xyz)
+          : xyz.map((value) => value / ICC_XYZ_LUT_SCALE) as [number, number, number],
       );
     }
     const linear = multiplyMatrixVector(destination.matrixFromPcs!, xyz);

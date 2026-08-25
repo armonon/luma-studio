@@ -1,6 +1,8 @@
 import JSZip from "jszip";
 import { Studio } from "./studio";
 import { Action } from "./actions";
+import { preflightRasterFile } from "./input-limits";
+import { exceedsBrowserCanvas } from "./large-documents";
 
 export type BatchProgress = (i: number, total: number, name: string) => void;
 export type BatchFailure = { name: string; message: string };
@@ -67,7 +69,8 @@ export async function runBatch(
   return { archive, succeeded, failed };
 }
 
-function loadImageFile(file: File): Promise<HTMLImageElement> {
+async function loadImageFile(file: File): Promise<HTMLImageElement> {
+  await preflightRasterFile(file, exceedsBrowserCanvas);
   const url = URL.createObjectURL(file);
   return new Promise((resolve, reject) => {
     const image = new Image();

@@ -77,15 +77,16 @@ const bentoFeatures = [
   },
 ] as const;
 
-// Mirrors AiEditOperation in app/engine/ai-edit.ts. Keep these in sync — every
-// entry here must be an operation the engine can actually dispatch.
+// The third tuple field is the actual AiEditOperation. Display labels may be
+// more precise than legacy operation ids (for example, current Expand fills
+// context inside the same canvas rather than resizing it).
 const neuralActions = [
-  ["✦", "Generative fill"],
-  ["↔", "Expand"],
-  ["⌫", "Remove"],
-  ["◐", "Relight"],
-  ["◑", "Harmonize"],
-  ["↑", "Upscale"],
+  ["✦", "Generative fill", "fill"],
+  ["↔", "Context fill", "expand"],
+  ["⌫", "Remove", "remove"],
+  ["◐", "Relight", "relight"],
+  ["◑", "Harmonize", "harmonize"],
+  ["↑", "Detail synthesis", "upscale"],
 ] as const;
 
 const creatorProfiles = [
@@ -436,9 +437,11 @@ export default function MarketingHome() {
           <p>PRECISION UNDERNEATH · SPEED ON TOP</p>
           <h2>A lightweight studio<br /><span>with a serious engine.</span></h2>
           <p>
-            Dirty-region rendering updates only what changed. Sparse tiles keep
-            memory bounded. Float masters preserve working precision, and on the
-            desktop, exports flatten through a multi-threaded native compositor.
+            Dirty-region rendering updates only what changed. Viewport paint and
+            precision layers use sparse tiles, while oversized operations fail
+            safely instead of exhausting memory. Float masters preserve working
+            precision, and desktop exports can flatten through a multi-threaded
+            native compositor.
           </p>
           <a href="/studio">Feel it in the live studio <span>→</span></a>
         </div>

@@ -5,9 +5,9 @@ packaged Tauri desktop edition. The TypeScript editing engine is shared between
 both editions; the desktop app adds native filesystem dialogs and a threaded
 Rust `f32` compositor.
 
-The product deliberately reports what it can do today. Planned native RAW,
-streaming large-document editing, and disk-installed plugins stay unavailable
-until their full user-facing paths ship.
+The product deliberately reports what it can do today. Unsupported device-link,
+CMYK/N-channel color transforms and codecs absent from the installed operating
+system remain explicit fallbacks instead of being advertised as native support.
 
 ## What is implemented
 
@@ -17,7 +17,7 @@ until their full user-facing paths ship.
 - Nondestructive levels, curves, HSL, tone, editable smart filters, soft proof,
   gamut warnings, 8/16/32-bit precision masters, sRGB, Display P3, and linear
   sRGB working spaces. ICC v2/v4 RGB matrix/TRC profiles, classic `mft1`/
-  `mft2` tables, and strict 3-channel XYZ-PCS `mAB`/`mBA` curves, matrices,
+  `mft2` tables, and strict 3-channel XYZ/Lab-PCS `mAB`/`mBA` curves, matrices,
   offsets, and 8/16-bit 3D LUTs run in the local color engine.
 - Pressure/tilt-aware brushes, full-color captured image tips with canvas and
   upload sampling, tint/stencil modes, symmetry, paint, erase, mixer, clone,
@@ -29,8 +29,9 @@ until their full user-facing paths ship.
   selection, shapes, perspective tools, crop, straighten, and transforms.
 - DNG sensor decode for uncompressed and lossless-JPEG CFA data, retained sensor
   bytes, repeatable white balance/exposure/highlight development, and `f32`
-  precision tiles. Other camera RAW formats use an explicitly labelled embedded
-  preview when one exists.
+  precision tiles. Desktop Pro develops CR3, NEF, ARW, RAF and other supported
+  camera files through the installed macOS ImageIO codecs at full resolution;
+  an explicitly labelled embedded preview remains the fallback for unsupported cameras.
 - PSD/PSB preflight, untouched-source byte passthrough, 16-bit source promotion,
   editable adjustment/text/vector metadata, smart-object payload preservation,
   resolution/guides/effects preservation, and explicit warnings for conversions.
@@ -39,8 +40,12 @@ until their full user-facing paths ship.
   export, customizable workspaces/shortcuts, contextual properties,
   PNG/JPEG/WebP export, and `.luma` project round trips.
 - Local segmentation/matting models plus authenticated GPT Image 2 masked edits,
-  bounded parallel variations, provenance metadata, cancellation, validation,
-  per-user concurrency limits, and rate limits.
+  selection-aware bounded work regions for huge documents, parallel variations,
+  provenance metadata, cancellation, validation, per-user concurrency limits,
+  and rate limits.
+- Safe persistent `.luma-plugin` packages that contribute validated Actions
+  without arbitrary code execution, plus privacy-sanitized local crash records,
+  exported diagnostics, and an emergency recovery checkpoint on fatal errors.
 
 ## Run and verify
 
@@ -90,8 +95,10 @@ sparse half/float tiles while canvas bitmaps act as display and compatibility
 mirrors. The interactive viewport recomposes only dirty screen tiles, records
 frame/tile telemetry, adapts preview resolution under load, and uses bounded
 CPU, GPU, viewport, and scratch caches. Selection-scoped filters, refinement,
-feathering, and content moves allocate work buffers and history around their
-affected regions rather than the entire document. Eligible desktop flattened
+feathering, and content moves allocate scratch work and history around their
+affected regions. The selection and layer-mask backing canvases themselves are
+still document-sized, so workflows past the single-canvas ceiling are guarded
+instead of advertised as complete until sparse alpha tiles replace them. Eligible desktop flattened
 exports send bounded raw binary tiles to `luma-core`; unsupported document
 constructs safely fall back to the shared compositor.
 
@@ -110,9 +117,9 @@ PSB, raster, RAW, and export files.
 | On-device models | Yes | Yes | Shipped |
 | Threaded native `f32` flattened export | No | Eligible documents | Shipped |
 | DNG sensor development | Yes | Yes | Shipped |
-| Non-DNG sensor decode | No | No | Planned |
-| Streaming documents beyond canvas limits | No | No | Planned |
-| Install plugins from disk | No | No | Planned |
+| Non-DNG sensor development | No | macOS codec fallback | Partial; not a complete nondestructive RAW workflow |
+| Documents beyond canvas limits | No | Tiled viewport + precision paint | Partial; selections/masks/transforms remain guarded |
+| Install declarative plugins from disk | No | Declarative Actions only | Limited plugin surface |
 
 `app/engine/edition.ts` separates permission from implementation:
 
@@ -121,6 +128,31 @@ PSB, raster, RAW, and export files.
   marked `shipped`.
 
 User interfaces must gate on `isAvailable`; tests pin this behavior.
+
+### Declarative plugin package
+
+Desktop Pro installs a data-only `.luma-plugin` file from the Assets panel. A
+package can add replayable Actions but cannot execute JavaScript or request
+filesystem/network privileges:
+
+```json
+{
+  "schema": "luma-plugin/1",
+  "manifest": {
+    "id": "example.editorial-detail",
+    "name": "Editorial Detail",
+    "version": "1.0.0",
+    "apiVersion": "0.3"
+  },
+  "actions": [{
+    "name": "Editorial Detail",
+    "steps": [
+      { "op": "convertSmartObject" },
+      { "op": "addSmartFilter", "kind": "high-pass", "params": { "radius": 3 } }
+    ]
+  }]
+}
+```
 
 ## Photoshop interchange policy
 
@@ -193,9 +225,11 @@ luma.registerPlugin({
 });
 ```
 
-Plugins are session-only, receive full document access, and must be registered
-again after reload. Import public APIs from `@/app/engine`; that entry point is
-the supported contract.
+Declarative packages are persisted by Desktop Pro and may install replayable
+Actions only. The opt-in developer scripting API can register JavaScript
+plugins for the current session; those receive full document access and are
+not a production sandbox. Import public APIs from `@/app/engine`; that entry
+point is the supported contract.
 
 ## Quality bar
 

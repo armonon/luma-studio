@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { openNativeAiSignIn, openNativeFile, saveNativeFile } from "../app/engine/native-files.ts";
+import { developNativeRaw, openNativeAiSignIn, openNativeFile, saveNativeFile } from "../app/engine/native-files.ts";
 
 test("native open packets preserve UTF-8 file names and raw bytes", async () => {
   const name = new TextEncoder().encode("café.psd");
@@ -32,4 +32,20 @@ test("native AI sign-in invokes the dedicated desktop window command", async () 
     return undefined as T;
   }), true);
   assert.equal(command, "open_ai_sign_in");
+});
+
+test("native RAW development sends a framed source and returns PNG bytes", async () => {
+  let command = "";
+  let payload: Uint8Array | undefined;
+  const file = new File([new Uint8Array([9, 8, 7])], "camera.nef");
+  const result = await developNativeRaw(file, async <T>(nextCommand: string, value?: unknown) => {
+    command = nextCommand;
+    payload = value as Uint8Array;
+    return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]) as T;
+  });
+  assert.equal(command, "develop_native_raw");
+  const nameLength = new DataView(payload!.buffer).getUint32(0, true);
+  assert.equal(new TextDecoder().decode(payload!.subarray(4, 4 + nameLength)), "camera.nef");
+  assert.deepEqual([...payload!.subarray(4 + nameLength)], [9, 8, 7]);
+  assert.equal(result?.type, "image/png");
 });

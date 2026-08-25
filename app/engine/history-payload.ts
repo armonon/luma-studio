@@ -126,6 +126,7 @@ export function cloneAiProvenance(ai: AiProvenance): AiProvenance {
         ...ai.parameters.selection,
         bounds: ai.parameters.selection.bounds ? { ...ai.parameters.selection.bounds } : undefined,
       } : undefined,
+      workRegion: ai.parameters.workRegion ? { ...ai.parameters.workRegion } : undefined,
     } : undefined,
   };
 }

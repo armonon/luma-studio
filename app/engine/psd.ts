@@ -997,6 +997,11 @@ function importedAdjustment(layer: PsdLayer) {
 
 export async function importPsd(buffer: ArrayBuffer): Promise<Document> {
   const header = inspectPhotoshopHeader(buffer);
+  if (header.channels < 1 || header.channels > 56 || header.width < 1 || header.height < 1 ||
+      header.width > 300_000 || header.height > 300_000 || ![1, 8, 16, 32].includes(header.bitsPerChannel) ||
+      ![0, 1, 2, 3, 4, 7, 8, 9].includes(header.colorMode) || exceedsBrowserCanvas(header.width, header.height)) {
+    throw new PhotoshopDecodeError(header, new Error("Photoshop document exceeds the safe import limits"));
+  }
   // ag-psd endian-swaps 16/32-bit raw channels in place while decoding. Keep
   // both the caller's bytes and our preservation source immutable.
   const originalSource = new Uint8Array(buffer.slice(0));

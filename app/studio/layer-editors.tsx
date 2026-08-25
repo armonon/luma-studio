@@ -44,8 +44,19 @@ export function SmartFilterEditor({ layer, filter, index, count, studio }: {
         <input type="range" min="0" max="100" value={Math.round(filter.opacity * 100)} onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, { opacity: Number(event.target.value) / 100 })} onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })} onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })} />
         <output>{Math.round(filter.opacity * 100)}%</output>
       </label>
-      {(filter.kind === "blur" || filter.kind === "sharpen") && parameter("Radius", "radius", 0.5, 64, 0.5, filter.kind === "blur" ? 8 : 2, "px")}
+      {(["blur", "sharpen", "high-pass", "motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum", "lens-blur", "reduce-noise"] as string[]).includes(filter.kind) && parameter("Radius", "radius", 0.5, 64, 0.5, filter.kind === "lens-blur" ? 8 : filter.kind === "blur" ? 8 : 2, "px")}
       {filter.kind === "sharpen" && parameter("Amount", "amount", 0, 3, 0.05, 0.6)}
+      {(filter.kind === "surface-blur" || filter.kind === "dust-scratches") && parameter("Threshold", "threshold", 0, 255, 1, filter.kind === "surface-blur" ? 24 : 18)}
+      {filter.kind === "motion-blur" && parameter("Angle", "angle", -180, 180, 1, 0, "°")}
+      {filter.kind === "lens-blur" && parameter("Blades", "blades", 3, 12, 1, 6)}
+      {filter.kind === "lens-blur" && parameter("Rotation", "rotation", -180, 180, 1, 0, "°")}
+      {filter.kind === "lens-blur" && parameter("Highlights", "highlights", 0, 1, 0.01, 0.15)}
+      {filter.kind === "reduce-noise" && parameter("Strength", "strength", 0, 1, 0.01, 0.65)}
+      {filter.kind === "reduce-noise" && parameter("Detail", "preserveDetail", 0, 1, 0.01, 0.55)}
+      {filter.kind === "reduce-noise" && parameter("Color", "reduceColor", 0, 1, 0.01, 0.7)}
+      {filter.kind === "displace" && parameter("Amount", "amount", -128, 128, 1, 12, "px")}
+      {filter.kind === "displace" && parameter("Scale", "scale", 4, 512, 1, 48, "px")}
+      {filter.kind === "displace" && parameter("Angle", "angle", -180, 180, 1, 0, "°")}
       {filter.kind === "desaturate" && parameter("Amount", "amount", 0, 1, 0.01, 1)}
       {filter.kind === "hue" && parameter("Degrees", "degrees", -180, 180, 1, 45, "°")}
     </div>

@@ -557,6 +557,9 @@ export type SmartFilterKind =
   | "dust-scratches"
   | "maximum"
   | "minimum"
+  | "lens-blur"
+  | "reduce-noise"
+  | "displace"
   | "invert"
   | "desaturate"
   | "hue";
@@ -589,6 +592,8 @@ export type AiProvenance = {
     controls?: AiOperationControls;
     selection?: AiSelectionGuide;
     identityReferenceLayerId?: string;
+    /** Document rectangle represented by the bounded AI input/output raster. */
+    workRegion?: { x: number; y: number; width: number; height: number; outputWidth: number; outputHeight: number };
   };
 };
 

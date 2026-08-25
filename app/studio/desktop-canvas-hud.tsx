@@ -46,6 +46,14 @@ export type SpaceDeckFeature =
     value: string;
     placeholder?: string;
     onChange: (value: string) => void;
+    /**
+     * Called once editing finishes (blur), to fold a whole typing burst into
+     * a single undo step. Every other continuous control here (range's
+     * onPointerUp/onKeyUp/onBlur) already draws this line between "live
+     * feedback" and "committed edit"; without it, onChange alone means every
+     * keystroke becomes its own history entry.
+     */
+    onCommit?: () => void;
   }
   | {
     kind: "action";
@@ -168,7 +176,13 @@ export default function DesktopCanvasHud({
           if (feature.kind === "text") return (
             <label key={feature.id} className="space-feature space-feature-text">
               <strong>{feature.label}</strong>
-              <input type="text" value={feature.value} placeholder={feature.placeholder} onChange={(event) => feature.onChange(event.target.value)} />
+              <input
+                type="text"
+                value={feature.value}
+                placeholder={feature.placeholder}
+                onChange={(event) => feature.onChange(event.target.value)}
+                onBlur={feature.onCommit}
+              />
             </label>
           );
           return (

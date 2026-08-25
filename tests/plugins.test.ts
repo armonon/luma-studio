@@ -6,6 +6,10 @@ import {
   isCompatibleApiVersion,
   type LumaPlugin,
 } from "../app/engine/studio.ts";
+import {
+  createDeclarativePlugin,
+  parseLumaPluginPackage,
+} from "../app/engine/plugin-package.ts";
 
 // Studio is DOM-optional: render and export need a canvas, but document,
 // history and plugin work do not. A bare stub is enough for these.
@@ -126,4 +130,52 @@ test("apiVersion is optional and omitting it still registers", () => {
   const s = studio();
   assert.doesNotThrow(() => s.registerPlugin(plugin("legacy")));
   s.dispose();
+});
+
+test("declarative plugin packages install actions without executing code", () => {
+  const pkg = parseLumaPluginPackage(JSON.stringify({
+    schema: "luma-plugin/1",
+    manifest: { id: "pro.detail", name: "Pro Detail", version: "1.0.0", apiVersion: LUMA_API_VERSION },
+    actions: [{
+      name: "Editorial Detail",
+      steps: [
+        { op: "convertSmartObject" },
+        { op: "addSmartFilter", kind: "high-pass", params: { radius: 3 } },
+      ],
+    }],
+  }));
+  const s = studio();
+  s.actions.start("Local action");
+  s.actions.stop();
+  s.registerPlugin(createDeclarativePlugin(pkg));
+  assert.deepEqual(s.actions.list().map((action) => action.name), ["Local action", "Editorial Detail"]);
+  assert.equal(s.actions.list()[1].sourcePluginId, "pro.detail");
+  s.actions.fromJSON(JSON.stringify([{ name: "Project action", steps: [] }, s.actions.list()[1]]));
+  assert.deepEqual(
+    s.actions.list().map((action) => action.name),
+    ["Project action", "Editorial Detail"],
+    "opening a project preserves the live plugin action without duplicating its serialized copy",
+  );
+  s.unregisterPlugin("pro.detail");
+  assert.deepEqual(s.actions.list().map((action) => action.name), ["Project action"], "unloading removes only contributed actions");
+  s.dispose();
+});
+
+test("declarative packages reject unsafe or malformed action payloads", () => {
+  const base = {
+    schema: "luma-plugin/1",
+    manifest: { id: "safe.plugin", name: "Safe", version: "1.0.0", apiVersion: LUMA_API_VERSION },
+  };
+  assert.throws(() => parseLumaPluginPackage(JSON.stringify({
+    ...base,
+    actions: [{ name: "Run code", steps: [{ op: "eval", source: "alert(1)" }] }],
+  })), /unsupported operation/);
+  assert.throws(() => parseLumaPluginPackage(JSON.stringify({
+    ...base,
+    actions: [{ name: "Bad filter", steps: [{ op: "addSmartFilter", kind: "unknown", params: {} }] }],
+  })), /filter kind/);
+  assert.throws(() => parseLumaPluginPackage(JSON.stringify({
+    ...base,
+    actions: [{ name: "NaN blur", steps: [{ op: "blur", radius: "lots" }] }],
+  })), /finite number/);
 });

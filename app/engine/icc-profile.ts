@@ -329,10 +329,14 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
   ]
     .some((signature) => tags[signature]);
   const isDeviceLink = deviceClassSignature === "link";
-  const lutToPcs = pcsSignature === "XYZ " && !isDeviceLink
+  // Lab table encoding changed between ICC v2 and v4. The lightweight path is
+  // exact for v4; older Lab LUTs stay on the explicit CMM fallback rather than
+  // being interpreted with the wrong neutral point.
+  const supportedThreeChannelPcs = pcsSignature === "XYZ " || (pcsSignature === "Lab " && bytes[8] >= 4);
+  const lutToPcs = supportedThreeChannelPcs && !isDeviceLink
     ? parseIntentLuts(view, tags, "A2B", warnings)
     : {};
-  const lutFromPcs = pcsSignature === "XYZ " && !isDeviceLink
+  const lutFromPcs = supportedThreeChannelPcs && !isDeviceLink
     ? parseIntentLuts(view, tags, "B2A", warnings)
     : {};
   const hasParsedLut = Object.keys(lutToPcs).length > 0 || Object.keys(lutFromPcs).length > 0;
@@ -344,7 +348,7 @@ export function parseIccProfile(input: ArrayBuffer | ArrayBufferView): ColorProf
   if (hasLut && !hasParsedLut && !hasMatrixTransform) {
     warnings.push(isDeviceLink
       ? "Device-link transforms connect two device encodings directly and cannot be treated as PCS transforms."
-      : "No supported three-channel RGB-to-XYZ LUT transform could be decoded; unsupported profiles still require a full ICC CMM.");
+      : "No supported three-channel RGB-to-PCS LUT transform could be decoded; unsupported profiles still require a full ICC CMM.");
   }
 
   const headerProfileId = Array.from(bytes.subarray(84, 100), (value) => value.toString(16).padStart(2, "0")).join("");
@@ -886,6 +890,40 @@ function readS15Fixed16(view: DataView, offset: number) {
 }
 
 export const ICC_XYZ_LUT_SCALE = 65535 / 32768;
+
+/** ICC normalized Lab encoding: L-star maps 0..100 to 0..1 and a-star/b-star map
+ * -128..127 to 0..1. Values outside the PCS gamut are clipped by LUT tables. */
+export function iccLabNormalizedToXyz(encoded: ColorVector3): [number, number, number] {
+  const lightness = clampUnit(encoded[0]) * 100;
+  const a = clampUnit(encoded[1]) * 255 - 128;
+  const b = clampUnit(encoded[2]) * 255 - 128;
+  const fy = (lightness + 16) / 116;
+  const fx = fy + a / 500;
+  const fz = fy - b / 200;
+  const delta = 6 / 29;
+  const inverse = (value: number) => value > delta ? value ** 3 : 3 * delta * delta * (value - 4 / 29);
+  return [
+    D50_WHITE[0] * inverse(fx),
+    D50_WHITE[1] * inverse(fy),
+    D50_WHITE[2] * inverse(fz),
+  ];
+}
+
+export function xyzToIccLabNormalized(xyz: ColorVector3): [number, number, number] {
+  const delta = 6 / 29;
+  const forward = (value: number) => value > delta ** 3 ? Math.cbrt(value) : value / (3 * delta * delta) + 4 / 29;
+  const fx = forward(xyz[0] / D50_WHITE[0]);
+  const fy = forward(xyz[1] / D50_WHITE[1]);
+  const fz = forward(xyz[2] / D50_WHITE[2]);
+  const lightness = 116 * fy - 16;
+  const a = 500 * (fx - fy);
+  const b = 200 * (fy - fz);
+  return [
+    clampUnit(lightness / 100),
+    clampUnit((a + 128) / 255),
+    clampUnit((b + 128) / 255),
+  ];
+}
 
 /** Evaluates a decoded ICC LUT in normalized table coordinates. */
 export function evaluateIccLut(lut: IccLut3D, input: ColorVector3): [number, number, number] {

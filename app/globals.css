@@ -3682,7 +3682,7 @@ body:has(.spatial-studio) {
 
 .spatial-layer {
   display: grid;
-  grid-template-columns: 38px 1fr 18px;
+  grid-template-columns: 38px 1fr 40px;
   align-items: center;
   gap: 8px;
   width: calc(100% - 14px);
@@ -3694,6 +3694,53 @@ body:has(.spatial-studio) {
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.spatial-layer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/*
+ * Flex items default to `min-width: auto`, which resolves to their
+ * min-content size — a single glyph, in this case — and wins over an
+ * explicit `width` once the row runs short on space. Without this, both
+ * icons quietly shrank to a few px regardless of the width set below.
+ */
+.spatial-layer-actions > i {
+  flex-shrink: 0;
+}
+
+/*
+ * The delete affordance stays out of the way until you point at the row you
+ * mean to remove, but unlike the header's collapse-on-hover icons (which hide
+ * behind a hover target elsewhere on the panel), this one lives on the exact
+ * element it acts on, so pointing at a layer *is* discovering the control.
+ * Keyboard/touch users still reach it: it participates in normal focus order
+ * and stays visible while the row itself is active or focus-visible.
+ */
+.spatial-layer i.spatial-layer-delete {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  color: #a7566a;
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.spatial-layer:hover i.spatial-layer-delete,
+.spatial-layer.active i.spatial-layer-delete,
+.spatial-layer i.spatial-layer-delete:focus-visible {
+  opacity: 1;
+}
+
+.spatial-layer i.spatial-layer-delete:hover {
+  background: rgba(226, 92, 92, 0.18);
+  color: #e25c5c;
 }
 
 .spatial-layer:hover,
@@ -12008,11 +12055,52 @@ html[data-luma-platform="desktop"] .spatial-inspector > .glass-card {
   display: none !important;
 }
 
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel] > [data-contextual-panel],
+html[data-luma-platform="desktop"] .spatial-inspector[data-context-panel] > .contextual-panel-host {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="document"] > [data-contextual-panel="document"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="channels"] > [data-contextual-panel="channels"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="structure"] > [data-contextual-panel="structure"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="assets"] > [data-contextual-panel="assets"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="selection"] > [data-contextual-panel="selection"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="mask"] > [data-contextual-panel="mask"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="raw"] > [data-contextual-panel="raw"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="curves"] > [data-contextual-panel="curves"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="levels"] > [data-contextual-panel="levels"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="hsl"] > [data-contextual-panel="hsl"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="pro-adjustment"] > [data-contextual-panel="pro-adjustment"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="tone"] > [data-contextual-panel="tone"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="paint"] > [data-contextual-panel="paint"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="vector"] > [data-contextual-panel="vector"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="transform"] > [data-contextual-panel="transform"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="measure"] > [data-contextual-panel="measure"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="neural"] > [data-contextual-panel="neural"],
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab][data-context-panel="actions"] > [data-contextual-panel="actions"] {
+  order: 3;
+  display: block !important;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  border-top: 1px solid #2a2d33;
+  background: transparent;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector > .contextual-panel-host > .glass-card {
+  display: block !important;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
   order: 1;
   display: flex !important;
-  height: 57%;
-  min-height: 360px;
+  height: 42%;
+  min-height: 260px;
   flex: 0 0 auto;
   flex-direction: column;
   border-bottom: 1px solid #2a2d33;
@@ -12023,10 +12111,48 @@ html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .desktop-prope
   order: 2;
   display: block !important;
   min-height: 0;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  max-height: 290px;
   overflow: auto;
   background: transparent;
 }
+
+html[data-luma-platform="desktop"] .desktop-context-panel-picker {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 9px;
+  color: #858b95;
+  font-size: 9px;
+}
+
+html[data-luma-platform="desktop"] .desktop-context-panel-picker select {
+  min-width: 0;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: #191c21;
+  color: #dfe3e9;
+  font: inherit;
+}
+
+.unsaved-document-dialog {
+  width: min(440px, calc(100vw - 32px));
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: #15171c;
+  color: #eef1f6;
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.55);
+}
+
+.unsaved-document-dialog header strong { font-size: 15px; }
+.unsaved-document-dialog p { margin: 12px 0 20px; color: #9ca3ae; font-size: 12px; line-height: 1.5; }
+.unsaved-document-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+.unsaved-document-dialog button { min-height: 32px; padding: 0 13px; border-radius: 7px; }
+.unsaved-document-dialog button.danger { color: #ff9e9e; }
+.unsaved-document-dialog button.primary { background: #237de9; color: white; }
 
 html[data-luma-platform="desktop"] .spatial-inspector .glass-card {
   width: 100%;

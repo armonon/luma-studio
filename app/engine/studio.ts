@@ -177,6 +177,7 @@ import {
   type AiOperationControls,
   type AiSelectionGuide,
 } from "./ai-edit";
+import { planAiWorkRegion } from "./ai-work-region";
 import {
   createGradientPixels,
   createPatternPixels,
@@ -291,6 +292,8 @@ type DocumentSession = {
   name: string;
   doc: Document;
   history: OperationHistory<HistoryEntry>;
+  nativePath?: string;
+  savedHistoryNodeId: string;
 };
 
 export const HISTORY_LIMIT = 80;
@@ -494,6 +497,7 @@ export class Studio {
   private sessions: DocumentSession[] = [];
   private activeSessionId = "";
   private liveSnapshots = new Map<string, LayerSnapshot>();
+  private liveGlobalLightDocument: Document | null = null;
   private plugins = new Map<string, { plugin: LumaPlugin; dispose?: () => void }>();
   private tileBacking = IndexedDbTileBacking.supported() ? new IndexedDbTileBacking() : null;
   private rawSessions = new Map<string, DngDevelopSession>();
@@ -520,6 +524,7 @@ export class Studio {
       name: "Untitled",
       doc: this.doc,
       history: this.history,
+      savedHistoryNodeId: this.history.current,
     };
     this.sessions = [session];
     this.activeSessionId = session.id;
@@ -1009,7 +1014,51 @@ export class Studio {
       id: session.id,
       name: session.name,
       active: session.id === this.activeSessionId,
+      nativePath: session.nativePath,
+      dirty: session.history.current !== session.savedHistoryNodeId,
     }));
+  }
+
+  activeDocumentState() {
+    this.saveActiveSession();
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId)!;
+    return {
+      id: session.id,
+      name: session.name,
+      nativePath: session.nativePath,
+      dirty: session.history.current !== session.savedHistoryNodeId,
+    };
+  }
+
+  dirtyDocuments() {
+    this.saveActiveSession();
+    return this.sessions.filter((session) => session.history.current !== session.savedHistoryNodeId).map((session) => ({
+      id: session.id,
+      name: session.name,
+      nativePath: session.nativePath,
+    }));
+  }
+
+  markDocumentSaved(id = this.activeSessionId, nativePath?: string) {
+    this.saveActiveSession();
+    const session = this.sessions.find((candidate) => candidate.id === id);
+    if (!session) return false;
+    session.savedHistoryNodeId = session.history.current;
+    if (nativePath) {
+      session.nativePath = nativePath;
+      const fileName = nativePath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "");
+      if (fileName) session.name = fileName;
+    }
+    this.emit();
+    return true;
+  }
+
+  setDocumentNativePath(id: string, nativePath?: string) {
+    const session = this.sessions.find((candidate) => candidate.id === id);
+    if (!session) return false;
+    session.nativePath = nativePath;
+    this.emit();
+    return true;
   }
 
   switchDocument(id: string) {
@@ -1075,6 +1124,8 @@ export class Studio {
       current.name = name;
       current.doc = doc;
       current.history = this.createSessionHistory();
+      current.savedHistoryNodeId = current.history.current;
+      current.nativePath = undefined;
       this.doc = doc;
       this.history = current.history;
       this.checkpointDocumentSurfaces(true);
@@ -1085,7 +1136,9 @@ export class Studio {
       name,
       doc,
       history: this.createSessionHistory(),
+      savedHistoryNodeId: "",
     };
+    session.savedHistoryNodeId = session.history.current;
     this.sessions.push(session);
     this.activeSessionId = session.id;
     this.doc = doc;
@@ -1100,7 +1153,10 @@ export class Studio {
     this.installDocument(next, "Untitled");
     this.history = this.createSessionHistory();
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
-    if (session) session.history = this.history;
+    if (session) {
+      session.history = this.history;
+      session.savedHistoryNodeId = this.history.current;
+    }
     this.requestRender();
     this.emit();
   }
@@ -1250,6 +1306,7 @@ export class Studio {
   }
 
   perspectiveCrop(quad: Quad) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
     const before = cloneDocument(this.doc);
     const composite = newCanvas(this.doc.width, this.doc.height);
     renderClean(this.doc, composite);
@@ -1350,6 +1407,7 @@ export class Studio {
     to: string,
     type: "linear" | "radial" = "linear",
   ) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     return this.applyGeneratedFill(
       layerId,
       createGradientPixels(this.doc.width, this.doc.height, start, end, from, to, type),
@@ -1358,6 +1416,7 @@ export class Studio {
   }
 
   patternFill(layerId: string, kind: PatternKind, foreground: string, background: string, scale = 16) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     return this.applyGeneratedFill(
       layerId,
       createPatternPixels(this.doc.width, this.doc.height, kind, foreground, background, scale),
@@ -1367,7 +1426,7 @@ export class Studio {
 
   perspectiveWarpLayer(layerId: string, quad: Quad) {
     const layer = this.findLayer(layerId);
-    if (!layer?.bitmap || layer.locked) return false;
+    if (!layer?.bitmap || layer.locked || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     const before = [snapshotLayer(layer)];
     const source = layer.bitmap.getContext("2d")!.getImageData(0, 0, layer.bitmap.width, layer.bitmap.height);
     const warped = warpToQuadrilateral(
@@ -1562,6 +1621,7 @@ export class Studio {
   }
 
   selectTextMask(text: string, x: number, y: number, font: string, vertical = false) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     const before = cloneSelection(this.doc.selection);
     selectText(this.doc, text, x, y, font, "replace", vertical);
     const after = cloneSelection(this.doc.selection);
@@ -1584,7 +1644,7 @@ export class Studio {
     const sx = width / this.doc.width;
     const sy = height / this.doc.height;
     for (const layer of this.doc.layers) {
-      if (layer.bitmap) {
+      if (layer.bitmap && !exceedsBrowserCanvas(width, height)) {
         const bitmap = newCanvas(width, height);
         bitmap.getContext("2d")!.drawImage(layer.bitmap, 0, 0, width, height);
         layer.bitmap = bitmap;
@@ -1986,9 +2046,13 @@ export class Studio {
       this.doc.width = img.naturalWidth;
       this.doc.height = img.naturalHeight;
     }
-    const bitmap = newCanvas(this.doc.width, this.doc.height);
+    const tiledDocument = exceedsBrowserCanvas(this.doc.width, this.doc.height);
+    const bitmap = newCanvas(
+      tiledDocument ? img.naturalWidth : this.doc.width,
+      tiledDocument ? img.naturalHeight : this.doc.height,
+    );
     const context = bitmap.getContext("2d")!;
-    if (fit) {
+    if (fit && !tiledDocument) {
       const rect = fitImageRect(img.naturalWidth, img.naturalHeight, this.doc.width, this.doc.height);
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = "high";
@@ -1997,6 +2061,10 @@ export class Studio {
       context.drawImage(img, 0, 0);
     }
     const layer = createRasterLayer(name, bitmap);
+    if (fit && tiledDocument) {
+      const rect = fitImageRect(img.naturalWidth, img.naturalHeight, this.doc.width, this.doc.height);
+      layer.transform = { ...layer.transform, tx: rect.x, ty: rect.y, sx: rect.scale, sy: rect.scale };
+    }
     layer.source = source ? { ...source } : undefined;
     layer.surface = this.surfaceFromCanvas(bitmap);
     this.commitStructural(`${name} imported`, () => this.doc.layers.unshift(layer));
@@ -2344,7 +2412,9 @@ export class Studio {
     const layer = this.findLayer(layerId);
     if (layer?.locked) return;
     if (!layer?.effects?.some((effect) => effect.id === effectId)) return;
-    const before: LayerSnapshot = { layerId, effects: cloneEffects(layer.effects) };
+    const key = `layer-effect:${layerId}:${effectId}`;
+    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId, effects: cloneEffects(layer.effects) };
+    this.liveSnapshots.delete(key);
     layer.effects = layer.effects.map((effect) =>
       effect.id === effectId ? { ...effect, ...patch } : effect);
     this.commit({
@@ -2353,6 +2423,27 @@ export class Studio {
       after: [{ layerId, effects: cloneEffects(layer.effects) }],
     });
     this.requestRender();
+  }
+
+  liveUpdateLayerEffect(layerId: string, effectId: string, patch: Partial<Omit<LayerEffect, "id" | "kind">>) {
+    const layer = this.findLayer(layerId);
+    if (layer?.locked || !layer?.effects?.some((effect) => effect.id === effectId)) return false;
+    const key = `layer-effect:${layerId}:${effectId}`;
+    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId, effects: cloneEffects(layer.effects) });
+    layer.effects = layer.effects.map((effect) => effect.id === effectId ? { ...effect, ...patch } : effect);
+    this.requestRender();
+    return true;
+  }
+
+  commitLiveLayerEffect(layerId: string, effectId: string) {
+    const layer = this.findLayer(layerId);
+    const key = `layer-effect:${layerId}:${effectId}`;
+    const before = this.liveSnapshots.get(key);
+    if (!layer?.effects || !before) return false;
+    this.liveSnapshots.delete(key);
+    this.commit({ label: "Layer effect changed", before: [before], after: [{ layerId, effects: cloneEffects(layer.effects) }] });
+    this.requestRender();
+    return true;
   }
 
   addDropShadow(layerId: string) {
@@ -2478,7 +2569,7 @@ export class Studio {
    */
   async computeSubjectMask(layerId: string, onProgress?: (message: string, pct: number) => void) {
     const layer = this.findLayer(layerId);
-    if (!layer) return null;
+    if (!layer || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
     const source = newCanvas(this.doc.width, this.doc.height);
     const ctx = source.getContext("2d")!;
     drawLayerContentManaged(ctx, layer);
@@ -2530,7 +2621,7 @@ export class Studio {
    */
   createLayersFromStyle(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer?.effects?.length || layer.locked) return null;
+    if (!layer?.effects?.length || layer.locked || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
     const { layers: plan, unsplittable } = planCreateLayers(layer);
     if (!plan.length) return { created: 0, kept: unsplittable.length };
 
@@ -2602,8 +2693,9 @@ export class Studio {
   setGlobalLight(patch: Partial<GlobalLight>) {
     const current = resolvedGlobalLight(this.doc);
     const next = { ...current, ...patch };
-    if (next.angle === current.angle && next.altitude === current.altitude) return;
-    const before = cloneDocument(this.doc);
+    if (!this.liveGlobalLightDocument && next.angle === current.angle && next.altitude === current.altitude) return;
+    const before = this.liveGlobalLightDocument ?? cloneDocument(this.doc);
+    this.liveGlobalLightDocument = null;
     this.doc.globalLight = next;
     this.commit({
       label: "Global light",
@@ -2612,6 +2704,15 @@ export class Studio {
       documentBefore: before,
       documentAfter: cloneDocument(this.doc),
     });
+    this.requestRender();
+  }
+
+  liveUpdateGlobalLight(patch: Partial<GlobalLight>) {
+    const current = resolvedGlobalLight(this.doc);
+    const next = { ...current, ...patch };
+    if (next.angle === current.angle && next.altitude === current.altitude) return;
+    if (!this.liveGlobalLightDocument) this.liveGlobalLightDocument = cloneDocument(this.doc);
+    this.doc.globalLight = next;
     this.requestRender();
   }
 
@@ -2664,6 +2765,7 @@ export class Studio {
   }
 
   addFrame(x: number, y: number, width: number, height: number, ellipse = false) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
     const group = createGroupLayer(ellipse ? "Ellipse frame" : "Rectangle frame");
     const mask = newCanvas(this.doc.width, this.doc.height);
     const maskContext = mask.getContext("2d")!;
@@ -2746,14 +2848,18 @@ export class Studio {
   setLayerProp<K extends keyof Layer>(id: string, key: K, value: Layer[K], label?: string) {
     const layer = this.findLayer(id);
     if (!layer) return;
-    const before: LayerSnapshot = { layerId: id };
+    const liveKey = `layer-prop:${id}:${String(key)}`;
+    const liveBefore = this.liveSnapshots.get(liveKey);
+    if (!liveBefore && Object.is(layer[key], value)) return;
+    const before: LayerSnapshot = liveBefore ?? { layerId: id };
+    this.liveSnapshots.delete(liveKey);
     const after: LayerSnapshot = { layerId: id };
     if (key === "opacity" || key === "fillOpacity" || key === "blend" || key === "visible" || key === "name" || key === "locked" || key === "clipping") {
-      (before as Record<string, unknown>)[key as string] = layer[key];
+      if (!liveBefore) (before as Record<string, unknown>)[key as string] = layer[key];
       (after as Record<string, unknown>)[key as string] = value;
     }
     if (key === "fillOpacity") {
-      before.fillOpacity = layer.fillOpacity ?? null;
+      if (!liveBefore) before.fillOpacity = layer.fillOpacity ?? null;
       after.fillOpacity = value as number;
     }
     if (key === "blend") {
@@ -2766,6 +2872,18 @@ export class Studio {
     layer[key] = value;
     this.commit({ label: label || `${String(key)} changed`, before: [before], after: [after] });
     this.requestRender();
+  }
+
+  liveUpdateLayerProp<K extends "opacity" | "fillOpacity">(id: string, key: K, value: Layer[K]) {
+    const layer = this.findLayer(id);
+    if (!layer || layer.locked) return false;
+    const liveKey = `layer-prop:${id}:${String(key)}`;
+    if (!this.liveSnapshots.has(liveKey)) {
+      this.liveSnapshots.set(liveKey, { layerId: id, [key]: layer[key] ?? null } as LayerSnapshot);
+    }
+    layer[key] = value;
+    this.requestRender();
+    return true;
   }
 
   setIdentityReference(id: string | null) {
@@ -2950,7 +3068,9 @@ export class Studio {
     const layer = this.findLayer(id);
     if (!layer || layer.locked) return;
     const key = `transform:${id}`;
-    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? { layerId: id, transform: { ...layer.transform } };
+    const liveBefore = this.liveSnapshots.get(key);
+    if (!liveBefore && Object.entries(patch).every(([name, value]) => Object.is(layer.transform[name as keyof Transform], value))) return;
+    const before: LayerSnapshot = liveBefore ?? { layerId: id, transform: { ...layer.transform } };
     this.liveSnapshots.delete(key);
     layer.transform = { ...layer.transform, ...patch };
     const after: LayerSnapshot = { layerId: id, transform: { ...layer.transform } };
@@ -2975,7 +3095,11 @@ export class Studio {
   updateText(id: string, patch: Partial<TextStyle>) {
     const layer = this.findLayer(id);
     if (!layer || !layer.text || layer.locked) return;
-    const before: LayerSnapshot = { layerId: id, text: { ...layer.text } };
+    const key = `text:${id}`;
+    const liveBefore = this.liveSnapshots.get(key);
+    if (!liveBefore && Object.entries(patch).every(([name, value]) => Object.is(layer.text![name as keyof TextStyle], value))) return;
+    const before: LayerSnapshot = liveBefore ?? { layerId: id, text: { ...layer.text } };
+    this.liveSnapshots.delete(key);
     layer.text = { ...layer.text, ...patch };
     const after: LayerSnapshot = { layerId: id, text: { ...layer.text } };
     this.commit({ label: "Text updated", before: [before], after: [after] });
@@ -2983,14 +3107,46 @@ export class Studio {
     this.requestRender();
   }
 
+  /**
+   * Per-keystroke text edits, without a history entry per keystroke.
+   *
+   * Mirrors liveUpdateTransform: the first call in a typing burst snapshots
+   * the pre-edit text as the eventual undo "before", every call after that
+   * just mutates and re-renders, and the caller commits once — on blur — via
+   * updateText, which consumes that snapshot. Without this, every character
+   * typed became its own undo step, so Cmd+Z undid one letter at a time
+   * instead of the edit as a whole.
+   */
+  liveUpdateText(id: string, patch: Partial<TextStyle>) {
+    const layer = this.findLayer(id);
+    if (!layer || !layer.text || layer.locked) return;
+    const key = `text:${id}`;
+    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, text: { ...layer.text } });
+    layer.text = { ...layer.text, ...patch };
+    this.requestRender();
+  }
+
   updateShape(id: string, patch: Partial<ShapeStyle>) {
     const layer = this.findLayer(id);
     if (!layer || !layer.shape || layer.locked) return;
-    const before: LayerSnapshot = { layerId: id, shape: { ...layer.shape } };
+    const key = `shape:${id}`;
+    const liveBefore = this.liveSnapshots.get(key);
+    if (!liveBefore && Object.entries(patch).every(([name, value]) => Object.is(layer.shape![name as keyof ShapeStyle], value))) return;
+    const before: LayerSnapshot = liveBefore ?? { layerId: id, shape: { ...layer.shape } };
+    this.liveSnapshots.delete(key);
     layer.shape = { ...layer.shape, ...patch };
     const after: LayerSnapshot = { layerId: id, shape: { ...layer.shape } };
     this.commit({ label: "Shape updated", before: [before], after: [after] });
     this.actions.push({ op: "updateShape", shape: { ...layer.shape } });
+    this.requestRender();
+  }
+
+  liveUpdateShape(id: string, patch: Partial<ShapeStyle>) {
+    const layer = this.findLayer(id);
+    if (!layer || !layer.shape || layer.locked) return;
+    const key = `shape:${id}`;
+    if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, shape: { ...layer.shape } });
+    layer.shape = { ...layer.shape, ...patch };
     this.requestRender();
   }
 
@@ -3020,6 +3176,10 @@ export class Studio {
     this.liveSnapshots.delete(key);
     applyAdjustment(layer, kind, params);
     const after = snapshotForAdjustment(layer, kind);
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      this.requestRender();
+      return;
+    }
     this.commit({ label: adjustmentLabel(kind), before: [before], after: [after] });
     this.requestRender();
   }
@@ -3245,6 +3405,7 @@ export class Studio {
   beginStroke(layerId: string, params: BrushParams, point: BrushPoint) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
+    if ((params.mode === "mask-add" || params.mode === "mask-remove") && exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
     const localPoint = this.layerStrokePoint(layer, params, point);
     if (!localPoint) return;
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
@@ -3642,7 +3803,7 @@ export class Studio {
     }
   }
 
-  fillLayer(layerId: string, color: string) {
+  fillLayer(layerId: string, color: string, opacity = 1) {
     const layer = this.findLayer(layerId);
     if (!layer || layer.kind !== "raster" || !layer.bitmap || layer.locked) return;
     const region = filterRegionForSelection(this.doc, layer);
@@ -3651,11 +3812,14 @@ export class Studio {
     const before = ctx.getImageData(region.x, region.y, region.width, region.height);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const fillOpacity = Math.max(0, Math.min(1, Number.isFinite(opacity) ? opacity : 1));
     if (this.doc.selection) {
       const scratch = newCanvas(region.width, region.height);
       const sctx = scratch.getContext("2d")!;
       sctx.fillStyle = color;
+      sctx.globalAlpha = fillOpacity;
       sctx.fillRect(0, 0, region.width, region.height);
+      sctx.globalAlpha = 1;
       sctx.globalCompositeOperation = "destination-in";
       const mask = newCanvas(region.width, region.height);
       const maskData = this.selectionTileForLayer(layer, region.x, region.y, region.width, region.height);
@@ -3665,6 +3829,7 @@ export class Studio {
       ctx.drawImage(scratch, region.x, region.y);
     } else {
       ctx.fillStyle = color;
+      ctx.globalAlpha = fillOpacity;
       ctx.fillRect(region.x, region.y, region.width, region.height);
     }
     ctx.restore();
@@ -3678,7 +3843,7 @@ export class Studio {
       after: [],
       pixelPatches: [{ layerId, target: "bitmap", x: region.x, y: region.y, before, after }],
     });
-    this.actions.push({ op: "fill", color });
+    this.actions.push({ op: "fill", color, opacity: fillOpacity });
     this.requestRender();
   }
 
@@ -3718,7 +3883,7 @@ export class Studio {
 
   invertMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer) return;
+    if (!layer || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
     const before = [snapshotLayer(layer)];
     invertMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask inverted", before, after: [snapshotLayer(layer)] });
@@ -3744,6 +3909,7 @@ export class Studio {
     if (!layer || layer.kind !== "raster" || !layer.bitmap) {
       throw new Error("Neural subject needs a raster layer");
     }
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) throw new Error("Sparse layer masks are not available for this document size yet");
     try {
       const { neuralMatte } = await import("./neural");
       const matte = await neuralMatte(layer.bitmap, onProgress);
@@ -3788,19 +3954,68 @@ export class Studio {
   ) {
     const source = this.findLayer(layerId);
     if (!source || source.kind === "group") throw new Error("Select a content layer");
-    const composite = this.flatten();
+    const work = planAiWorkRegion(
+      this.doc.width,
+      this.doc.height,
+      this.doc.selection?.bounds,
+      this.displayViewport,
+    );
+    const composite = newCanvas(work.outputWidth, work.outputHeight);
+    renderViewport(this.doc, composite, {
+      x: work.x,
+      y: work.y,
+      width: work.width,
+      height: work.height,
+      zoom: work.outputWidth / work.width,
+      outputWidth: work.outputWidth,
+      outputHeight: work.outputHeight,
+      cssScale: work.outputWidth / work.width,
+      devicePixelRatio: 1,
+    }, {
+      checkerboard: false,
+      selectionOverlay: false,
+      proofing: false,
+      cacheRevision: this.renderRevision,
+      hierarchyRevision: this.layerHierarchyRevision,
+    });
     const image = await canvasToBlob(composite);
     const identityLayer = this.doc.layers.find((layer) => layer.identityReference && layer.id !== layerId);
-    const referenceBlob = identityLayer ? await canvasToBlob(rasterizeLayer(this.doc, identityLayer)) : undefined;
+    let referenceBlob: Blob | undefined;
+    if (identityLayer) {
+      const reference = newCanvas(work.outputWidth, work.outputHeight);
+      renderViewport({ ...this.doc, layers: [identityLayer], selection: null }, reference, {
+        x: work.x,
+        y: work.y,
+        width: work.width,
+        height: work.height,
+        zoom: work.outputWidth / work.width,
+        outputWidth: work.outputWidth,
+        outputHeight: work.outputHeight,
+        cssScale: work.outputWidth / work.width,
+        devicePixelRatio: 1,
+      }, { checkerboard: false, selectionOverlay: false, proofing: false });
+      referenceBlob = await canvasToBlob(reference);
+    }
     let maskBlob: Blob | undefined;
     let selectionGuide: AiSelectionGuide = { mode: "none" };
     if (this.doc.selection) {
-      const input = this.doc.selection.mask.getContext("2d")!.getImageData(0, 0, this.doc.width, this.doc.height);
-      const alpha = new Uint8Array(this.doc.width * this.doc.height);
+      const localMask = newCanvas(work.outputWidth, work.outputHeight);
+      const localContext = localMask.getContext("2d")!;
+      localContext.setTransform(
+        work.outputWidth / work.width,
+        0,
+        0,
+        work.outputHeight / work.height,
+        -work.x * work.outputWidth / work.width,
+        -work.y * work.outputHeight / work.height,
+      );
+      localContext.drawImage(this.doc.selection.mask, 0, 0);
+      const input = localContext.getImageData(0, 0, work.outputWidth, work.outputHeight);
+      const alpha = new Uint8Array(work.outputWidth * work.outputHeight);
       for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = input.data[pixel * 4 + 3];
-      const editMask = selectionAlphaToEditMask(alpha, this.doc.width, this.doc.height);
-      const mask = newCanvas(this.doc.width, this.doc.height);
-      const output = mask.getContext("2d")!.createImageData(this.doc.width, this.doc.height);
+      const editMask = selectionAlphaToEditMask(alpha, work.outputWidth, work.outputHeight);
+      const mask = newCanvas(work.outputWidth, work.outputHeight);
+      const output = mask.getContext("2d")!.createImageData(work.outputWidth, work.outputHeight);
       output.data.set(editMask.data);
       mask.getContext("2d")!.putImageData(output, 0, 0);
       maskBlob = await canvasToBlob(mask);
@@ -3829,8 +4044,15 @@ export class Studio {
       onVariation: () => options.onVariation?.(++completed, total),
     });
     const layers = await Promise.all(results.map(async (result) => {
-      const bitmap = await blobToCanvas(result.image, this.doc.width, this.doc.height);
+      const bitmap = await blobToCanvas(result.image, work.outputWidth, work.outputHeight);
       const layer = createRasterLayer(`AI · ${operation}${total > 1 ? ` · ${result.index + 1}` : ""}`, bitmap);
+      layer.transform = {
+        tx: work.x,
+        ty: work.y,
+        sx: work.width / work.outputWidth,
+        sy: work.height / work.outputHeight,
+        rotation: 0,
+      };
       layer.surface = this.surfaceFromCanvas(bitmap);
       const config = normalizeAiEditConfig({
         operation,
@@ -3864,6 +4086,7 @@ export class Studio {
           controls: config.controls,
           selection: config.selection,
           identityReferenceLayerId: identityLayer?.id,
+          workRegion: { ...work },
         },
       };
       return layer;
@@ -3922,7 +4145,7 @@ export class Studio {
 
   autoLumaMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
+    if (!layer || layer.kind !== "raster" || !layer.bitmap || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return;
     const before = [snapshotLayer(layer)];
     if (!autoLumaMaskInPlace(layer, this.doc.width, this.doc.height)) return;
     this.commit({ label: "Auto subject mask", before, after: [snapshotLayer(layer)] });
@@ -3937,24 +4160,33 @@ export class Studio {
   }
 
   selectRect(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection", () => selectRect(this.doc, x, y, w, h, mode, feather));
+    return true;
   }
   selectEllipse(x: number, y: number, w: number, h: number, mode: SelectionMode = "replace", feather = 0) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection (ellipse)", () => selectEllipse(this.doc, x, y, w, h, mode, feather));
+    return true;
   }
   selectLasso(points: Array<{ x: number; y: number }>, mode: SelectionMode = "replace", feather = 0) {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Selection (lasso)", () => selectLasso(this.doc, points, mode, feather));
+    return true;
   }
   selectByColor(layerId: string, x: number, y: number, tolerance: number, mode: SelectionMode = "replace", contiguous = true) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind !== "raster" || !layer.bitmap) return;
+    if (!layer || layer.kind !== "raster" || !layer.bitmap || exceedsBrowserCanvas(this.doc.width, this.doc.height) || layer.bitmap.width * layer.bitmap.height > 16_000_000) return false;
     const documentLayer = newCanvas(this.doc.width, this.doc.height);
     drawLayerContentManaged(documentLayer.getContext("2d")!, layer);
     this.commitSelection("Magic wand", () => selectByColor(this.doc, documentLayer, x, y, tolerance, mode, contiguous));
+    return true;
   }
   selectAll() {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Select all", () => selectAll(this.doc));
     this.actions.push({ op: "selectAll" });
+    return true;
   }
   deselect() {
     if (!this.doc.selection) return;
@@ -3962,8 +4194,10 @@ export class Studio {
     this.actions.push({ op: "deselect" });
   }
   invertSelectionArea() {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
     this.commitSelection("Invert selection", () => invertSelection(this.doc));
     this.actions.push({ op: "invertSelection" });
+    return true;
   }
   featherSelection(radius: number) {
     this.commitSelection(`Feather ${radius}px`, () => featherSelection(this.doc, radius));
@@ -4028,7 +4262,7 @@ export class Studio {
     let nextTarget = activeLayerId;
     switch (step.op) {
       case "fill":
-        if (activeLayerId) this.fillLayer(activeLayerId, step.color);
+        if (activeLayerId) this.fillLayer(activeLayerId, step.color, step.opacity ?? 1);
         break;
       case "clear":
         if (activeLayerId) this.clearPixels(activeLayerId);

@@ -18,6 +18,7 @@ export type StudioCommand =
   // File
   | "open"
   | "save"
+  | "save-as"
   | "export"
   // Edit
   | "undo"
@@ -86,6 +87,7 @@ export const DESKTOP_MENU: MenuSection[] = [
     items: [
       { kind: "command", id: "open", label: "Open…", accelerator: "CmdOrCtrl+O" },
       { kind: "command", id: "save", label: "Save", accelerator: "CmdOrCtrl+S" },
+      { kind: "command", id: "save-as", label: "Save As…", accelerator: "CmdOrCtrl+Shift+S" },
       { kind: "separator" },
       { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+E" },
       { kind: "separator" },

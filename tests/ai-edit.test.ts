@@ -13,6 +13,24 @@ import {
   selectionAlphaToEditMask,
 } from "../app/engine/ai-edit.ts";
 import { getLocalSemanticCapabilities, warmNeural } from "../app/engine/neural.ts";
+import { planAiWorkRegion } from "../app/engine/ai-work-region.ts";
+
+test("AI work regions stay bounded and preserve document coordinates", () => {
+  assert.deepEqual(planAiWorkRegion(1200, 800), {
+    x: 0, y: 0, width: 1200, height: 800, outputWidth: 1200, outputHeight: 800,
+  });
+  const selected = planAiWorkRegion(50_000, 40_000, { x: 12_000, y: 8_000, w: 200, h: 100 });
+  assert.deepEqual(selected, {
+    x: 11_968, y: 7_968, width: 264, height: 164, outputWidth: 264, outputHeight: 164,
+  });
+  const viewport = planAiWorkRegion(50_000, 40_000, null, { x: 9_000, y: 7_000, width: 8_000, height: 4_000 });
+  assert.equal(viewport.x, 9_000);
+  assert.equal(viewport.y, 7_000);
+  assert.equal(viewport.width, 8_000);
+  assert.equal(viewport.height, 4_000);
+  assert.ok(viewport.outputWidth * viewport.outputHeight <= 2048 * 2048);
+  assert.ok(viewport.outputWidth <= 2048 && viewport.outputHeight <= 2048);
+});
 
 test("operation controls are validated, clamped, and translated to stable instructions", () => {
   const config = normalizeAiEditConfig({

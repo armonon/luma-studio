@@ -6,14 +6,17 @@ import {
   SMART_FILTER_KINDS,
   SMART_FILTER_SPECS,
   dustAndScratches,
+  displace,
   filterRegionForSelection,
   gaussianBlur,
   highPass,
+  lensBlur,
   invertColors,
   maximumFilter,
   medianFilter,
   minimumFilter,
   motionBlur,
+  reduceNoise,
   smartFilterInfluenceRadius,
   surfaceBlur,
   unsharpMask,
@@ -202,7 +205,7 @@ test("selected unsharp mask includes a bounded blur halo, not the whole layer", 
 });
 
 test("professional smart-filter catalogue is complete and provides deterministic defaults", () => {
-  assert.equal(SMART_FILTER_KINDS.length, 12);
+  assert.equal(SMART_FILTER_KINDS.length, 15);
   assert.deepEqual(new Set(SMART_FILTER_KINDS).size, SMART_FILTER_KINDS.length);
   for (const kind of SMART_FILTER_KINDS) {
     assert.ok(SMART_FILTER_SPECS[kind].label.length > 2);
@@ -210,6 +213,38 @@ test("professional smart-filter catalogue is complete and provides deterministic
   }
   assert.ok(smartFilterInfluenceRadius({ kind: "high-pass", params: { radius: 4 } }) > 4);
   assert.equal(smartFilterInfluenceRadius({ kind: "invert", params: {} }), 0);
+});
+
+test("lens blur uses an aperture footprint and preserves a flat field", () => {
+  const flat = solidCanvas(18, 18, "rgba(60, 100, 140, .5)");
+  lensBlur(createDocument(18, 18), createRasterLayer("flat", flat), 5, 6, 0, 0.2);
+  const pixel = pixelAt(flat, 9, 9);
+  assert.ok(Math.abs(pixel.r - 60) <= 1);
+  assert.ok(Math.abs(pixel.g - 100) <= 1);
+  assert.ok(Math.abs(pixel.b - 140) <= 1);
+  assert.equal(pixel.a, 127);
+});
+
+test("reduce noise smooths chroma noise while protecting a strong edge", () => {
+  const bitmap = solidCanvas(16, 8, "rgb(30,30,30)");
+  const context = bitmap.getContext("2d")!;
+  context.fillStyle = "rgb(220,220,220)";
+  context.fillRect(8, 0, 8, 8);
+  context.fillStyle = "rgb(30,0,60)";
+  context.fillRect(3, 3, 1, 1);
+  reduceNoise(createDocument(16, 8), createRasterLayer("noise", bitmap), 2, 1, 0.75, 1);
+  assert.ok(pixelAt(bitmap, 3, 3).b < 60, "isolated color noise is reduced");
+  assert.ok(pixelAt(bitmap, 7, 4).r < 80, "dark side remains dark");
+  assert.ok(pixelAt(bitmap, 8, 4).r > 170, "bright side remains bright");
+});
+
+test("displace warps along the requested axis and reports exact overscan", () => {
+  const bitmap = solidCanvas(24, 12, "black");
+  bitmap.getContext("2d")!.fillStyle = "white";
+  bitmap.getContext("2d")!.fillRect(12, 0, 1, 12);
+  displace(createDocument(24, 12), createRasterLayer("grid", bitmap), 4, 12, 0);
+  assert.notEqual(pixelAt(bitmap, 12, 3).r, pixelAt(bitmap, 12, 6).r);
+  assert.equal(smartFilterInfluenceRadius({ kind: "displace", params: { amount: -11 } }), 13);
 });
 
 test("high pass turns flat color into neutral gray and preserves alpha", () => {

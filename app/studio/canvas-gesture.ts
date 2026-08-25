@@ -28,6 +28,8 @@ export type CanvasDragDraft = {
   x1: number;
   y1: number;
   kind: CanvasDragKind;
+  /** Interaction target frozen on pointer-down; selection changes mid-drag cannot redirect it. */
+  layerId?: string;
   path?: Point[];
   moveStart?: { tx: number; ty: number };
 };

@@ -58,12 +58,10 @@ test("the refusal says what was refused and where it is available", () => {
   assert.match(refusal, /desktop/i, "and where it can be done");
 });
 
-test("the capability is permitted to pro and marked built", () => {
-  // It was "planned" while the tile surfaces, the tiled viewport and the
-  // streaming PNG writer were all already there, so nothing surfaced it.
+test("the capability is permitted to pro but remains planned until every workflow is sparse", () => {
   assert.equal(hasCapability("pro", "large-documents"), true);
   assert.equal(hasCapability("web", "large-documents"), false);
-  assert.equal(CAPABILITY_STATUS["large-documents"], "shipped");
+  assert.equal(CAPABILITY_STATUS["large-documents"], "planned");
 });
 
 // --- end to end -------------------------------------------------------------

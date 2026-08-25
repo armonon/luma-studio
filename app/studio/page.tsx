@@ -43,10 +43,18 @@ import {
 import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
 import { readRecoveryWorkspace, writeRecoveryWorkspace } from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
+import { installGlobalDiagnostics, localDiagnostics } from "@/app/engine/diagnostics";
+import { assertFileSize, assertSafePhotoshopHeader, assertSafeRasterHeader } from "@/app/engine/input-limits";
+import { exceedsBrowserCanvas } from "@/app/engine/large-documents";
 import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
 import type { RawDevelopSettings } from "@/app/engine/raw-develop";
 import { extractAndParseEmbeddedColorProfile } from "@/app/engine/embedded-color-profile";
 import { defaultColorProfileRegistry } from "@/app/engine/color-management";
+import {
+  createDeclarativePlugin,
+  parseLumaPluginPackage,
+  type LumaPluginPackage,
+} from "@/app/engine/plugin-package";
 import {
   AiEditAuthenticationError,
   resolveAiEditEndpoint,
@@ -66,11 +74,13 @@ import {
   type DisplayViewport,
 } from "@/app/engine/viewport";
 import {
+  developNativeRaw,
   isNativeFilesystemAvailable,
   openNativeAiSignIn,
   openNativeFile,
   readNativePath,
   saveNativeFile,
+  saveNativeProject,
 } from "@/app/engine/native-files";
 import {
   defaultWorkflowPreferences,
@@ -97,7 +107,14 @@ import {
   type LayerFocusState,
 } from "./layer-focus-model";
 import type { FocusCreateAction } from "./layer-focus-panel";
-import { listenForMenuCommands, listenForOpenFile, publishRecentFiles } from "../desktop/native-menu";
+import {
+  cancelNativeClose,
+  confirmNativeClose,
+  listenForMenuCommands,
+  listenForNativeCloseRequest,
+  listenForOpenFile,
+  publishRecentFiles,
+} from "../desktop/native-menu";
 import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/recent-files";
 import type { StudioCommand } from "../desktop/menu-model";
 import { StartupOpenCoordinator } from "./startup-open-coordinator";
@@ -109,6 +126,12 @@ import {
   type CanvasDragDraft,
   type SelectionCombineMode,
 } from "./canvas-gesture";
+import {
+  CONTEXTUAL_PANEL_CHOICES,
+  resolveContextualPanel,
+  workspaceForLayer,
+  type ContextualPanelId,
+} from "./contextual-panel-registry";
 import DesktopCanvasHud, { type SpaceDeckFeature } from "./desktop-canvas-hud";
 import {
   DESKTOP_DEMO_LAYERS,
@@ -299,6 +322,7 @@ const workspaceIds = workspaces.map(([id]) => id);
 const allToolIds = [...new Set(Object.values(modeTools).flat().map(([tool]) => tool))];
 const WORKFLOW_PREFERENCES_KEY = "luma.workflow-preferences.v1";
 const LAYER_FOCUS_PREFERENCES_KEY = "luma.layer-focus.v1";
+const INSTALLED_PLUGINS_KEY = "luma.installed-plugins.v1";
 const initialWorkflowPreferences = defaultWorkflowPreferences<WorkspaceMode, Tool>(workspaceIds);
 
 const toneRows: Array<[ToneKey, string, number, number, number]> = [
@@ -356,6 +380,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const projectInput = useRef<HTMLInputElement>(null);
   const captureInput = useRef<HTMLInputElement>(null);
   const focusImportInput = useRef<HTMLInputElement>(null);
+  const pluginInput = useRef<HTMLInputElement>(null);
   const inspectorRef = useRef<HTMLElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
   const [startupReady, setStartupReady] = useState(false);
@@ -367,6 +392,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPresentation.workspace);
   const [activeTool, setActiveTool] = useState<Tool>(initialPresentation.tool);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
+  const [nativePanelOverride, setNativePanelOverride] = useState<ContextualPanelId | null>(null);
   const [assetsOpen, setAssetsOpen] = useState(initialPresentation.assetsOpen);
   const [dropActive, setDropActive] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -479,6 +505,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [selectedActionIdx, setSelectedActionIdx] = useState<number | null>(null);
   const [useGL, setUseGL] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
+  const [pendingCloseDocumentId, setPendingCloseDocumentId] = useState<string | null>(null);
+  const [pendingNativeClose, setPendingNativeClose] = useState(false);
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
@@ -637,6 +665,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     const scriptingEnabled = devBuild || optedIn;
     if (scriptingEnabled) (window as unknown as { luma?: LumaAPI }).luma = api;
+    if (desktop) {
+      try {
+        const stored = JSON.parse(window.localStorage.getItem(INSTALLED_PLUGINS_KEY) ?? "[]") as unknown;
+        if (Array.isArray(stored)) for (const candidate of stored) {
+          try {
+            const pkg = parseLumaPluginPackage(JSON.stringify(candidate));
+            s.registerPlugin(createDeclarativePlugin(pkg));
+          } catch (error) {
+            console.warn("Skipped an invalid installed plugin", error);
+          }
+        }
+      } catch {
+        // A corrupt preference must never prevent the editor from starting.
+      }
+    }
     setStudio(s);
     (async () => {
       try {
@@ -696,7 +739,37 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
   const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const contextualPanel = resolveContextualPanel({
+    override: nativePanelOverride,
+    inspector: inspectorTab,
+    layer: activeLayer,
+    workspace,
+    hasSelection: Boolean(doc?.selection),
+    maskFocused: resolvedFocusState.scope?.target === "mask",
+  });
   const identityReference = layers.find((layer) => layer.identityReference) ?? null;
+
+  // Selecting an existing text layer has to load its real content into the
+  // editable field — without this, the field kept showing whatever was last
+  // typed (or the placeholder default) instead of the layer you just clicked,
+  // which is what made an existing layer's text look uneditable.
+  //
+  // Adjusted during render rather than in an effect (React's own recipe for
+  // "reset state when a prop changes"): an effect would paint one frame of
+  // stale text before firing, and would need this same layer-id tracking to
+  // avoid re-syncing away every keystroke anyway, since liveUpdateText below
+  // writes into this same layer on every keystroke.
+  const [textDraftLayerId, setTextDraftLayerId] = useState<string | null>(null);
+  // Normalized to the same null-or-string shape on both sides: comparing the
+  // raw `string | undefined` from activeLayer?.id against this `string | null`
+  // state meant "no active layer" (undefined) never equalled its own stored
+  // value (null), so the branch re-ran and called setState every render —
+  // React caught it as an infinite loop before this was ever seen live.
+  const activeLayerIdOrNull = activeLayer?.id ?? null;
+  if (activeLayerIdOrNull !== textDraftLayerId) {
+    setTextDraftLayerId(activeLayerIdOrNull);
+    if (activeLayer?.kind === "text" && activeLayer.text) setTextDraft(activeLayer.text.text);
+  }
   const positionWarpOverlay = (point: Point | null) => {
     warpHoverRef.current = point;
     if (!doc || !warpOverlayRef.current) return;
@@ -818,7 +891,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   useEffect(() => {
     if (!studio || !doc || !canvasRef.current || !stageRef.current) return;
     const updatePlan = () => {
-      const canvasRect = canvasRef.current!.getBoundingClientRect();
+      // Re-checked on every call, not just at effect setup: ResizeObserver
+      // fires asynchronously, so a workspace/tool switch that swaps out the
+      // canvas element can leave a stale callback queued. Without this guard
+      // it dereferenced a null ref and crashed the whole React tree.
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const canvasRect = canvas.getBoundingClientRect();
       if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
       const next = calculateDisplayViewport(
         doc.width,
@@ -1069,7 +1148,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       const changed = activeTool === "pattern"
         ? studio.patternFill(activeLayer.id, patternKind, brushColor, secondaryColor, patternScale)
         : !activeLayer.locked;
-      if (activeTool === "fill" && changed) studio.fillLayer(activeLayer.id, brushColor);
+      if (activeTool === "fill" && changed) studio.fillLayer(activeLayer.id, brushColor, brushOpacity);
       notify(changed ? (activeTool === "pattern" ? "Pattern applied" : "Selection filled") : "Layer is locked");
       return;
     }
@@ -1195,6 +1274,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         x1: p.x,
         y1: p.y,
         kind: "move-layer",
+        layerId: interactionLayer.id,
         moveStart: { tx: interactionLayer.transform.tx, ty: interactionLayer.transform.ty },
       });
       return;
@@ -1294,10 +1374,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const p = eventToDoc(e);
     const nextPath = d.kind === "sel-lasso" && d.path ? [...d.path, { x: p.x, y: p.y }] : d.path;
     const next: CanvasDragDraft = { ...d, x1: p.x, y1: p.y, path: nextPath };
-    if (d.kind === "move-layer" && activeLayer && d.moveStart) {
+    const draggedLayer = d.layerId ? studio.findLayer(d.layerId) : null;
+    if (d.kind === "move-layer" && draggedLayer && d.moveStart) {
       const dx = p.x - d.x0;
       const dy = p.y - d.y0;
-      studio.liveUpdateTransform(activeLayer.id, snapLayerTranslation(activeLayer, d.moveStart.tx + dx, d.moveStart.ty + dy));
+      studio.liveUpdateTransform(draggedLayer.id, snapLayerTranslation(draggedLayer, d.moveStart.tx + dx, d.moveStart.ty + dy));
     }
     if (d.kind === "ruler") setMeasurement({ start: { x: d.x0, y: d.y0 }, end: { x: p.x, y: p.y } });
     setDragBoth(next);
@@ -1334,8 +1415,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     const d = dragRef.current;
     if (!d) return;
-    if (d.kind === "move-layer" && activeLayer) {
-      studio.updateTransform(activeLayer.id, { tx: activeLayer.transform.tx, ty: activeLayer.transform.ty });
+    const draggedLayer = d.layerId ? studio.findLayer(d.layerId) : null;
+    if (d.kind === "move-layer" && draggedLayer) {
+      studio.updateTransform(draggedLayer.id, { tx: draggedLayer.transform.tx, ty: draggedLayer.transform.ty });
     } else {
       const intent = planCanvasGesture(d, {
         preferredSelectionMode: selectionMode,
@@ -1463,13 +1545,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (tool === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
   };
 
-  const importDocumentFile = async (file: File) => {
+  const importDocumentFile = async (file: File, nativePath?: string) => {
     if (!file || !studio) return;
     if (/\.luma$/i.test(file.name)) {
       const project = await studio.importProject(file);
       setActiveLayerId(project.doc.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
       setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
+      studio.markDocumentSaved(undefined, nativePath);
       await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
       setSaveState("saved");
       const restoredOperations = project.history?.summary().operations ?? 0;
@@ -1477,7 +1560,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (/\.ps[db]$/i.test(file.name)) {
-      const d = await studio.importPsd(await file.arrayBuffer());
+      assertFileSize(file, "photoshopBytes");
+      const photoshopBytes = await file.arrayBuffer();
+      assertSafePhotoshopHeader(photoshopBytes, file.name, exceedsBrowserCanvas);
+      const d = await studio.importPsd(photoshopBytes);
       setPhotoshopFormat("source");
       setActiveLayerId(d.layers[0]?.id ?? null);
       setActiveAdjustmentId(null);
@@ -1494,12 +1580,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       const raw = rawExtension(file.name);
       let source: Parameters<Studio["openImage"]>[2];
       let profileLabel = "";
+      let rawImportLabel = "";
       if (raw) {
+        assertFileSize(file, "rawBytes");
         const bytes = await file.arrayBuffer();
-        const ingested = ingestRaw(bytes, file.name, {
-          workingSpace: studio.doc.colorSpace,
-        });
-        if (ingested.kind === "developed-raw") {
+        let ingested: ReturnType<typeof ingestRaw> | null = null;
+        let localDecodeError: unknown;
+        try {
+          ingested = ingestRaw(bytes, file.name, { workingSpace: studio.doc.colorSpace });
+        } catch (error) {
+          localDecodeError = error;
+        }
+        if (ingested?.kind === "developed-raw") {
           const layer = studio.openDevelopedDng(name, bytes, ingested.developed);
           setActiveLayerId(layer.id);
           setCustomName(name);
@@ -1508,17 +1600,43 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           notify(`${ingested.developed.provenance.format} developed · ${ingested.developed.metadata.bitsPerSample}-bit Bayer · 32-bit float master`);
           return;
         }
+        // The desktop build gets a second, genuinely decoded path through the
+        // operating system's camera codecs. Unsupported cameras still fall
+        // back to the explicitly tagged embedded JPEG below.
+        let nativeDevelopment: Blob | null = null;
+        try {
+          nativeDevelopment = await developNativeRaw(file, bytes);
+        } catch (error) {
+          console.info("Native RAW developer unavailable for this file", error);
+        }
         URL.revokeObjectURL(url);
-        url = URL.createObjectURL(ingested.preview.blob);
-        source = {
-          originalName: file.name,
-          format: ingested.preview.format,
-          mode: "embedded-raw-preview",
-          originalBytes: file.size,
-        };
+        if (nativeDevelopment) {
+          url = URL.createObjectURL(nativeDevelopment);
+          source = {
+            originalName: file.name,
+            format: raw.toUpperCase(),
+            mode: "camera-raw-developed",
+            originalBytes: file.size,
+          };
+          rawImportLabel = `${raw.toUpperCase()} developed with macOS camera RAW · full-resolution pixels`;
+        } else if (ingested?.kind === "embedded-preview") {
+          url = URL.createObjectURL(ingested.preview.blob);
+          source = {
+            originalName: file.name,
+            format: ingested.preview.format,
+            mode: "embedded-raw-preview",
+            originalBytes: file.size,
+          };
+          rawImportLabel = `${raw.toUpperCase()}: embedded JPEG preview · sensor decoder unavailable`;
+        } else {
+          throw localDecodeError instanceof Error ? localDecodeError : new Error(`${raw.toUpperCase()} could not be decoded`);
+        }
       } else {
+        assertFileSize(file, "imageBytes");
         source = { originalName: file.name, format: file.type || "image", mode: "decoded", originalBytes: file.size };
-        const embedded = await extractAndParseEmbeddedColorProfile(await file.arrayBuffer());
+        const imageBytes = await file.arrayBuffer();
+        assertSafeRasterHeader(imageBytes, file.name, exceedsBrowserCanvas);
+        const embedded = await extractAndParseEmbeddedColorProfile(imageBytes);
         if (embedded.profile) {
           defaultColorProfileRegistry.register(embedded.profile, { replace: true });
           source.colorProfile = {
@@ -1535,6 +1653,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }
       }
       const img = await loadImage(url);
+      if (exceedsBrowserCanvas(img.naturalWidth, img.naturalHeight)) {
+        throw new Error(`${file.name} is too large to decode as one bitmap; use a tiled Luma or PSB project`);
+      }
       const layer = studio.openImage(name, img, source);
       setActiveLayerId(layer.id);
       setCustomName(name);
@@ -1542,9 +1663,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       setTone({ ...NEUTRAL_TONE });
       notify(
         raw
-          // Only DNG gets a sensor decode; everything else is the camera's own
-          // embedded JPEG, so say so plainly rather than implying RAW develop.
-          ? `${raw.toUpperCase()}: embedded JPEG preview — sensor decode is DNG-only`
+          ? rawImportLabel
           : `${name} imported${profileLabel}`,
       );
     } catch (error) {
@@ -1565,13 +1684,53 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
 
-  const importOpenedFile = async (opened: { name: string; data: Uint8Array }) => {
-    const bytes = opened.data.buffer.slice(
-      opened.data.byteOffset,
-      opened.data.byteOffset + opened.data.byteLength,
-    ) as ArrayBuffer;
+  const installedPluginPackages = () => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(INSTALLED_PLUGINS_KEY) ?? "[]") as unknown;
+      if (!Array.isArray(stored)) return [];
+      return stored.flatMap((candidate) => {
+        try { return [parseLumaPluginPackage(JSON.stringify(candidate))]; } catch { return []; }
+      });
+    } catch {
+      return [];
+    }
+  };
+
+  const persistPluginPackages = (packages: LumaPluginPackage[]) => {
+    window.localStorage.setItem(INSTALLED_PLUGINS_KEY, JSON.stringify(packages));
+  };
+
+  const onPluginInstall = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !studio) return;
+    try {
+      assertFileSize(file, "pluginBytes");
+      const pkg = parseLumaPluginPackage(await file.text());
+      if (studio.listPlugins().some((plugin) => plugin.id === pkg.manifest.id)) {
+        studio.unregisterPlugin(pkg.manifest.id);
+      }
+      studio.registerPlugin(createDeclarativePlugin(pkg));
+      const next = installedPluginPackages().filter((candidate) => candidate.manifest.id !== pkg.manifest.id);
+      persistPluginPackages([...next, pkg]);
+      notify(`${pkg.manifest.name} installed · ${pkg.actions.length} action${pkg.actions.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Plugin install failed");
+    }
+  };
+
+  const uninstallPlugin = (id: string) => {
+    if (!studio) return;
+    const plugin = studio.listPlugins().find((candidate) => candidate.id === id);
+    studio.unregisterPlugin(id);
+    try { persistPluginPackages(installedPluginPackages().filter((candidate) => candidate.manifest.id !== id)); } catch { /* storage may be blocked */ }
+    notify(`${plugin?.name ?? id} unloaded`);
+  };
+
+  const importOpenedFile = async (opened: { name: string; path?: string; data: Uint8Array }) => {
     const { mimeForFileName } = await import("./focus-import");
-    await importDocumentFile(new File([bytes], opened.name, { type: mimeForFileName(opened.name) }));
+    const data = opened.data as Uint8Array<ArrayBuffer>;
+    await importDocumentFile(new File([data], opened.name, { type: mimeForFileName(opened.name) }), opened.path);
   };
 
   const openNativeDocument = async () => {
@@ -1663,6 +1822,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (images.length) await importLayerFiles(images);
   };
 
+  const queueBatchFiles = (files: File[]) => {
+    const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name));
+    if (images.length) setBatchFiles((current) => [...current, ...images]);
+    if (images.length !== files.length) notify("Batch accepts PNG, JPEG, and WebP images only");
+  };
+
   const onFocusImportChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.target.files ?? [])];
     event.target.value = "";
@@ -1725,7 +1890,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       depth = 0;
       setDropActive(false);
       const files = Array.from(event.dataTransfer?.files ?? []);
-      if (files.length) void importDroppedFiles(files);
+      if (files.length) {
+        if (showBatch) queueBatchFiles(files);
+        else void importDroppedFiles(files);
+      }
     };
 
     window.addEventListener("dragenter", onDragEnter);
@@ -1739,7 +1907,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       window.removeEventListener("drop", onDrop);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studio]);
+  }, [studio, showBatch]);
 
   const projectName = customName || filmstrip[activePreset].name || "Untitled";
 
@@ -1754,20 +1922,95 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     return true;
   };
 
-  const saveProject = async () => {
+  const saveProject = async (saveAs = false, nameOverride?: string) => {
     if (!studio) return;
     setSaveState("saving");
     try {
-      const blob = await studio.exportProject(projectName);
-      const saved = await downloadOrSave(blob, `${projectName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`);
-      if (!saved) { setSaveState("unsaved"); return; }
+      const saveName = nameOverride ?? projectName;
+      const blob = await studio.exportProject(saveName);
+      const fileName = `${saveName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`;
+      let savedPath: string | undefined;
+      if (isNativeFilesystemAvailable()) {
+        const currentPath = saveAs ? undefined : studio.activeDocumentState().nativePath;
+        const result = await saveNativeProject(blob, fileName, currentPath);
+        if (!result) { setSaveState("unsaved"); return false; }
+        savedPath = result;
+      } else {
+        const saved = await downloadOrSave(blob, fileName);
+        if (!saved) { setSaveState("unsaved"); return false; }
+      }
+      studio.markDocumentSaved(undefined, savedPath);
+      if (savedPath) setCustomName(savedPath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "") ?? saveName);
       await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
       setSaveState("saved");
       notify("Project + version history saved");
+      return true;
     } catch {
       setSaveState("error");
       notify("Project save failed");
+      return false;
     }
+  };
+
+  const requestCloseDocument = (id: string) => {
+    const documentState = studio?.listDocuments().find((candidate) => candidate.id === id);
+    if (!studio || !documentState) return;
+    if (documentState.dirty) {
+      setPendingCloseDocumentId(id);
+      return;
+    }
+    studio.closeDocument(id);
+    setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+  };
+
+  const saveAndClosePendingDocument = async () => {
+    if (!studio || !pendingCloseDocumentId) return;
+    studio.switchDocument(pendingCloseDocumentId);
+    setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+    const saved = await saveProject(false);
+    if (!saved) return;
+    const id = pendingCloseDocumentId;
+    setPendingCloseDocumentId(null);
+    studio.closeDocument(id);
+    setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+  };
+
+  const discardPendingDocument = () => {
+    if (!studio || !pendingCloseDocumentId) return;
+    const id = pendingCloseDocumentId;
+    setPendingCloseDocumentId(null);
+    studio.closeDocument(id);
+    setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+  };
+
+  useEffect(() => {
+    if (!studio) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!studio.dirtyDocuments().length) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [studio]);
+
+  useEffect(() => {
+    if (!studio || !desktop) return;
+    return listenForNativeCloseRequest(() => {
+      if (studio.dirtyDocuments().length) setPendingNativeClose(true);
+      else void confirmNativeClose();
+    });
+  }, [studio, desktop]);
+
+  const saveAllAndCloseNative = async () => {
+    if (!studio) return;
+    for (const dirty of studio.dirtyDocuments()) {
+      studio.switchDocument(dirty.id);
+      setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+      if (!await saveProject(false, dirty.name)) return;
+    }
+    setPendingNativeClose(false);
+    await confirmNativeClose();
   };
 
   const onProjectImport = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -1791,7 +2034,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       onState: (state) => {
         if (!active) return;
         if (state === "producing" || state === "committing") setSaveState("saving");
-        else if (state === "idle") setSaveState("saved");
+        else if (state === "idle") setSaveState(studio.activeDocumentState().dirty ? "unsaved" : "saved");
         else if (state === "error") setSaveState("error");
       },
     });
@@ -1802,7 +2045,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
     const unsubscribe = studio.subscribe(() => {
       window.clearTimeout(timer);
-      setSaveState("unsaved");
+      setSaveState(studio.activeDocumentState().dirty ? "unsaved" : "saved");
       timer = window.setTimeout(flush, 1600);
     });
     const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
@@ -1818,8 +2061,29 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
   }, [studio, projectName]);
 
+  useEffect(() => {
+    if (!studio) return;
+    return installGlobalDiagnostics({
+      context: () => ({
+        edition: desktop ? "pro" : "web",
+        documentWidth: studio.doc.width,
+        documentHeight: studio.doc.height,
+        layers: studio.doc.layers.length,
+        bitDepth: studio.doc.bitDepth,
+        colorSpace: studio.doc.colorSpace,
+      }),
+      onFatal: async () => {
+        await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
+        localDiagnostics.record("recovery", "Emergency workspace checkpoint completed", {
+          layers: studio.doc.layers.length,
+        });
+      },
+    });
+  }, [studio, desktop]);
+
   const setLayerVisible = (id: string, v: boolean) => studio?.setLayerProp(id, "visible", v, v ? "Layer shown" : "Layer hidden");
   const setLayerOpacity = (id: string, o: number) => studio?.setLayerProp(id, "opacity", o, "Opacity");
+  const previewLayerOpacity = (id: string, o: number) => studio?.liveUpdateLayerProp(id, "opacity", o);
   const addAdjust = () => {
     if (!studio) return;
     const layer = studio.addAdjustmentLayer("Tone", NEUTRAL_TONE);
@@ -1831,8 +2095,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const addProfessionalAdjustment = (kind: ProAdjustmentKind) => {
     if (!studio) return;
     const layer = studio.addProAdjustmentLayer(kind);
-    setActiveLayerId(layer.id);
-    switchWorkspace("develop");
+    selectLayerForEditing(layer);
     notify(`${PRO_ADJUSTMENT_LABELS[kind]} adjustment added`);
   };
   const addBlank = () => {
@@ -2037,10 +2300,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const focusInspector = (tab: "layers" | "properties" | "ai") => {
     setInspectorTab(tab);
+    if (tab === "ai") setNativePanelOverride("neural");
+    else if (tab === "properties") setNativePanelOverride(null);
     requestAnimationFrame(() => {
       const selector = tab === "layers" ? ".layers-card" : tab === "ai" ? ".neural-card" : ".glass-card:not(.layers-card):not(.neural-card)";
       inspectorRef.current?.querySelector(selector)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  };
+
+  const selectLayerForEditing = (layer: Layer) => {
+    setActiveLayerId(layer.id);
+    setNativePanelOverride(null);
+    const nextWorkspace = workspaceForLayer(layer);
+    if (nextWorkspace) setWorkspace(nextWorkspace);
+    setInspectorTab("properties");
+    if (layer.kind === "adjustment-tone") {
+      setActiveAdjustmentId(layer.id);
+      if (layer.tone) setTone({ ...layer.tone });
+    } else {
+      setActiveAdjustmentId(null);
+    }
   };
 
   /**
@@ -2054,6 +2333,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     switch (command) {
       case "open": requestDocumentOpen(); return;
       case "save": void saveProject(); return;
+      case "save-as": void saveProject(true); return;
       case "export": setShowExportMenu(true); return;
 
       case "undo": studio?.undo(); forceUpdate(); return;
@@ -2245,6 +2525,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       ] : []),
     ];
 
+    if (activeTool === "tone" && activeLayer?.kind.startsWith("adjustment-") && activeLayer.kind !== "adjustment-tone") return [action(
+      "open-adjustment-editor",
+      "Open adjustment editor",
+      `${activeLayer.name} has dedicated controls`,
+      "↗",
+      () => {
+        setNativePanelOverride(null);
+        setWorkspace("develop");
+        setInspectorTab("properties");
+      },
+    )];
+
     if (activeTool === "tone") return toneRows.map(([key, label, min, max, step]) => range(
       `tone-${key}`,
       label,
@@ -2264,19 +2556,29 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return [
         {
           kind: "text", id: "text-content", label: "Text", value: textLayer?.text?.text ?? textDraft,
-          placeholder: "Type…", onChange: (value) => { setTextDraft(value); if (textLayer?.text) studio?.updateText(textLayer.id, { text: value }); },
+          placeholder: "Type…",
+          // Live per keystroke, matching every range control in this same
+          // panel (onChange for feedback, onCommit to fold the burst into one
+          // undo step). Calling updateText directly here — as this used to —
+          // meant every character typed created its own history entry, so
+          // undoing one word of typing took one Cmd+Z per letter.
+          onChange: (value) => {
+            setTextDraft(value);
+            if (textLayer?.text) studio?.liveUpdateText(textLayer.id, { text: value });
+          },
+          onCommit: () => { if (textLayer?.text) studio?.updateText(textLayer.id, { text: textDraft }); },
         },
         range("text-size", "Font size", activeSize, 8, 500, 1, `${activeSize} px`, (value) => {
           setTextSize(value);
-          if (textLayer?.text) studio?.updateText(textLayer.id, { font: textLayer.text.font.replace(/\d+px/, `${value}px`) });
-        }),
+          if (textLayer?.text) studio?.liveUpdateText(textLayer.id, { font: textLayer.text.font.replace(/\d+px/, `${value}px`) });
+        }, () => { if (textLayer?.text) studio?.updateText(textLayer.id, {}); }),
         color("text-color", "Color", textLayer?.text?.color ?? brushColor, (value) => {
           setBrushColor(value);
           if (textLayer?.text) studio?.updateText(textLayer.id, { color: value });
         }),
         ...(textLayer?.text ? [
-          range("tracking", "Tracking", textLayer.text.tracking ?? 0, -100, 600, 10, `${textLayer.text.tracking ?? 0}`, (value) => studio?.updateText(textLayer.id, { tracking: value })),
-          range("paragraph-spacing", "Paragraph gap", textLayer.text.paragraphSpacing ?? 0, 0, 3, 0.1, `${(textLayer.text.paragraphSpacing ?? 0).toFixed(1)}×`, (value) => studio?.updateText(textLayer.id, { paragraphSpacing: value })),
+          range("tracking", "Tracking", textLayer.text.tracking ?? 0, -100, 600, 10, `${textLayer.text.tracking ?? 0}`, (value) => studio?.liveUpdateText(textLayer.id, { tracking: value }), () => studio?.updateText(textLayer.id, {})),
+          range("paragraph-spacing", "Paragraph gap", textLayer.text.paragraphSpacing ?? 0, 0, 3, 0.1, `${(textLayer.text.paragraphSpacing ?? 0).toFixed(1)}×`, (value) => studio?.liveUpdateText(textLayer.id, { paragraphSpacing: value }), () => studio?.updateText(textLayer.id, {})),
           ...(textLayer.text.layout === "paragraph" ? [toggle("justify", "Justify", "Stretch paragraph lines", textLayer.text.justify ?? false, (value) => studio?.updateText(textLayer.id, { justify: value }))] : []),
         ] : []),
       ];
@@ -2292,8 +2594,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }),
         ...(shapeLayer?.shape ? [
           color("shape-stroke", "Stroke", shapeLayer.shape.stroke, (value) => studio?.updateShape(shapeLayer.id, { stroke: value })),
-          range("stroke-width", "Stroke width", shapeLayer.shape.strokeWidth, 0, 100, 1, `${shapeLayer.shape.strokeWidth} px`, (value) => studio?.updateShape(shapeLayer.id, { strokeWidth: value })),
-          range("corner-radius", "Corner radius", shapeLayer.shape.radius, 0, 200, 1, `${shapeLayer.shape.radius} px`, (value) => studio?.updateShape(shapeLayer.id, { radius: value })),
+          range("stroke-width", "Stroke width", shapeLayer.shape.strokeWidth, 0, 100, 1, `${shapeLayer.shape.strokeWidth} px`, (value) => studio?.liveUpdateShape(shapeLayer.id, { strokeWidth: value }), () => studio?.updateShape(shapeLayer.id, {})),
+          range("corner-radius", "Corner radius", shapeLayer.shape.radius, 0, 200, 1, `${shapeLayer.shape.radius} px`, (value) => studio?.liveUpdateShape(shapeLayer.id, { radius: value }), () => studio?.updateShape(shapeLayer.id, {})),
           choice("shape-geometry", "Geometry", shapeLayer.shape.kind, [
             { value: "rect", label: "Rectangle" }, { value: "ellipse", label: "Ellipse" },
           ], (value) => studio?.updateShape(shapeLayer.id, { kind: value as "rect" | "ellipse" })),
@@ -2499,7 +2801,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         if (e.shiftKey) studio?.redo(); else studio?.undo();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); void saveProject(); return; }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); void saveProject(e.shiftKey); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "o") { e.preventDefault(); requestDocumentOpen(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") { e.preventDefault(); setShowExportMenu(true); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); studio?.selectAll(); return; }
@@ -2970,14 +3272,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     }}
                     aria-current={documentTab.active ? "page" : undefined}
                   >
-                    <span>{documentTab.name}</span>
+                    <span>{documentTab.name}{documentTab.dirty ? " •" : ""}</span>
                   </button>
                   {openDocuments.length > 1 && (
                     <button
                       onClick={() => {
                         setFocusState(leaveLayerFocus(resolvedFocusState));
-                        studio?.closeDocument(documentTab.id);
-                        setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
+                        requestCloseDocument(documentTab.id);
                       }}
                       aria-label={`Close ${documentTab.name}`}
                     >×</button>
@@ -2996,12 +3297,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey) return;
                 e.preventDefault();
                 const factor = Math.exp(-e.deltaY * 0.002);
+                // Read everything off the synthetic event synchronously, before
+                // it reaches the setView updater. React's setState updater can
+                // run outside the event's own dispatch (batched, or on a later
+                // render if wheel events arrive faster than React processes
+                // them), and by then e.currentTarget is no longer valid — this
+                // crashed the whole app on a fast/trackpad pinch-zoom.
+                const rect = e.currentTarget.getBoundingClientRect();
+                const clientX = e.clientX;
+                const clientY = e.clientY;
                 setView((v) => {
                   const nz = Math.max(0.05, Math.min(32, v.zoom * factor));
                   // Zoom around cursor: shift pan so the point under the cursor stays fixed.
-                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  const cx = e.clientX - rect.left - rect.width / 2;
-                  const cy = e.clientY - rect.top - rect.height / 2;
+                  const cx = clientX - rect.left - rect.width / 2;
+                  const cy = clientY - rect.top - rect.height / 2;
                   const k = nz / v.zoom;
                   return { zoom: nz, panX: cx - k * (cx - v.panX), panY: cy - k * (cy - v.panY) };
                 });
@@ -3193,11 +3502,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 projectName={projectName}
                 onSelect={(layerId) => {
                   const layer = studio?.findLayer(layerId);
-                  setActiveLayerId(layerId);
-                  if (layer?.kind === "adjustment-tone") {
-                    setActiveAdjustmentId(layer.id);
-                    if (layer.tone) setTone({ ...layer.tone });
-                  }
+                  if (layer) selectLayerForEditing(layer);
                 }}
                 onFocus={enterFocusMode}
                 onExit={exitFocusMode}
@@ -3210,7 +3515,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </Suspense>
           </section>
 
-          <aside ref={inspectorRef} className="spatial-inspector" data-tab={inspectorTab}>
+          <aside ref={inspectorRef} className="spatial-inspector" data-tab={inspectorTab} data-context-panel={contextualPanel}>
             <nav className="inspector-tabs" aria-label="Inspector panels">
               <button className={inspectorTab === "properties" ? "active" : ""} onClick={() => focusInspector("properties")} aria-pressed={inspectorTab === "properties"}>Inspector</button>
               <button className={inspectorTab === "layers" ? "active" : ""} onClick={() => focusInspector("layers")} aria-pressed={inspectorTab === "layers"}>Layers</button>
@@ -3222,9 +3527,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <div className="layer-add-menu">
                   <button onClick={addBlank} title="Add paint layer">＋</button>
                   <button onClick={addAdjust} title="Add tone adjustment">◐</button>
-                  <button onClick={() => { if (studio) { const l = studio.addCurvesLayer(); setActiveLayerId(l.id); } }} title="Add curves">∿</button>
-                  <button onClick={() => { if (studio) { const l = studio.addLevelsLayer(); setActiveLayerId(l.id); } }} title="Add levels">▦</button>
-                  <button onClick={() => { if (studio) { const l = studio.addHslLayer(); setActiveLayerId(l.id); } }} title="Add HSL">◉</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addCurvesLayer()); }} title="Add curves">∿</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addLevelsLayer()); }} title="Add levels">▦</button>
+                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addHslLayer()); }} title="Add HSL">◉</button>
                   <select
                     aria-label="Add professional adjustment"
                     title="Add professional adjustment"
@@ -3264,12 +3569,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     setDraggedLayerId(null);
                   }}
                   onSelect={(layer) => {
-                    setActiveLayerId(layer.id);
-                    setInspectorTab("layers");
-                    if (layer.kind === "adjustment-tone") {
-                      setActiveAdjustmentId(layer.id);
-                      if (layer.tone) setTone({ ...layer.tone });
-                    }
+                    selectLayerForEditing(layer);
                   }}
                   onOpenStyle={(layer) => {
                     setActiveLayerId(layer.id);
@@ -3280,13 +3580,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
                   }}
                   onToggleVisible={(layer) => setLayerVisible(layer.id, !layer.visible)}
+                  onDelete={(layer) => {
+                    if (!studio) return;
+                    studio.removeLayer(layer.id);
+                    if (activeLayerId === layer.id) setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+                  }}
                 />
               </Suspense>
               {activeLayer && (
                 <div className="layer-controls">
                   <label>
                     <span>Master</span>
-                    <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(e) => setLayerOpacity(activeLayer.id, Number(e.target.value) / 100)} />
+                    <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(e) => previewLayerOpacity(activeLayer.id, Number(e.target.value) / 100)} onPointerUp={(e) => setLayerOpacity(activeLayer.id, Number(e.currentTarget.value) / 100)} onBlur={(e) => setLayerOpacity(activeLayer.id, Number(e.currentTarget.value) / 100)} />
                     <output>{Math.round(activeLayer.opacity * 100)}%</output>
                   </label>
                   {activeLayer.kind === "group"
@@ -3351,6 +3656,23 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <small>{doc?.selection ? "SELECTION" : workspace.toUpperCase()}</small>
                 </header>
                 <div className="desktop-properties-body">
+                  {NATIVE_DESKTOP_BUILD && (
+                    <label className="desktop-context-panel-picker">
+                      <span>Panel</span>
+                      <select
+                        aria-label="Contextual inspector panel"
+                        value={nativePanelOverride ?? ""}
+                        onChange={(event) => {
+                          const value = event.target.value as ContextualPanelId | "";
+                          setNativePanelOverride(value || null);
+                          setInspectorTab(value === "neural" ? "ai" : "properties");
+                        }}
+                      >
+                        <option value="">Auto · {contextualPanel.replaceAll("-", " ")}</option>
+                        {CONTEXTUAL_PANEL_CHOICES.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}
+                      </select>
+                    </label>
+                  )}
                   <div className="desktop-property-target">
                     <span className={`spatial-layer-thumb kind-${activeLayer?.kind ?? "canvas"}`} aria-hidden="true">
                       {activeLayer?.kind === "text" ? "T" : activeLayer?.kind === "shape" ? "▭" : activeLayer?.kind === "group" ? "▾" : "▨"}
@@ -3394,7 +3716,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </> : activeLayer ? <>
                     <label className="desktop-property-range">
                       <span>Opacity</span>
-                      <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => setLayerOpacity(activeLayer.id, Number(event.target.value) / 100)} />
+                      <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => previewLayerOpacity(activeLayer.id, Number(event.target.value) / 100)} onPointerUp={(event) => setLayerOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} onBlur={(event) => setLayerOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} />
                       <output>{Math.round(activeLayer.opacity * 100)}%</output>
                     </label>
                     <div className="desktop-property-row">
@@ -3413,8 +3735,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
-            {!NATIVE_DESKTOP_BUILD && shouldMountLegacyInspector(desktop) && <>
-            <section className="glass-card mask-card">
+            {(NATIVE_DESKTOP_BUILD || shouldMountLegacyInspector(desktop)) && <>
+            <section className="glass-card mask-card" data-contextual-panel="channels">
               <header><strong>Channels</strong><small title="Channel previews do not change RGB export">{(engineState?.channelView ?? "rgb").toUpperCase()}</small></header>
               <div className="mask-segmented channel-switcher">
                 {(["rgb", "red", "green", "blue", "alpha"] as const).map((channel) => (
@@ -3428,7 +3750,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </section>
 
-            <section className="glass-card mask-card">
+            <section className="glass-card mask-card" data-contextual-panel="structure">
               <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}</small></header>
               <div className="inspector-create-row">
                 <input value={layerCompName} maxLength={80} onChange={(event) => setLayerCompName(event.target.value)} aria-label="New layer comp name" />
@@ -3451,7 +3773,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               )}
             </section>
 
-            <section className="glass-card mask-card">
+            <section className="glass-card mask-card" data-contextual-panel="structure">
               <header><strong>Artboards</strong><small>{doc?.artboards?.length ?? 0}</small></header>
               <div className="inspector-create-row">
                 <input value={artboardName} maxLength={80} onChange={(event) => setArtboardName(event.target.value)} aria-label="New artboard name" />
@@ -3483,19 +3805,19 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               )}
             </section>
 
-            <section className="glass-card mask-card">
-              <header><strong>Assets</strong><small>{(studio?.listPlugins().length ?? 0) + capturedBrushes.length}</small></header>
+            <section className="glass-card mask-card" data-contextual-panel="assets">
+              <header><strong>Assets</strong><small>{(studio?.listPlugins().length ?? 0) + capturedBrushes.length}</small>{desktop && <button onClick={() => pluginInput.current?.click()} title="Install a safe declarative .luma-plugin package">＋ Plugin</button>}</header>
               <div style={{ display: "grid", gap: 4, padding: "8px 10px" }}>
                 {studio?.listPlugins().length ? studio.listPlugins().map((plugin) => (
                   <div key={plugin.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 5 }}>
                     <span style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>{plugin.name ?? plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</span>
-                    <button onClick={() => studio.unregisterPlugin(plugin.id)} title={`Unload ${plugin.name ?? plugin.id}`}>Unload</button>
+                    <button onClick={() => uninstallPlugin(plugin.id)} title={`Unload ${plugin.name ?? plugin.id}`}>Unload</button>
                   </div>
                 )) : <small className="inspector-empty-state">No plug-ins or saved brushes</small>}
               </div>
             </section>
 
-            <section className="glass-card mask-card">
+            <section className="glass-card mask-card" data-contextual-panel="document">
               <header><strong>Document</strong><small>{doc?.width ?? 0} × {doc?.height ?? 0}</small></header>
               <div className="document-size-row">
                 <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
@@ -3573,6 +3895,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     <div><span>Renderer</span><b>{Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms p95 · {Math.round((engineState?.adaptivePreview.scale ?? 1) * 100)}%</b></div>
                     <div><span>GPU cache</span><b>{formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}</b></div>
                     <div><span>Photoshop</span><b>{engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.warnings ?? 0} notes</b></div>
+                    <div><span>Stability</span><b>{localDiagnostics.summary().crashes} local crash record{localDiagnostics.summary().crashes === 1 ? "" : "s"}</b></div>
+                    <button onClick={async () => {
+                      const report = localDiagnostics.exportReport({
+                        edition: desktop ? "pro" : "web",
+                        appVersion: "0.1.0",
+                        engine: engineState,
+                      });
+                      await downloadOrSave(report, `luma-diagnostics-${new Date().toISOString().slice(0, 10)}.json`);
+                      notify("Diagnostics report exported");
+                    }}>Export diagnostics</button>
                   </div>
                 </details>
                 {photoshopReport && (
@@ -3637,7 +3969,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </section>
 
-            <section className="glass-card mask-card">
+            <section className="glass-card mask-card" data-contextual-panel="document">
               <header><strong>Guides & snapping</strong><button onClick={() => setShowGuides((visible) => !visible)}>{showGuides ? "Hide" : "Show"}</button></header>
               <div className="mask-actions" style={{ paddingBottom: 6 }}>
                 <button onClick={() => doc && studio?.addGuide("vertical", doc.width / 2)}>＋ Vertical</button>
@@ -3657,7 +3989,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </section>
 
             {workspace === "select" && (
-              <section className="glass-card mask-card">
+              <section className="glass-card mask-card" data-contextual-panel="selection">
                 <header><strong>Selection</strong>
                   <button onClick={() => studio?.deselect()}>×</button>
                 </header>
@@ -3708,7 +4040,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {workspace === "mask" && (
-              <section className="glass-card mask-card">
+              <section className="glass-card mask-card" data-contextual-panel="mask">
                 <header><strong>Mask brush</strong>
                   <button onClick={() => activeLayerId && studio?.invertMask(activeLayerId)}>◑</button>
                 </header>
@@ -3733,8 +4065,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
-            {workspace === "develop" && activeLayer?.raw && rawDevelop && (
-              <section className="glass-card tone-card">
+            {activeLayer?.raw && rawDevelop && (
+              <section className="glass-card tone-card" data-contextual-panel="raw">
                 <header>
                   <strong>RAW Develop</strong>
                   <small>{activeLayer.raw.sensor.bitsPerSample}-bit CFA · FLOAT</small>
@@ -3810,33 +4142,33 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
-            {workspace === "develop" && activeLayer?.kind === "adjustment-curves" && activeLayer.curves && (
-              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading curves" />}>
+            {activeLayer?.kind === "adjustment-curves" && activeLayer.curves && (
+              <div className="contextual-panel-host" data-contextual-panel="curves"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading curves" />}>
                 <CurvesEditor curves={activeLayer.curves} onLive={(c) => studio?.liveUpdateCurves(activeLayer.id, c)} onCommit={(c) => studio?.updateCurves(activeLayer.id, c)} onReset={() => studio?.updateCurves(activeLayer.id, cloneCurves(NEUTRAL_CURVES))} />
-              </Suspense>
+              </Suspense></div>
             )}
-            {workspace === "develop" && activeLayer?.kind === "adjustment-levels" && activeLayer.levels && (
-              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading levels" />}>
+            {activeLayer?.kind === "adjustment-levels" && activeLayer.levels && (
+              <div className="contextual-panel-host" data-contextual-panel="levels"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading levels" />}>
                 <LevelsEditor levels={activeLayer.levels} onLive={(l) => studio?.liveUpdateLevels(activeLayer.id, l)} onCommit={(l) => studio?.updateLevels(activeLayer.id, l)} onReset={() => studio?.updateLevels(activeLayer.id, { ...NEUTRAL_LEVELS })} />
-              </Suspense>
+              </Suspense></div>
             )}
-            {workspace === "develop" && activeLayer?.kind === "adjustment-hsl" && activeLayer.hsl && (
-              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading HSL" />}>
+            {activeLayer?.kind === "adjustment-hsl" && activeLayer.hsl && (
+              <div className="contextual-panel-host" data-contextual-panel="hsl"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading HSL" />}>
                 <HslEditor hsl={activeLayer.hsl} onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)} onCommit={(h) => studio?.updateHsl(activeLayer.id, h)} onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })} />
-              </Suspense>
+              </Suspense></div>
             )}
-            {workspace === "develop" && activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
-              <Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
+            {activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
+              <div className="contextual-panel-host" data-contextual-panel="pro-adjustment"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
                 <ProAdjustmentEditor
                   adjustment={activeLayer.proAdjustment}
                   onLive={(adjustment) => studio?.liveUpdateProAdjustment(activeLayer.id, adjustment)}
                   onCommit={(adjustment) => studio?.updateProAdjustment(activeLayer.id, adjustment)}
                   onReset={() => studio?.updateProAdjustment(activeLayer.id, defaultProAdjustment(activeLayer.proAdjustment!.kind))}
                 />
-              </Suspense>
+              </Suspense></div>
             )}
             {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && activeLayer?.kind !== "adjustment-pro" && (
-              <section className="glass-card tone-card">
+              <section className="glass-card tone-card" data-contextual-panel="tone">
                 <header>
                   <strong>{activeIsAdjustment ? "Develop stack" : "Add Tone"}</strong>
                   <button onClick={resetTone} aria-label="Reset tone">↺</button>
@@ -3852,7 +4184,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       <span>{label}</span>
                       <input type="range" min={min} max={max} step={step} value={tone[key]}
                         onChange={(e) => onToneChange(key, Number(e.target.value))}
-                        onPointerUp={onToneCommit} />
+                        onPointerUp={onToneCommit}
+                        onKeyUp={onToneCommit}
+                        onBlur={onToneCommit} />
                       <output>{key === "exposure" ? tone[key].toFixed(2) : Math.round(tone[key])}</output>
                     </label>
                   ))}
@@ -3870,7 +4204,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {(workspace === "edit" || workspace === "retouch") && (
-              <section className="glass-card tone-card">
+              <section className="glass-card tone-card" data-contextual-panel="paint">
                 <header>
                   <strong>{modeTools[workspace].find(([tool]) => tool === activeTool)?.[2] ?? "Brush"}</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Brush color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
@@ -4041,7 +4375,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {workspace === "vector" && (
-              <section className="glass-card tone-card">
+              <section className="glass-card tone-card" data-contextual-panel="vector">
                 <header>
                   <strong>Type & shape</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Fill color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
@@ -4049,7 +4383,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <div style={{ padding: "0 12px 8px" }}>
                   <textarea
                     value={textDraft}
-                    onChange={(e) => setTextDraft(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setTextDraft(value);
+                      // Reflects every keystroke straight onto the canvas —
+                      // liveUpdateText mutates without touching undo history,
+                      // matching how a dragged slider or transform handle
+                      // behaves. Editing an existing layer used to require
+                      // typing blind into a disconnected field and clicking
+                      // "Update active text" to see anything change.
+                      if (activeLayer?.kind === "text" && activeLayer.text) {
+                        studio?.liveUpdateText(activeLayer.id, { text: value });
+                      }
+                    }}
+                    onBlur={() => {
+                      // One undo step for the whole edit, committed when you
+                      // leave the field — not one per keystroke.
+                      if (activeLayer?.kind === "text" && activeLayer.text) {
+                        studio?.updateText(activeLayer.id, { text: textDraft });
+                      }
+                    }}
                     style={{ width: "100%", height: 56, background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 8, color: "inherit", padding: 8, fontSize: 12 }}
                     placeholder="Text to add on click"
                   />
@@ -4061,19 +4414,28 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                           onChange={(e) => {
                             const size = Number(e.target.value);
                             const font = activeLayer.text!.font.replace(/\d+px/, `${size}px`);
-                            studio?.updateText(activeLayer.id, { font });
-                          }} />
+                            studio?.liveUpdateText(activeLayer.id, { font });
+                          }}
+                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
+                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
+                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
                       </label>
                       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 11 }}>
                         <span>Tracking</span>
                         <input type="range" min="-100" max="600" step="10" value={activeLayer.text.tracking ?? 0}
-                          onChange={(e) => studio?.updateText(activeLayer.id, { tracking: Number(e.target.value) })} />
+                          onChange={(e) => studio?.liveUpdateText(activeLayer.id, { tracking: Number(e.target.value) })}
+                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
+                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
+                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
                         <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{activeLayer.text.tracking ?? 0}</small>
                       </label>
                       <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 11 }}>
                         <span>Para space</span>
                         <input type="range" min="0" max="3" step="0.1" value={activeLayer.text.paragraphSpacing ?? 0}
-                          onChange={(e) => studio?.updateText(activeLayer.id, { paragraphSpacing: Number(e.target.value) })} />
+                          onChange={(e) => studio?.liveUpdateText(activeLayer.id, { paragraphSpacing: Number(e.target.value) })}
+                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
+                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
+                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
                         <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{(activeLayer.text.paragraphSpacing ?? 0).toFixed(1)}</small>
                       </label>
                       {activeLayer.text.layout === "paragraph" && (
@@ -4115,7 +4477,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {workspace === "transform" && (
-              <section className="glass-card tone-card">
+              <section className="glass-card tone-card" data-contextual-panel="transform">
                 <header><strong>Transform & geometry</strong><small>PRECISION</small></header>
                 <div style={{ display: "grid", gap: 8, padding: "8px 12px 12px", fontSize: 11 }}>
                   <p style={{ margin: 0, opacity: 0.72 }}>
@@ -4147,7 +4509,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
 
             {workspace === "measure" && (
-              <section className="glass-card tone-card">
+              <section className="glass-card tone-card" data-contextual-panel="measure">
                 <header><strong>Measure & sample</strong><button onClick={() => { setColorSamples([]); setMeasurement(null); }}>Clear</button></header>
                 <div style={{ display: "grid", gap: 7, padding: "8px 12px 12px", fontSize: 11 }}>
                   {measurement ? (() => {
@@ -4160,7 +4522,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
-            <section className="glass-card neural-card neural-compact">
+            <section className="glass-card neural-card neural-compact" data-contextual-panel="neural">
               <header>
                 <strong><span>✦</span> Neural Lab</strong>
                 <small>LOCAL + GPT IMAGE</small>
@@ -4194,8 +4556,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     <option value="remove">Remove</option>
                     <option value="relight">Relight</option>
                     <option value="harmonize">Harmonize</option>
-                    <option value="upscale">Upscale detail</option>
-                    <option value="expand">Expand</option>
+                    <option value="upscale">Detail synthesis · same canvas</option>
+                    <option value="expand">Context fill · same canvas</option>
                   </select>
                   <button onClick={runGenerativeEdit} disabled={aiRunning || !aiPrompt.trim()} style={{ flex: 1 }}>
                     {aiRunning ? "Creating…" : "Generate layer ✦"}
@@ -4239,7 +4601,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </section>
 
-            <section className="glass-card neural-card neural-compact">
+            <section className="glass-card neural-card neural-compact" data-contextual-panel="actions">
               <header>
                 <strong>Actions</strong>
                 {recordingName ? (
@@ -4538,6 +4900,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <button onClick={() => runFilter("blur", { radius: blurRadius })}><i>◌</i><span>Gaussian</span></button>
               <button onClick={() => runFilter("motion-blur", { radius: blurRadius * 2, angle: 0 })}><i>↔</i><span>Motion</span></button>
               <button onClick={() => runFilter("surface-blur", { radius: Math.min(12, blurRadius), threshold: 24 })}><i>◍</i><span>Surface</span></button>
+              <button onClick={() => runFilter("lens-blur", { radius: blurRadius, blades: 6, rotation: 0, highlights: 0.15 })}><i>⬡</i><span>Lens</span></button>
               <button onClick={() => runFilter("high-pass", { radius: Math.min(32, blurRadius) })}><i>◇</i><span>High Pass</span></button>
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px", fontSize: 12 }}>
@@ -4549,6 +4912,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <button onClick={() => runFilter("sharpen", { radius: 2, amount: sharpAmount })}><i>✧</i><span>Unsharp</span></button>
               <button onClick={() => runFilter("median", { radius: Math.min(6, blurRadius) })}><i>⋯</i><span>Median</span></button>
               <button onClick={() => runFilter("dust-scratches", { radius: Math.min(6, blurRadius), threshold: 18 })}><i>⌁</i><span>Dust</span></button>
+              <button onClick={() => runFilter("reduce-noise", { radius: Math.min(6, blurRadius), strength: 0.65, preserveDetail: 0.55, reduceColor: 0.7 })}><i>≈</i><span>Reduce Noise</span></button>
+              <button onClick={() => runFilter("displace", { amount: 12, scale: 48, angle: 0 })}><i>∿</i><span>Displace</span></button>
               <button onClick={() => runFilter("maximum", { radius: Math.min(8, blurRadius) })}><i>⊕</i><span>Maximum</span></button>
               <button onClick={() => runFilter("minimum", { radius: Math.min(8, blurRadius) })}><i>⊖</i><span>Minimum</span></button>
               <button onClick={() => runFilter("invert")}><i>◑</i><span>Invert</span></button>
@@ -4561,7 +4926,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
       {showBatch && (
         <div className="spatial-modal" onMouseDown={() => !batchProgress && setShowBatch(false)}>
-          <section className="batch-modal" onMouseDown={(e) => e.stopPropagation()}>
+          <section
+            className="batch-modal"
+            onMouseDown={(e) => e.stopPropagation()}
+            onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); }}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              queueBatchFiles(Array.from(event.dataTransfer.files));
+            }}
+          >
             <header>
               <div>
                 <span>▦</span>
@@ -4623,6 +4997,36 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           </section>
         </div>
       )}
+      {pendingCloseDocumentId && studio && (() => {
+        const pending = studio.listDocuments().find((candidate) => candidate.id === pendingCloseDocumentId);
+        if (!pending) return null;
+        return (
+          <div className="spatial-modal" role="presentation">
+            <section className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-document-title">
+              <header><strong id="unsaved-document-title">Save changes to “{pending.name}”?</strong></header>
+              <p>Your edits are not in the project file yet. Recovery is not a substitute for saving.</p>
+              <footer>
+                <button type="button" onClick={() => setPendingCloseDocumentId(null)}>Cancel</button>
+                <button type="button" className="danger" onClick={discardPendingDocument}>Don’t Save</button>
+                <button type="button" className="primary" onClick={() => void saveAndClosePendingDocument()}>Save</button>
+              </footer>
+            </section>
+          </div>
+        );
+      })()}
+      {pendingNativeClose && studio && (
+        <div className="spatial-modal" role="presentation">
+          <section className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-quit-title">
+            <header><strong id="unsaved-quit-title">Save before quitting Luma Studio?</strong></header>
+            <p>{studio.dirtyDocuments().length} open document{studio.dirtyDocuments().length === 1 ? " has" : "s have"} unsaved changes. Quitting without saving permanently discards those edits.</p>
+            <footer>
+              <button type="button" onClick={() => { setPendingNativeClose(false); void cancelNativeClose(); }}>Cancel</button>
+              <button type="button" className="danger" onClick={() => { setPendingNativeClose(false); void confirmNativeClose(); }}>Don’t Save</button>
+              <button type="button" className="primary" onClick={() => void saveAllAndCloseNative()}>Save All</button>
+            </footer>
+          </section>
+        </div>
+      )}
       <input
         ref={batchInput}
         className="visually-hidden"
@@ -4679,6 +5083,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
       <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
       <input ref={focusImportInput} className="visually-hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
+      <input ref={pluginInput} className="visually-hidden" type="file" accept=".luma-plugin,application/json" onChange={onPluginInstall} />
       {dropActive && (
         <div className="studio-drop-overlay" aria-hidden="true">
           <div className="studio-drop-card">

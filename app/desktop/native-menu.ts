@@ -1,6 +1,8 @@
 import { MENU_COMMAND_EVENT, OPEN_FILE_EVENT, menuCommands } from "./menu-model";
 import type { StudioCommand } from "./menu-model";
 
+export const NATIVE_CLOSE_REQUEST_EVENT = "luma://close-requested";
+
 type Unlisten = () => void;
 
 type TauriWindow = Window & {
@@ -46,6 +48,18 @@ export function listenForMenuCommands(dispatch: (command: StudioCommand) => void
     const command = asStudioCommand(payload);
     if (command) dispatch(command);
   });
+}
+
+export function listenForNativeCloseRequest(request: () => void): Unlisten {
+  return subscribe(NATIVE_CLOSE_REQUEST_EVENT, request);
+}
+
+export async function confirmNativeClose() {
+  await (window as TauriWindow).__TAURI__?.core?.invoke?.("confirm_native_exit");
+}
+
+export async function cancelNativeClose() {
+  await (window as TauriWindow).__TAURI__?.core?.invoke?.("cancel_native_exit");
 }
 
 function subscribe(

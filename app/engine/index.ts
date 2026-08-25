@@ -87,7 +87,7 @@ export {
   nativeCoreInfo,
 } from "./native-core";
 export type { NativeTileLayer, NativeTileRequest } from "./native-core";
-export { isNativeFilesystemAvailable, openNativeFile, saveNativeFile } from "./native-files";
+export { isNativeFilesystemAvailable, openNativeFile, saveNativeFile, saveNativeProject } from "./native-files";
 
 // ---------- selection ----------
 export {

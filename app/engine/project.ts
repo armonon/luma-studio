@@ -37,6 +37,52 @@ export const LUMA_PROJECT_VERSION = 4 as const;
 const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, LUMA_PROJECT_VERSION]);
 const RESTORED_HISTORY_LIMIT = 80;
 
+export const LUMA_PROJECT_LIMITS = {
+  archiveBytes: 1024 * 1024 * 1024,
+  expandedBytes: 8 * 1024 * 1024 * 1024,
+  entryBytes: 1024 * 1024 * 1024,
+  entries: 25_000,
+  manifestBytes: 16 * 1024 * 1024,
+  dimension: 300_000,
+  layers: 100_000,
+  actions: 2_000,
+  actionSteps: 20_000,
+  historyNodes: 512,
+} as const;
+
+type SizedZipEntry = JSZip.JSZipObject & {
+  _data?: { uncompressedSize?: number; compressedSize?: number };
+};
+
+function sourceByteLength(source: Blob | ArrayBuffer | Uint8Array) {
+  return source instanceof Blob ? source.size : source.byteLength;
+}
+
+export function assertSafeProjectArchive(zip: JSZip, archiveBytes: number) {
+  const files = Object.values(zip.files).filter((entry) => !entry.dir) as SizedZipEntry[];
+  if (files.length > LUMA_PROJECT_LIMITS.entries) throw new Error("Luma project contains too many archive entries");
+  let expanded = 0;
+  for (const entry of files) {
+    if (entry.name.startsWith("/") || entry.name.includes("\\") || entry.name.split("/").includes("..")) {
+      throw new Error(`Unsafe project archive path: ${entry.name}`);
+    }
+    const size = entry._data?.uncompressedSize;
+    if (!Number.isSafeInteger(size) || size! < 0) throw new Error(`Project entry has an invalid size: ${entry.name}`);
+    if (size! > LUMA_PROJECT_LIMITS.entryBytes) throw new Error(`Project entry is too large: ${entry.name}`);
+    expanded += size!;
+    if (!Number.isSafeInteger(expanded) || expanded > LUMA_PROJECT_LIMITS.expandedBytes) {
+      throw new Error("Expanded Luma project exceeds the safety limit");
+    }
+  }
+  if (archiveBytes > 0 && expanded > Math.max(256 * 1024 * 1024, archiveBytes * 250)) {
+    throw new Error("Luma project has an unsafe archive expansion ratio");
+  }
+  const manifest = zip.file("manifest.json") as SizedZipEntry | null;
+  if (manifest?._data?.uncompressedSize && manifest._data.uncompressedSize > LUMA_PROJECT_LIMITS.manifestBytes) {
+    throw new Error("Project manifest exceeds the safety limit");
+  }
+}
+
 type SerializedPrecisionSurface = {
   width: number;
   height: number;
@@ -807,13 +853,30 @@ function assertManifest(value: unknown): asserts value is ProjectManifest {
       (doc.capturedBrushes !== undefined && !Array.isArray(doc.capturedBrushes))) {
     throw new Error("Invalid Luma project manifest");
   }
+  if (doc.width > LUMA_PROJECT_LIMITS.dimension || doc.height > LUMA_PROJECT_LIMITS.dimension) {
+    throw new Error("Luma project dimensions exceed the supported safety limit");
+  }
+  if (doc.layers.length > LUMA_PROJECT_LIMITS.layers) throw new Error("Luma project contains too many layers");
+  if ((doc.capturedBrushes?.length ?? 0) > MAX_CAPTURED_BRUSHES) throw new Error("Luma project contains too many captured brushes");
+  if (typeof manifest.name !== "string" || manifest.name.length > 500) throw new Error("Invalid Luma project name");
+  if (manifest.actions !== undefined) {
+    if (!Array.isArray(manifest.actions) || manifest.actions.length > LUMA_PROJECT_LIMITS.actions) throw new Error("Luma project contains too many actions");
+    const steps = manifest.actions.reduce((count, action) => count + (Array.isArray(action?.steps) ? action.steps.length : LUMA_PROJECT_LIMITS.actionSteps + 1), 0);
+    if (steps > LUMA_PROJECT_LIMITS.actionSteps) throw new Error("Luma project contains too many action steps");
+  }
+  if (manifest.history?.nodes && manifest.history.nodes.length > LUMA_PROJECT_LIMITS.historyNodes) {
+    throw new Error("Luma project contains too many history nodes");
+  }
 }
 
 export async function decodeLumaProject(
   blob: Blob | ArrayBuffer | Uint8Array,
   options: DecodeLumaProjectOptions = {},
 ): Promise<DecodedProject> {
+  const archiveBytes = sourceByteLength(blob);
+  if (archiveBytes > LUMA_PROJECT_LIMITS.archiveBytes) throw new Error("Luma project exceeds the 1 GB archive limit");
   const zip = await JSZip.loadAsync(blob);
+  assertSafeProjectArchive(zip, archiveBytes);
   const manifestFile = zip.file("manifest.json");
   if (!manifestFile) throw new Error("Project manifest is missing");
   const manifest: unknown = JSON.parse(await manifestFile.async("string"));

@@ -58,9 +58,14 @@ export const CAPABILITY_STATUS: Readonly<Record<Capability, CapabilityStatus>> =
   "gpu-export": "shipped",
   "on-device-models": "shipped",
   "filesystem-access": "shipped",
-  "large-documents": "shipped",
+  // The tiled viewport and precision paint master are shipped, but selections,
+  // masks and every transform/export path are not sparse yet. Do not sell the
+  // partial workflow as full large-document support.
+  "large-documents": "planned",
+  // DNG development and macOS camera-codec fallback are shipped; a complete
+  // nondestructive proprietary-RAW pipeline is not.
   "native-raw": "planned",
-  "plugin-install": "planned",
+  "plugin-install": "shipped",
 };
 
 export const DEFAULT_EDITION: LumaEdition = "web";

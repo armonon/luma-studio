@@ -71,13 +71,13 @@ test("the performance section only advertises implementation-backed metrics", ()
 test("every advertised neural action is a real engine operation", () => {
   const block = /const neuralActions = \[([\s\S]*?)\] as const;/.exec(page);
   assert.ok(block, "could not find neuralActions");
-  // Entries are ["<icon>", "<Label>"] tuples; take the second element.
-  const labels = [...block[1].matchAll(/\[\s*"[^"]*"\s*,\s*"([^"]+)"\s*\]/g)]
-    .map((m) => m[1].trim());
-  assert.ok(labels.length > 0, "expected some advertised actions");
+  // Display copy can be more precise than a legacy operation id, so the
+  // tuple carries both and this test pins the executable third field.
+  const actions = [...block[1].matchAll(/\[\s*"[^"]*"\s*,\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\]/g)]
+    .map((m) => ({ label: m[1].trim(), op: m[2].trim() }));
+  assert.ok(actions.length > 0, "expected some advertised actions");
 
-  for (const label of labels) {
-    const op = label.toLowerCase().replace(/^generative /, "");
+  for (const { label, op } of actions) {
     assert.equal(
       normalizeAiOperation(op),
       op,

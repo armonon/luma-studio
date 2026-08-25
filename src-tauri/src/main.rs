@@ -13,13 +13,16 @@ use tauri_plugin_dialog::DialogExt;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Mirrors MENU_COMMAND_EVENT in app/desktop/menu-model.ts.
 const MENU_COMMAND_EVENT: &str = "luma://menu-command";
 
 /// Mirrors OPEN_FILE_EVENT in app/desktop/menu-model.ts.
 const OPEN_FILE_EVENT: &str = "luma://open-file";
+const CLOSE_REQUEST_EVENT: &str = "luma://close-requested";
+static ALLOW_APP_EXIT: AtomicBool = AtomicBool::new(false);
+static EXIT_PROMPT_PENDING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct OpenFileBridge {
@@ -183,6 +186,73 @@ fn composite_native_tile(request: Request<'_>) -> Result<Response, String> {
 const MAX_NATIVE_FILE_BYTES: usize = 1024 * 1024 * 1024;
 static SAVE_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn parse_named_payload(payload: &[u8]) -> Result<(&str, &[u8]), String> {
+    if payload.len() < 4 { return Err("named binary payload is truncated".into()); }
+    let name_length = u32::from_le_bytes(payload[0..4].try_into().expect("four byte name length")) as usize;
+    let data_offset = 4usize.checked_add(name_length).ok_or("named binary name length overflow")?;
+    let name_bytes = payload.get(4..data_offset).ok_or("named binary file name is truncated")?;
+    let file_name = std::str::from_utf8(name_bytes).map_err(|_| "named binary file name must be UTF-8")?;
+    let data = payload.get(data_offset..).ok_or("named binary data is truncated")?;
+    Ok((file_name, data))
+}
+
+/// Develop proprietary camera RAW through macOS ImageIO (via the system sips
+/// frontend). No shell is involved, names are stripped to a known extension,
+/// and the isolated temporary directory is always removed. The returned PNG
+/// is a real OS RAW development; callers retain the tagged embedded preview as
+/// a fallback when the installed macOS release does not support that camera.
+#[tauri::command]
+fn develop_native_raw(request: Request<'_>) -> Result<Response, String> {
+    let InvokeBody::Raw(payload) = request.body() else {
+        return Err("native RAW development requires a raw binary request".into());
+    };
+    let (file_name, data) = parse_named_payload(payload)?;
+    if data.is_empty() || data.len() > MAX_NATIVE_FILE_BYTES {
+        return Err(format!("RAW source must contain 1..={} MB", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
+    }
+    let extension = std::path::Path::new(file_name).extension()
+        .and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+    const RAW_EXTENSIONS: &[&str] = &["dng", "cr2", "cr3", "nef", "nrw", "arw", "raf", "orf", "rw2", "pef"];
+    if !RAW_EXTENSIONS.contains(&extension.as_str()) {
+        return Err("native RAW development received an unsupported extension".into());
+    }
+    #[cfg(not(target_os = "macos"))]
+    return Err("native RAW development currently requires macOS ImageIO".into());
+    #[cfg(target_os = "macos")]
+    {
+        let counter = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp = std::env::temp_dir().join(format!("luma-raw-{}-{counter}", std::process::id()));
+        std::fs::create_dir(&temp).map_err(|error| format!("Unable to create RAW workspace: {error}"))?;
+        let input = temp.join(format!("source.{extension}"));
+        let output = temp.join("developed.png");
+        let result = (|| -> Result<Vec<u8>, String> {
+            std::fs::write(&input, data).map_err(|error| format!("Unable to stage RAW source: {error}"))?;
+            let conversion = std::process::Command::new("/usr/bin/sips")
+                .args(["-s", "format", "png"])
+                .arg(&input)
+                .arg("--out")
+                .arg(&output)
+                .output()
+                .map_err(|error| format!("Unable to start macOS RAW developer: {error}"))?;
+            if !conversion.status.success() {
+                let detail = String::from_utf8_lossy(&conversion.stderr).trim().to_owned();
+                return Err(if detail.is_empty() {
+                    "macOS ImageIO could not develop this camera RAW".into()
+                } else {
+                    format!("macOS ImageIO could not develop this camera RAW: {detail}")
+                });
+            }
+            let developed = std::fs::read(&output).map_err(|error| format!("Unable to read developed RAW: {error}"))?;
+            if developed.len() < 8 || developed.get(0..8) != Some(b"\x89PNG\r\n\x1a\n") {
+                return Err("macOS RAW developer returned an invalid PNG".into());
+            }
+            Ok(developed)
+        })();
+        let _ = std::fs::remove_dir_all(&temp);
+        result.map(Response::new)
+    }
+}
+
 fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("Untitled.luma");
@@ -216,7 +286,7 @@ async fn open_native_file(app: tauri::AppHandle) -> Result<Response, String> {
     let selected = app.dialog().file()
         .add_filter("Luma, images, Photoshop, and RAW", &[
             "luma", "psd", "psb", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
-            "dng", "cr2", "cr3", "nef", "arw", "orf", "raf", "rw2", "pef", "srw",
+            "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "raf", "rw2", "pef",
         ])
         .blocking_pick_file();
     let Some(selected) = selected else { return Ok(Response::new(0u32.to_le_bytes().to_vec())); };
@@ -237,13 +307,19 @@ fn read_framed_file(path: &std::path::Path) -> Result<Response, String> {
     if metadata.len() > MAX_NATIVE_FILE_BYTES as u64 {
         return Err(format!("File exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
     }
-    let data = std::fs::read(path).map_err(|error| format!("Unable to read file: {error}"))?;
-    let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("Untitled").as_bytes();
+    use std::io::Read;
+    let framed_path = path.to_string_lossy();
+    let name = framed_path.as_bytes();
     let name_length = u32::try_from(name.len()).map_err(|_| "File name is too long")?;
-    let mut response = Vec::with_capacity(4 + name.len() + data.len());
+    let data_length = usize::try_from(metadata.len()).map_err(|_| "File is too large for this platform")?;
+    let mut response = Vec::with_capacity(4 + name.len() + data_length);
     response.extend_from_slice(&name_length.to_le_bytes());
     response.extend_from_slice(name);
-    response.extend_from_slice(&data);
+    let start = response.len();
+    response.resize(start + data_length, 0);
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut response[start..]))
+        .map_err(|error| format!("Unable to read file: {error}"))?;
     Ok(Response::new(response))
 }
 
@@ -268,6 +344,24 @@ fn take_pending_open_files() -> Result<Vec<String>, String> {
     Ok(bridge.mark_ready_and_take_pending())
 }
 
+#[tauri::command]
+fn confirm_native_exit(app: tauri::AppHandle) {
+    ALLOW_APP_EXIT.store(true, Ordering::SeqCst);
+    EXIT_PROMPT_PENDING.store(false, Ordering::SeqCst);
+    app.exit(0);
+}
+
+#[tauri::command]
+fn cancel_native_exit() {
+    EXIT_PROMPT_PENDING.store(false, Ordering::SeqCst);
+}
+
+fn request_exit_confirmation(app: &tauri::AppHandle) {
+    if !EXIT_PROMPT_PENDING.swap(true, Ordering::SeqCst) {
+        let _ = app.emit(CLOSE_REQUEST_EVENT, ());
+    }
+}
+
 fn route_open_file(app: &tauri::AppHandle, path: String) {
     let immediate = match OPEN_FILE_BRIDGE.lock() {
         Ok(mut bridge) => bridge.route(path),
@@ -285,14 +379,9 @@ async fn save_native_file(app: tauri::AppHandle, request: Request<'_>) -> Result
     let InvokeBody::Raw(payload) = request.body() else {
         return Err("native save requires a raw binary request".into());
     };
-    if payload.len() < 4 { return Err("native save payload is truncated".into()); }
-    let name_length = u32::from_le_bytes(payload[0..4].try_into().expect("four byte name length")) as usize;
-    let data_offset = 4usize.checked_add(name_length).ok_or("native save name length overflow")?;
-    let name_bytes = payload.get(4..data_offset).ok_or("native save file name is truncated")?;
-    let file_name = std::str::from_utf8(name_bytes).map_err(|_| "native save file name must be UTF-8")?;
+    let (file_name, data) = parse_named_payload(payload)?;
     let file_name = std::path::Path::new(file_name).file_name()
         .and_then(|name| name.to_str()).filter(|name| !name.is_empty()).unwrap_or("Untitled.luma");
-    let data = payload.get(data_offset..).ok_or("native save data is truncated")?;
     if data.len() > MAX_NATIVE_FILE_BYTES {
         return Err(format!("Save exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
     }
@@ -303,6 +392,41 @@ async fn save_native_file(app: tauri::AppHandle, request: Request<'_>) -> Result
         .blocking_save_file();
     let Some(selected) = selected else { return Ok(false); };
     let path = selected.into_path().map_err(|error| error.to_string())?;
+    atomic_write(&path, data)?;
+    Ok(true)
+}
+
+#[tauri::command]
+async fn save_native_file_as(app: tauri::AppHandle, request: Request<'_>) -> Result<Option<String>, String> {
+    let InvokeBody::Raw(payload) = request.body() else {
+        return Err("native save requires a raw binary request".into());
+    };
+    let (file_name, data) = parse_named_payload(payload)?;
+    let file_name = std::path::Path::new(file_name).file_name()
+        .and_then(|name| name.to_str()).filter(|name| !name.is_empty()).unwrap_or("Untitled.luma");
+    if data.len() > MAX_NATIVE_FILE_BYTES {
+        return Err(format!("Save exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
+    }
+    let selected = app.dialog().file().set_file_name(file_name).add_filter("Luma project", &["luma"]).blocking_save_file();
+    let Some(selected) = selected else { return Ok(None); };
+    let path = selected.into_path().map_err(|error| error.to_string())?;
+    atomic_write(&path, data)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+async fn save_native_path(request: Request<'_>) -> Result<bool, String> {
+    let InvokeBody::Raw(payload) = request.body() else {
+        return Err("native save requires a raw binary request".into());
+    };
+    let (path, data) = parse_named_payload(payload)?;
+    if data.len() > MAX_NATIVE_FILE_BYTES {
+        return Err(format!("Save exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
+    }
+    let path = std::path::PathBuf::from(path);
+    if !path.is_absolute() || path.extension().and_then(|value| value.to_str()).map(|value| !value.eq_ignore_ascii_case("luma")).unwrap_or(true) {
+        return Err("A remembered project save must target an absolute .luma path".into());
+    }
     atomic_write(&path, data)?;
     Ok(true)
 }
@@ -412,6 +536,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
         .item(&recent_submenu)
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
+        .item(&item("save-as", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .separator()
         .item(&item("export", "Export…", Some("CmdOrCtrl+E"))?)
         .separator()
@@ -477,17 +602,30 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             core_info,
             composite_native_tile,
+            develop_native_raw,
             open_native_file,
             save_native_file,
+            save_native_file_as,
+            save_native_path,
             open_ai_sign_in,
             set_recent_files,
             read_native_path,
             take_pending_open_files,
+            confirm_native_exit,
+            cancel_native_exit,
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if !ALLOW_APP_EXIT.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    request_exit_confirmation(&window.app_handle());
+                }
+            }
         })
         // The frontend owns what a command means; this only carries the id
         // across. Keeping the behaviour on the TypeScript side is what lets
@@ -507,15 +645,22 @@ fn main() {
         // already-running instance there is no argv to read at all. The
         // frontend decides what to do with the path; this only relays it.
         .run(|app, event| {
-            if let tauri::RunEvent::Opened { urls } = event {
-                for url in urls {
-                    let path = url
-                        .to_file_path()
-                        .ok()
-                        .and_then(|path| path.to_str().map(str::to_owned))
-                        .unwrap_or_else(|| url.to_string());
-                    route_open_file(app, path);
+            match event {
+                tauri::RunEvent::Opened { urls } => {
+                    for url in urls {
+                        let path = url
+                            .to_file_path()
+                            .ok()
+                            .and_then(|path| path.to_str().map(str::to_owned))
+                            .unwrap_or_else(|| url.to_string());
+                        route_open_file(app, path);
+                    }
                 }
+                tauri::RunEvent::ExitRequested { api, .. } if !ALLOW_APP_EXIT.load(Ordering::SeqCst) => {
+                    api.prevent_exit();
+                    request_exit_confirmation(app);
+                }
+                _ => {}
             }
         });
 }

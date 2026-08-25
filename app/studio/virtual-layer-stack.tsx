@@ -50,6 +50,7 @@ export default function VirtualLayerStack({
   onOpenStyle,
   onRename,
   onToggleVisible,
+  onDelete,
 }: {
   layers: Layer[];
   activeLayerId: string | null;
@@ -61,6 +62,18 @@ export default function VirtualLayerStack({
   onOpenStyle: (layer: Layer) => void;
   onRename: (layer: Layer) => void;
   onToggleVisible: (layer: Layer) => void;
+  /**
+   * Deletes this specific layer, independent of which layer is active.
+   * A layer row is the natural place to ask for this — the panel header's
+   * delete button targets "whichever layer happens to be selected", which is
+   * both an extra step and, at real-world panel widths, gets flexbox-squeezed
+   * to zero width behind the crowded add-layer icon row (verified: the header
+   * toolbar's Delete/Group/Move buttons render at `width: 0` once a `<select>`
+   * sibling claims its intrinsic width, since only buttons opt into the
+   * hide-until-hover collapse — the select doesn't shrink at all). A visible,
+   * always-reachable per-row action does not depend on that layout surviving.
+   */
+  onDelete: (layer: Layer) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [viewportHeight, setViewportHeight] = useState(360);
@@ -136,9 +149,20 @@ export default function VirtualLayerStack({
                   >{layer.name}</strong>
                   <small>{layerDetails(layer)}</small>
                 </span>
-                <i onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}>
-                  {layer.visible ? "◉" : "○"}
-                </i>
+                <span className="spatial-layer-actions">
+                  <i onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}>
+                    {layer.visible ? "◉" : "○"}
+                  </i>
+                  <i
+                    className="spatial-layer-delete"
+                    role="button"
+                    aria-label={`Delete ${layer.name}`}
+                    title="Delete layer"
+                    onClick={(event) => { event.stopPropagation(); onDelete(layer); }}
+                  >
+                    ×
+                  </i>
+                </span>
               </button>
             );
           })}
