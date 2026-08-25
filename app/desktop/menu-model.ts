@@ -38,6 +38,7 @@ export type StudioCommand =
   | "layer-style"
   | "curves"
   | "levels"
+  | "hsl"
   // View
   | "zoom-in"
   | "zoom-out"
@@ -123,6 +124,7 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "separator" },
       { kind: "command", id: "curves", label: "New Curves Adjustment" },
       { kind: "command", id: "levels", label: "New Levels Adjustment" },
+      { kind: "command", id: "hsl", label: "New HSL Adjustment" },
     ],
   },
   {

@@ -568,6 +568,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .separator()
         .item(&item("curves", "New Curves Adjustment", None)?)
         .item(&item("levels", "New Levels Adjustment", None)?)
+        .item(&item("hsl", "New HSL Adjustment", None)?)
         .build()?;
 
     let select = SubmenuBuilder::new(app, "Select")

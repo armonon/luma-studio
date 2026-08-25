@@ -33,6 +33,7 @@ import type { StudioCommand } from "../app/desktop/menu-model.ts";
 // ---------------------------------------------------------------------------
 
 const rust = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+const studioPage = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
 
 /** Every `item("id", "Label", accelerator)` the Rust menu builder declares. */
 function rustMenuItems() {
@@ -152,6 +153,21 @@ test("accelerators are cross-platform, not hard-coded to one modifier", () => {
       );
     }
   }
+});
+
+test("native accelerators do not also activate single-letter tools", () => {
+  const modifierGuard = studioPage.indexOf("if (e.metaKey || e.ctrlKey || e.altKey) return;");
+  const toolLookup = studioPage.indexOf("const t = modeTools[workspace]", modifierGuard);
+  assert.ok(modifierGuard >= 0 && toolLookup > modifierGuard, "modifier guard must precede tool lookup");
+  assert.match(
+    studioPage,
+    /\(e\.key === "\[" \|\| e\.key === "\]"\) && !e\.metaKey && !e\.ctrlKey && !e\.altKey/,
+  );
+});
+
+test("secondary desktop dialogs have working Escape dismissal paths", () => {
+  assert.match(studioPage, /e\.key === "Escape" && showFilters/);
+  assert.match(studioPage, /e\.key === "Escape" && showBatch && !batchProgress/);
 });
 
 // --- the event bridge -------------------------------------------------------

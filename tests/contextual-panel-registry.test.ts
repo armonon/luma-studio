@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { Layer, LayerKind } from "../app/engine/document.ts";
 import { panelForLayer, resolveContextualPanel, workspaceForLayer } from "../app/studio/contextual-panel-registry.ts";
@@ -18,4 +19,13 @@ test("manual panels and mask focus outrank generic workspace routing", () => {
   assert.equal(resolveContextualPanel({ ...base, override: "channels" }), "channels");
   assert.equal(resolveContextualPanel({ ...base, override: null, maskFocused: true }), "mask");
   assert.equal(resolveContextualPanel({ ...base, override: null, inspector: "ai" }), "neural");
+});
+
+test("the manual Selection panel is mounted from resolved contextual state", () => {
+  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /\{contextualPanel === "selection" && \(/);
+  assert.doesNotMatch(
+    page,
+    /\{workspace === "select" && \(\s*<section[^>]*data-contextual-panel="selection"/,
+  );
 });

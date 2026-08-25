@@ -2383,6 +2383,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           focusInspector("properties");
         }
         return;
+      case "hsl":
+        if (studio) {
+          const layer = studio.addHslLayer();
+          setActiveLayerId(layer.id);
+          focusInspector("properties");
+        }
+        return;
 
       case "zoom-in": setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return;
       case "zoom-out": setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return;
@@ -2813,6 +2820,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (e.key === "Escape" && showWorkspaceSettings) { setShowWorkspaceSettings(false); return; }
       if (e.key === "Escape" && showHistory) { setShowHistory(false); return; }
       if (e.key === "Escape" && showExportMenu) { setShowExportMenu(false); return; }
+      if (e.key === "Escape" && showFilters) { setShowFilters(false); return; }
+      if (e.key === "Escape" && showBatch && !batchProgress) { setShowBatch(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
       if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
       if (e.key === "Enter" && pointSelectionTool && pointDraft.length >= 3) {
@@ -2834,7 +2843,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (e.key === "1" && !e.metaKey && !e.ctrlKey) { setView((v) => ({ ...v, zoom: 1 })); return; }
       if ((e.key === "+" || e.key === "=") && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return; }
       if (e.key === "-" && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return; }
-      if (e.key === "[" || e.key === "]") {
+      if ((e.key === "[" || e.key === "]") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         const direction = e.key === "]" ? 1 : -1;
         if (activeTool === "capture-brush" && captureSampling) {
@@ -2844,6 +2853,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }
         return;
       }
+      // Native menu accelerators such as Cmd+G, Cmd+Shift+N, Cmd+[ and Cmd+]
+      // are dispatched by Tauri. They must not also fall through to the
+      // workspace's single-letter tool shortcuts (or brush-size brackets).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Delete" || e.key === "Backspace") {
         if (activeLayerId && studio) { studio.clearPixels(activeLayerId); return; }
       }
@@ -2907,7 +2920,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
+  }, [desktop, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -3991,7 +4004,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               )}
             </section>
 
-            {workspace === "select" && (
+            {contextualPanel === "selection" && (
               <section className="glass-card mask-card" data-contextual-panel="selection">
                 <header><strong>Selection</strong>
                   <button onClick={() => studio?.deselect()}>×</button>

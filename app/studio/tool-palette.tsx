@@ -53,6 +53,7 @@ export default function ToolPalette({
     { id: "select-subject", icon: "sel-sam", label: "Select Subject", detail: "AI selection", shortcut: "" },
     { id: "curves", icon: "tone", label: "Curves Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "levels", icon: "tone", label: "Levels Adjustment", detail: "New adjustment layer", shortcut: "" },
+    { id: "hsl", icon: "tone", label: "HSL Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "history", icon: "content-move", label: "Version History", detail: "History branches", shortcut: "" },
     { id: "export", icon: "frame", label: "Export", detail: "Raster or Photoshop", shortcut: "⌘E" },
   ];
