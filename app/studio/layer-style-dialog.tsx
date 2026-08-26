@@ -495,12 +495,10 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
   const blendIf = resolvedBlendIf(layer);
   const fillOpacity = resolvedFillOpacity(layer);
   const channel = blendIf.channels[blendIf.activeChannel];
-  const setRange = (key: "source" | "underlying", range: BlendIfRange) => {
-    studio.setLayerBlendIf(layer.id, {
+  const settingsWithRange = (key: "source" | "underlying", range: BlendIfRange) => ({
       ...blendIf,
       channels: { ...blendIf.channels, [blendIf.activeChannel]: { ...channel, [key]: range } },
-    });
-  };
+  });
   return (
     <div className="layer-style-blending">
       <div className="global-light">
@@ -609,8 +607,8 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
           onChange={(event) => studio.setLayerBlendingOption(layer.id, "blendClippedAsGroup", event.target.checked)}
         />
       </label>
-      <BlendIfRangeEditor label="This layer" range={channel.source} onChange={(range) => setRange("source", range)} />
-      <BlendIfRangeEditor label="Underlying" range={channel.underlying} onChange={(range) => setRange("underlying", range)} />
+      <BlendIfRangeEditor label="This layer" range={channel.source} onLive={(range) => studio.liveUpdateLayerBlendIf(layer.id, settingsWithRange("source", range))} onCommit={(range) => studio.commitLayerBlendIf(layer.id, settingsWithRange("source", range))} />
+      <BlendIfRangeEditor label="Underlying" range={channel.underlying} onLive={(range) => studio.liveUpdateLayerBlendIf(layer.id, settingsWithRange("underlying", range))} onCommit={(range) => studio.commitLayerBlendIf(layer.id, settingsWithRange("underlying", range))} />
       <button type="button" className="blend-if-reset" onClick={() => studio.resetLayerBlendIf(layer.id)} disabled={!layer.blendIf}>
         Reset Blend If
       </button>

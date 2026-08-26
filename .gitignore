@@ -47,6 +47,7 @@ next-env.d.ts
 
 # Tauri (pro edition) build artefacts
 /src-tauri/target
+/src-tauri/tauri.release.conf.json
 
 # Rust build artefacts
 /crates/*/target

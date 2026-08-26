@@ -112,6 +112,33 @@ test("local macOS bundles receive a complete ad-hoc signature", () => {
   assert.equal(bundle.macOS?.signingIdentity, "-");
 });
 
+test("packaged configuration excludes localhost while development opts in explicitly", () => {
+  const config = JSON.parse(
+    readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"),
+  ) as { build: { devUrl?: string; beforeDevCommand?: string }; app: { security: { csp: string } }; bundle: { createUpdaterArtifacts?: boolean }; plugins?: { updater?: { pubkey?: string; endpoints?: string[] } } };
+  const development = JSON.parse(
+    readFileSync(new URL("../src-tauri/tauri.dev.conf.json", import.meta.url), "utf8"),
+  ) as { build: { devUrl?: string; beforeDevCommand?: string }; app: { security: { csp: string } } };
+  assert.equal(config.build.devUrl, undefined);
+  assert.equal(config.build.beforeDevCommand, undefined);
+  assert.doesNotMatch(config.app.security.csp, /localhost:3000/);
+  assert.notEqual(config.bundle.createUpdaterArtifacts, true, "unsigned local builds cannot request updater artifacts");
+  assert.equal(config.plugins?.updater?.pubkey, "", "local builds keep the updater inert without a fake signing key");
+  assert.deepEqual(config.plugins?.updater?.endpoints, []);
+  assert.equal(development.build.devUrl, "http://localhost:3000");
+  assert.match(development.app.security.csp, /localhost:3000/);
+});
+
+test("web, native shell, and packaged app share one release version", () => {
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+  const tauri = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8")) as { version: string };
+  const cargo = readFileSync(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8");
+  const cargoVersion = /^version = "([^"]+)"$/m.exec(cargo)?.[1];
+  assert.match(pkg.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
+  assert.equal(tauri.version, pkg.version);
+  assert.equal(cargoVersion, pkg.version);
+});
+
 test("no command id appears twice", () => {
   const ids = menuCommands();
   assert.equal(new Set(ids).size, ids.length, "duplicate menu command");
@@ -176,6 +203,22 @@ test("native accelerators do not also activate single-letter tools", () => {
 test("secondary desktop dialogs have working Escape dismissal paths", () => {
   assert.match(studioPage, /e\.key === "Escape" && showFilters/);
   assert.match(studioPage, /e\.key === "Escape" && showBatch && !batchProgress/);
+});
+
+test("native update installation cannot bypass unsaved-document protection", () => {
+  const command = studioPage.indexOf('case "check-for-updates"');
+  const initialDirtyGuard = studioPage.indexOf("studio?.dirtyDocuments().length", command);
+  const updateFlow = studioPage.indexOf("runDesktopUpdateFlow", initialDirtyGuard);
+  const consentDirtyGuard = studioPage.indexOf("studio?.dirtyDocuments().length", updateFlow);
+  const confirmation = studioPage.indexOf("window.confirm", consentDirtyGuard);
+  const recoveryCheckpoint = studioPage.indexOf("writeRecoveryWorkspace(await studio.exportRecoveryWorkspace())", confirmation);
+  const installLock = studioPage.indexOf("setDesktopUpdateInstalling(true)", recoveryCheckpoint);
+  assert.ok(command >= 0 && initialDirtyGuard > command && updateFlow > initialDirtyGuard,
+    "the update flow must refuse to start while any document is dirty");
+  assert.ok(consentDirtyGuard > updateFlow && confirmation > consentDirtyGuard,
+    "documents must be checked again after the network request and before install consent");
+  assert.ok(recoveryCheckpoint > confirmation && installLock > recoveryCheckpoint,
+    "the workspace must be checkpointed and editing locked before the updater starts downloading");
 });
 
 // --- the event bridge -------------------------------------------------------

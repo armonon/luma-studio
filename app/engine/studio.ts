@@ -313,6 +313,10 @@ type DocumentSession = {
   history: OperationHistory<HistoryEntry>;
   nativePath?: string;
   savedHistoryNodeId: string;
+  /** True while an interactive edit has changed pixels/parameters but has not
+   * yet been folded into a single history entry. This keeps close/quit guards
+   * honest during a drag instead of waiting for pointer-up. */
+  transientDirty: boolean;
 };
 
 export const HISTORY_LIMIT = 80;
@@ -548,6 +552,7 @@ export class Studio {
       doc: this.doc,
       history: this.history,
       savedHistoryNodeId: this.history.current,
+      transientDirty: false,
     };
     this.sessions = [session];
     this.activeSessionId = session.id;
@@ -729,8 +734,25 @@ export class Studio {
 
   private commit(entry: HistoryEntry) {
     this.history.commit(entry.label, entry);
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+    if (session && this.liveSnapshots.size === 0 && !this.liveGlobalLightDocument) {
+      session.transientDirty = false;
+    }
     this.virtualDirty.invalidateAll();
     this.emit();
+  }
+
+  private markTransientDirty() {
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+    if (!session || session.transientDirty) return;
+    session.transientDirty = true;
+    this.emit();
+  }
+
+  private clearTransientDirtyIfSettled() {
+    if (this.liveSnapshots.size > 0 || this.liveGlobalLightDocument) return;
+    const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
+    if (session) session.transientDirty = false;
   }
 
   canUndo() { return this.history.canUndo(); }
@@ -1080,7 +1102,7 @@ export class Studio {
       name: session.name,
       active: session.id === this.activeSessionId,
       nativePath: session.nativePath,
-      dirty: session.history.current !== session.savedHistoryNodeId,
+      dirty: session.transientDirty || session.history.current !== session.savedHistoryNodeId,
     }));
   }
 
@@ -1091,13 +1113,13 @@ export class Studio {
       id: session.id,
       name: session.name,
       nativePath: session.nativePath,
-      dirty: session.history.current !== session.savedHistoryNodeId,
+      dirty: session.transientDirty || session.history.current !== session.savedHistoryNodeId,
     };
   }
 
   dirtyDocuments() {
     this.saveActiveSession();
-    return this.sessions.filter((session) => session.history.current !== session.savedHistoryNodeId).map((session) => ({
+    return this.sessions.filter((session) => session.transientDirty || session.history.current !== session.savedHistoryNodeId).map((session) => ({
       id: session.id,
       name: session.name,
       nativePath: session.nativePath,
@@ -1109,6 +1131,11 @@ export class Studio {
     const session = this.sessions.find((candidate) => candidate.id === id);
     if (!session) return false;
     session.savedHistoryNodeId = session.history.current;
+    session.transientDirty = false;
+    if (id === this.activeSessionId) {
+      this.liveSnapshots.clear();
+      this.liveGlobalLightDocument = null;
+    }
     if (nativePath) {
       session.nativePath = nativePath;
       const fileName = nativePath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "");
@@ -1190,6 +1217,7 @@ export class Studio {
       current.doc = doc;
       current.history = this.createSessionHistory();
       current.savedHistoryNodeId = current.history.current;
+      current.transientDirty = false;
       current.nativePath = undefined;
       this.doc = doc;
       this.history = current.history;
@@ -1202,6 +1230,7 @@ export class Studio {
       doc,
       history: this.createSessionHistory(),
       savedHistoryNodeId: "",
+      transientDirty: false,
     };
     session.savedHistoryNodeId = session.history.current;
     this.sessions.push(session);
@@ -1221,6 +1250,7 @@ export class Studio {
     if (session) {
       session.history = this.history;
       session.savedHistoryNodeId = this.history.current;
+      session.transientDirty = false;
     }
     this.requestRender();
     this.emit();
@@ -2314,7 +2344,10 @@ export class Studio {
       this.liveSnapshots.set(key, { layerId, filters: cloneFilters(layer.filters) });
     }
     const changed = this.mutateSmartFilter(layerId, filterId, patch);
-    if (changed) this.requestRender();
+    if (changed) {
+      this.markTransientDirty();
+      this.requestRender();
+    }
     return changed;
   }
 
@@ -2331,7 +2364,9 @@ export class Studio {
     if (!this.mutateSmartFilter(layerId, filterId, patch)) return false;
     const after: LayerSnapshot = { layerId, filters: cloneFilters(layer.filters) };
     if (JSON.stringify(before.filters ?? []) === JSON.stringify(after.filters ?? [])) {
+      this.clearTransientDirtyIfSettled();
       this.requestRender();
+      this.emit();
       return true;
     }
     this.commit({ label: "Smart filter updated", before: [before], after: [after] });
@@ -2489,6 +2524,7 @@ export class Studio {
     const key = `layer-effect:${layerId}:${effectId}`;
     if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId, effects: cloneEffects(layer.effects) });
     layer.effects = layer.effects.map((effect) => effect.id === effectId ? { ...effect, ...patch } : effect);
+    this.markTransientDirty();
     this.requestRender();
     return true;
   }
@@ -2771,6 +2807,7 @@ export class Studio {
     if (next.angle === current.angle && next.altitude === current.altitude) return;
     if (!this.liveGlobalLightDocument) this.liveGlobalLightDocument = cloneDocument(this.doc);
     this.doc.globalLight = next;
+    this.markTransientDirty();
     this.requestRender();
   }
 
@@ -2940,6 +2977,7 @@ export class Studio {
       this.liveSnapshots.set(liveKey, { layerId: id, [key]: layer[key] ?? null } as LayerSnapshot);
     }
     layer[key] = value;
+    this.markTransientDirty();
     this.requestRender();
     return true;
   }
@@ -3040,6 +3078,7 @@ export class Studio {
     };
     layer.blendStack = cloneBlendStack(passes);
     layer.blend = passes[0].mode;
+    this.markTransientDirty();
     this.requestRender();
     return true;
   }
@@ -3098,15 +3137,44 @@ export class Studio {
   }
 
   setLayerBlendIf(id: string, settings: BlendIf) {
+    return this.commitLayerBlendIf(id, settings);
+  }
+
+  liveUpdateLayerBlendIf(id: string, settings: BlendIf) {
     const layer = this.findLayer(id);
     if (!layer || layer.kind === "group") return false;
-    const before: LayerSnapshot = {
+    const key = `blend-if:${id}`;
+    if (!this.liveSnapshots.has(key)) {
+      this.liveSnapshots.set(key, {
+        layerId: id,
+        blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
+      });
+    }
+    const normalized = resolvedBlendIf({ blendIf: settings });
+    layer.blendIf = cloneBlendIf(normalized);
+    this.markTransientDirty();
+    this.requestRender();
+    return true;
+  }
+
+  commitLayerBlendIf(id: string, settings: BlendIf) {
+    const layer = this.findLayer(id);
+    if (!layer || layer.kind === "group") return false;
+    const key = `blend-if:${id}`;
+    const before: LayerSnapshot = this.liveSnapshots.get(key) ?? {
       layerId: id,
       blendIf: layer.blendIf ? cloneBlendIf(layer.blendIf) : null,
     };
+    this.liveSnapshots.delete(key);
     const normalized = resolvedBlendIf({ blendIf: settings });
     layer.blendIf = cloneBlendIf(normalized);
     const after: LayerSnapshot = { layerId: id, blendIf: cloneBlendIf(normalized) };
+    if (JSON.stringify(before.blendIf) === JSON.stringify(after.blendIf)) {
+      this.clearTransientDirtyIfSettled();
+      this.requestRender();
+      this.emit();
+      return true;
+    }
     this.commit({ label: "Blend If", before: [before], after: [after] });
     this.requestRender();
     return true;
@@ -3143,6 +3211,7 @@ export class Studio {
     const key = `transform:${id}`;
     if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, transform: { ...layer.transform } });
     layer.transform = { ...layer.transform, ...patch };
+    this.markTransientDirty();
     this.requestRender();
   }
 
@@ -3181,6 +3250,7 @@ export class Studio {
     const key = `text:${id}`;
     if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, text: { ...layer.text } });
     layer.text = { ...layer.text, ...patch };
+    this.markTransientDirty();
     this.requestRender();
   }
 
@@ -3205,6 +3275,7 @@ export class Studio {
     const key = `shape:${id}`;
     if (!this.liveSnapshots.has(key)) this.liveSnapshots.set(key, { layerId: id, shape: { ...layer.shape } });
     layer.shape = { ...layer.shape, ...patch };
+    this.markTransientDirty();
     this.requestRender();
   }
 
@@ -3221,6 +3292,7 @@ export class Studio {
       this.liveSnapshots.set(key, snapshotForAdjustment(layer, kind));
     }
     applyAdjustment(layer, kind, params);
+    this.markTransientDirty();
     this.requestRender();
   }
 
@@ -3235,7 +3307,9 @@ export class Studio {
     applyAdjustment(layer, kind, params);
     const after = snapshotForAdjustment(layer, kind);
     if (JSON.stringify(before) === JSON.stringify(after)) {
+      this.clearTransientDirtyIfSettled();
       this.requestRender();
+      this.emit();
       return;
     }
     this.commit({ label: adjustmentLabel(kind), before: [before], after: [after] });

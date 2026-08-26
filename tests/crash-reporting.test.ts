@@ -54,3 +54,26 @@ test("unconfigured, insecure, and failed reporters stay non-fatal", async () => 
   assert.equal(await retryable.report(event), false);
   assert.equal(await retryable.report(event), true);
 });
+
+test("successful crash receipts persist and startup flush retries only undelivered fatal events", async () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value); },
+  };
+  let requests = 0;
+  const options = {
+    endpoint: "https://crashes.example.test/v1",
+    release: "v0.6.0-rc0",
+    edition: "pro" as const,
+    storage,
+    fetchImpl: (async () => { requests++; return new Response(null, { status: 202 }); }) as typeof fetch,
+  };
+  const first = new RemoteCrashReporter(options);
+  assert.equal(await first.flush([event, { ...event, id: "long-1", kind: "long-task" }]), 1);
+  assert.equal(requests, 1);
+
+  const afterRestart = new RemoteCrashReporter(options);
+  assert.equal(await afterRestart.flush([event, { ...event, id: "rejection-2", kind: "rejection" }]), 1);
+  assert.equal(requests, 2, "the acknowledged crash must not be sent twice");
+});

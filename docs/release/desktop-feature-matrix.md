@@ -224,6 +224,7 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | Large JPEG/WebP export | Working | Explicit safe refusal; streamed PNG remains available |
 | Unsaved tab/document close | Working | Dirty documents require Save / Don’t Save / Cancel |
 | Unsaved native window quit | Partial | Native close interception is implemented/tested; clean installed-app campaign remains pending |
+| Unsaved update/restart | Working | Update refuses dirty tabs, re-checks after network I/O, checkpoints the workspace, then locks editing before install |
 
 ## Defects found and fixed in this audit
 
@@ -236,13 +237,16 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | Demanding PSD/PSB import | Valid real projects with 5–11.5 GiB layered-decode estimates were rejected even though their composites fit safely | Added an automatic composite-only decode plan under the same 2 GiB ceiling, explicit preview-only warnings, and exact untouched-source passthrough |
 | Short-window inspector | A 720px-high desktop window let Layers and Properties consume nearly the whole rail | Rebalanced the final desktop media rule so contextual editors retain useful space; verified in the rebuilt 1280×720 workspace |
 | Icon-only command names | Layer creation/reordering, Focus pins, Actions and two reset controls had weak or unstable assistive names | Added explicit, stable accessible labels and a source regression test |
+| Local updater startup abort | Registering the updater plugin without a config object caused the packaged app to abort during native startup | Local builds now carry an explicitly empty inert config; the validated release overlay replaces it with the real HTTPS endpoint/key |
+| Release build leaked development metadata | Localhost CSP/dev URL and absolute build-home paths were embedded in the packaged executable | Development Tauri config is isolated; release builds remap the build home and the bundle audit rejects either leak |
+| Update could restart over unsaved work | A naive updater install could bypass the close-confirmation path | The UI refuses dirty work before and after the check, checkpoints all documents, and blocks edits during verified installation |
 
 ## Remaining release gaps
 
 `npm run release:status` currently passes 4 of 10 evidence gates:
 
 - Passed: P0 checkpoint, sparse selections, sparse masks, recovery/destructive tests.
-- Failing: the required 50-project PSD/PSB/RAW corpus (local evidence is now 6/6 PSD and 2/2 PSB), signed updater configuration, updater failure campaign, Apple signing/notarization report, remote crash reporting, and clean-machine installation.
+- Failing: the required 50-project PSD/PSB/RAW corpus (local evidence is now 6/6 PSD and 2/2 PSB), production updater endpoint/key and its failure campaign, Apple signing/notarization report, production crash receipt/symbolication, and clean-machine installation. Updater runtime and crash ingestion are implemented; infrastructure evidence is not.
 - Large-document and native-RAW capabilities remain intentionally marked `planned` in the edition registry. Sparse alpha is complete, but all supported workflows must stay inside defined ceilings before either claim changes to shipped.
 - The 23.6 MB ONNX Runtime WASM and 550 KB Transformers chunk remain lazy rather than startup-loaded, but they are still a meaningful installed-size cost for local neural features.
 

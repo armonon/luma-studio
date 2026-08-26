@@ -10,6 +10,7 @@
 use luma_core::{composite_layer, BlendMode, LayerOptions, Surface};
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use std::io::Write;
@@ -356,6 +357,46 @@ fn cancel_native_exit() {
     EXIT_PROMPT_PENDING.store(false, Ordering::SeqCst);
 }
 
+/// Ask the signed updater endpoint whether this build has a newer release.
+///
+/// The update object intentionally never crosses IPC: it owns native resources
+/// and a verified download URL. The frontend receives only display metadata,
+/// then installation checks the endpoint again and refuses a changed version.
+#[tauri::command]
+async fn check_desktop_update(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
+    let updater = app.updater().map_err(|error| format!("Update service unavailable: {error}"))?;
+    let update = updater.check().await.map_err(|error| format!("Unable to check for updates: {error}"))?;
+    Ok(update.map(|candidate| serde_json::json!({
+        "currentVersion": candidate.current_version,
+        "version": candidate.version,
+        "date": candidate.date.map(|date| date.to_string()),
+        "body": candidate.body,
+    })))
+}
+
+/// Download, signature-check, install, and relaunch one exact advertised build.
+/// Signature verification is performed inside the Tauri updater before install.
+#[tauri::command]
+async fn install_desktop_update(app: tauri::AppHandle, expected_version: String) -> Result<(), String> {
+    let updater = app.updater().map_err(|error| format!("Update service unavailable: {error}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("Unable to refresh the update: {error}"))?
+        .ok_or_else(|| "The update is no longer available.".to_string())?;
+    if update.version != expected_version {
+        return Err(format!(
+            "The available update changed from {expected_version} to {}. Check again before installing.",
+            update.version
+        ));
+    }
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("The signed update could not be installed: {error}"))?;
+    app.restart();
+}
+
 fn request_exit_confirmation(app: &tauri::AppHandle) {
     if !EXIT_PROMPT_PENDING.swap(true, Ordering::SeqCst) {
         let _ = app.emit(CLOSE_REQUEST_EVENT, ());
@@ -497,6 +538,8 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let app_menu = SubmenuBuilder::new(app, "Luma Studio")
         .about(None)
         .separator()
+        .item(&item("check-for-updates", "Check for Updates…", None)?)
+        .separator()
         .services()
         .separator()
         .hide()
@@ -598,6 +641,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Restores window size, position and maximised state between launches.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
@@ -614,6 +658,8 @@ fn main() {
             take_pending_open_files,
             confirm_native_exit,
             cancel_native_exit,
+            check_desktop_update,
+            install_desktop_update,
         ])
         .setup(|app| {
             let menu = build_menu(app.handle())?;

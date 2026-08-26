@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Studio } from "@/app/engine/studio";
 import BlendIfRangeEditor from "./blend-if-range-editor";
 import {
@@ -18,6 +18,30 @@ import {
 import { isNeutralBlendIf } from "@/app/engine/blend";
 import { BLEND_RECIPES } from "@/app/engine/blend-recipes";
 
+function LivePercentRange({ value, label, onLive, onCommit }: {
+  value: number;
+  label: string;
+  onLive: (value: number) => void;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? draft : value;
+  const update = (next: number) => {
+    draftRef.current = next;
+    setDraft(next);
+    setEditing(true);
+    onLive(next / 100);
+  };
+  const commit = () => {
+    if (!editing) return;
+    onCommit(draftRef.current / 100);
+    setEditing(false);
+  };
+  return <><input type="range" min="0" max="100" value={shown} onChange={(event) => update(Number(event.target.value))} onPointerUp={commit} onPointerCancel={commit} onKeyUp={commit} onBlur={commit} aria-label={label} /><output>{Math.round(shown)}%</output></>;
+}
+
 export default function BlendStackEditor({ layer, studio }: { layer: Layer; studio: Studio }) {
   const passes = resolvedBlendPasses(layer);
   const blendIf = resolvedBlendIf(layer);
@@ -26,15 +50,15 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
   const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedSettings);
   const [draggedPass, setDraggedPass] = useState<string | null>(null);
   const activeBlendIf = blendIf.channels[blendIf.activeChannel];
-  const setRange = (key: "source" | "underlying", range: BlendIfRange) => {
-    studio.setLayerBlendIf(layer.id, {
+  const settingsWithRange = (key: "source" | "underlying", range: BlendIfRange) => ({
       ...blendIf,
       channels: {
         ...blendIf.channels,
         [blendIf.activeChannel]: { ...activeBlendIf, [key]: range },
       },
-    });
-  };
+  });
+  const liveRange = (key: "source" | "underlying", range: BlendIfRange) => studio.liveUpdateLayerBlendIf(layer.id, settingsWithRange(key, range));
+  const commitRange = (key: "source" | "underlying", range: BlendIfRange) => studio.commitLayerBlendIf(layer.id, settingsWithRange(key, range));
   return (
     <div className="blend-stack-editor">
       <div className="blend-stack-heading">
@@ -42,7 +66,7 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
         <button type="button" onClick={() => studio.addBlendPass(layer.id)} disabled={passes.length >= MAX_LAYER_BLEND_PASSES} title="Add another blend pass">＋ Add blend mode</button>
       </div>
       <p>Stack repeatable compositing passes, or start with a tuned recipe.</p>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 4, margin: "0 0 8px" }}>
+      <div className="blend-recipe-strip" style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 4, margin: "0 0 8px" }}>
         {BLEND_RECIPES.map((recipe) => (
           <button
             key={recipe.id}
@@ -87,8 +111,7 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
             </select>
             <label>
               <span>Pass opacity</span>
-              <input type="range" min="0" max="100" value={Math.round(pass.opacity * 100)} onChange={(event) => studio.updateBlendPass(layer.id, pass.id, { opacity: Number(event.target.value) / 100 })} />
-              <output>{Math.round(pass.opacity * 100)}%</output>
+              <LivePercentRange value={Math.round(pass.opacity * 100)} label={`Pass ${index + 1} opacity`} onLive={(opacity) => studio.liveUpdateBlendPass(layer.id, pass.id, { opacity })} onCommit={(opacity) => studio.commitBlendPass(layer.id, pass.id, { opacity })} />
             </label>
           </div>
         ))}
@@ -98,8 +121,7 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
         <div className="advanced-blending-body">
           <label className="fill-opacity-control">
             <span>Fill opacity</span>
-            <input type="range" min="0" max="100" value={Math.round(fillOpacity * 100)} onChange={(event) => studio.setLayerFillOpacity(layer.id, Number(event.target.value) / 100)} />
-            <output>{Math.round(fillOpacity * 100)}%</output>
+            <LivePercentRange value={Math.round(fillOpacity * 100)} label="Fill opacity" onLive={(opacity) => studio.liveUpdateLayerProp(layer.id, "fillOpacity", opacity)} onCommit={(opacity) => studio.setLayerFillOpacity(layer.id, opacity)} />
           </label>
           <div className="blend-if-heading">
             <span><strong>Blend If</strong><small>Feathered tonal visibility</small></span>
@@ -107,8 +129,8 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
               <option value="gray">Gray</option><option value="red">Red</option><option value="green">Green</option><option value="blue">Blue</option>
             </select>
           </div>
-          <BlendIfRangeEditor label="This layer" range={activeBlendIf.source} onChange={(range) => setRange("source", range)} />
-          <BlendIfRangeEditor label="Underlying" range={activeBlendIf.underlying} onChange={(range) => setRange("underlying", range)} />
+          <BlendIfRangeEditor label="This layer" range={activeBlendIf.source} onLive={(range) => liveRange("source", range)} onCommit={(range) => commitRange("source", range)} />
+          <BlendIfRangeEditor label="Underlying" range={activeBlendIf.underlying} onLive={(range) => liveRange("underlying", range)} onCommit={(range) => commitRange("underlying", range)} />
           <button type="button" className="blend-if-reset" onClick={() => studio.resetLayerBlendIf(layer.id)} disabled={!layer.blendIf}>Reset Blend If</button>
         </div>
       </details>

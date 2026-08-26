@@ -16,7 +16,7 @@ export default defineConfig({
     "process.env": JSON.stringify({
       NEXT_PUBLIC_LUMA_EDITION: "pro",
       NEXT_PUBLIC_LUMA_CRASH_ENDPOINT: process.env.NEXT_PUBLIC_LUMA_CRASH_ENDPOINT,
-      NEXT_PUBLIC_LUMA_RELEASE: process.env.NEXT_PUBLIC_LUMA_RELEASE,
+      NEXT_PUBLIC_LUMA_RELEASE: process.env.NEXT_PUBLIC_LUMA_RELEASE ?? process.env.npm_package_version ?? "development",
     }),
     __LUMA_NATIVE_DESKTOP__: "true",
   },

@@ -1,6 +1,7 @@
 import { type DiagnosticEvent, sanitizeDiagnosticValue } from "./diagnostics";
 
 type FetchLike = typeof fetch;
+type StorageLike = Pick<Storage, "getItem" | "setItem">;
 
 export type CrashReporterOptions = {
   endpoint?: string | null;
@@ -8,6 +9,7 @@ export type CrashReporterOptions = {
   edition: "web" | "pro";
   fetchImpl?: FetchLike;
   timeoutMs?: number;
+  storage?: StorageLike | null;
 };
 
 function safeEndpoint(value: string | null | undefined) {
@@ -37,10 +39,15 @@ function sanitizedEvent(event: DiagnosticEvent): DiagnosticEvent {
 /** Best-effort transport: reporting can never block recovery or throw into the app. */
 export class RemoteCrashReporter {
   readonly endpoint: string | null;
-  private readonly sent = new Set<string>();
+  private readonly sent: Set<string>;
+  private readonly storage: StorageLike | null;
+  private readonly storageKey: string;
 
   constructor(private readonly options: CrashReporterOptions) {
     this.endpoint = safeEndpoint(options.endpoint);
+    this.storage = options.storage === undefined ? browserStorage() : options.storage;
+    this.storageKey = `luma.crash.receipts.v1:${sanitizeDiagnosticValue(options.release, 100)}`;
+    this.sent = new Set(this.readReceipts());
   }
 
   get enabled() { return !!this.endpoint; }
@@ -65,7 +72,8 @@ export class RemoteCrashReporter {
         keepalive: true,
         signal: controller.signal,
       });
-      if (!response.ok) this.sent.delete(event.id);
+      if (response.ok) this.rememberReceipt(event.id);
+      else this.sent.delete(event.id);
       return response.ok;
     } catch {
       this.sent.delete(event.id);
@@ -74,6 +82,34 @@ export class RemoteCrashReporter {
       clearTimeout(timer);
     }
   }
+
+  /** Retry locally retained fatal events after startup without duplicating receipts. */
+  async flush(events: readonly DiagnosticEvent[]) {
+    let delivered = 0;
+    for (const event of events.slice(-50)) if (await this.report(event)) delivered++;
+    return delivered;
+  }
+
+  private readReceipts() {
+    try {
+      const value = JSON.parse(this.storage?.getItem(this.storageKey) ?? "[]") as unknown;
+      return Array.isArray(value) ? value.filter((id): id is string => typeof id === "string").slice(-100) : [];
+    } catch { return []; }
+  }
+
+  private rememberReceipt(id: string) {
+    try {
+      const ids = [...this.sent].filter((candidate) => candidate !== id).slice(-99);
+      ids.push(id);
+      this.storage?.setItem(this.storageKey, JSON.stringify(ids));
+    } catch {
+      // Private/locked storage must not make reporting fatal.
+    }
+  }
+}
+
+function browserStorage(): StorageLike | null {
+  try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
 }
 
 function readEnv(): Record<string, string | undefined> {

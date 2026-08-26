@@ -12,6 +12,33 @@ import {
   type SmartFilter,
 } from "@/app/engine/document";
 
+function LiveRange({ value, minimum, maximum, step = 1, onLive, onCommit, label }: {
+  value: number;
+  minimum: number;
+  maximum: number;
+  step?: number;
+  onLive: (value: number) => void;
+  onCommit: (value: number) => void;
+  label?: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const draftRef = useRef(value);
+  const [editing, setEditing] = useState(false);
+  const shown = editing ? draft : value;
+  const update = (next: number) => {
+    draftRef.current = next;
+    setDraft(next);
+    setEditing(true);
+    onLive(next);
+  };
+  const commit = () => {
+    if (!editing) return;
+    onCommit(draftRef.current);
+    setEditing(false);
+  };
+  return <input type="range" min={minimum} max={maximum} step={step} value={shown} onChange={(event) => update(Number(event.target.value))} onPointerUp={commit} onPointerCancel={commit} onKeyUp={commit} onBlur={commit} aria-label={label} />;
+}
+
 export function SmartFilterEditor({ layer, filter, index, count, studio }: {
   layer: Layer;
   filter: SmartFilter;
@@ -25,7 +52,7 @@ export function SmartFilterEditor({ layer, filter, index, count, studio }: {
     return (
       <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
         <span>{label}</span>
-        <input type="range" min={minimum} max={maximum} step={step} value={value} onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, patch(Number(event.target.value)))} onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))} onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, patch(Number(event.currentTarget.value)))} aria-label={`${filter.kind} ${label}`} />
+        <LiveRange value={value} minimum={minimum} maximum={maximum} step={step} onLive={(next) => studio.liveUpdateSmartFilter(layer.id, filter.id, patch(next))} onCommit={(next) => studio.updateSmartFilter(layer.id, filter.id, patch(next))} label={`${filter.kind} ${label}`} />
         <output>{Math.round(value * 10) / 10}{suffix}</output>
       </label>
     );
@@ -41,7 +68,7 @@ export function SmartFilterEditor({ layer, filter, index, count, studio }: {
       </div>
       <label style={{ display: "grid", gridTemplateColumns: "62px 1fr 42px", gap: 5, alignItems: "center", fontSize: 10 }}>
         <span>Opacity</span>
-        <input type="range" min="0" max="100" value={Math.round(filter.opacity * 100)} onChange={(event) => studio.liveUpdateSmartFilter(layer.id, filter.id, { opacity: Number(event.target.value) / 100 })} onPointerUp={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })} onBlur={(event) => studio.updateSmartFilter(layer.id, filter.id, { opacity: Number(event.currentTarget.value) / 100 })} />
+        <LiveRange value={Math.round(filter.opacity * 100)} minimum={0} maximum={100} onLive={(next) => studio.liveUpdateSmartFilter(layer.id, filter.id, { opacity: next / 100 })} onCommit={(next) => studio.updateSmartFilter(layer.id, filter.id, { opacity: next / 100 })} label={`${filter.kind} opacity`} />
         <output>{Math.round(filter.opacity * 100)}%</output>
       </label>
       {(["blur", "sharpen", "high-pass", "motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum", "lens-blur", "reduce-noise"] as string[]).includes(filter.kind) && parameter("Radius", "radius", 0.5, 64, 0.5, filter.kind === "lens-blur" ? 8 : filter.kind === "blur" ? 8 : 2, "px")}
@@ -74,14 +101,19 @@ export function CurvesEditor({ curves, onLive, onCommit, onReset }: {
   const [channel, setChannel] = useState<CurveChannel>("rgb");
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<number | null>(null);
+  const [draft, setDraft] = useState<Curves>(() => cloneCurves(curves));
+  const draftRef = useRef<Curves>(draft);
+  const current = drag == null ? curves : draft;
   const size = 220;
-  const points = curves[channel];
+  const points = current[channel];
   const lut = useMemo(() => curveToLut(points), [points]);
   const toSvg = (point: { x: number; y: number }) => ({ x: point.x * size, y: (1 - point.y) * size });
   const fromSvg = (x: number, y: number) => ({ x: Math.max(0, Math.min(1, x / size)), y: Math.max(0, Math.min(1, 1 - y / size)) });
   const updateChannel = (nextPoints: typeof points, commit: boolean) => {
-    const next = cloneCurves(curves);
+    const next = cloneCurves(drag == null ? curves : draftRef.current);
     next[channel] = nextPoints;
+    draftRef.current = next;
+    setDraft(next);
     if (commit) onCommit(next); else onLive(next);
   };
   const eventPoint = (event: PointerEvent<SVGSVGElement>) => {
@@ -89,6 +121,9 @@ export function CurvesEditor({ curves, onLive, onCommit, onReset }: {
     return { x: ((event.clientX - rect.left) / rect.width) * size, y: ((event.clientY - rect.top) / rect.height) * size };
   };
   const onDown = (event: PointerEvent<SVGSVGElement>) => {
+    const initial = cloneCurves(curves);
+    draftRef.current = initial;
+    setDraft(initial);
     const point = eventPoint(event);
     let hit = points.findIndex((candidate) => {
       const svg = toSvg(candidate);
@@ -111,7 +146,7 @@ export function CurvesEditor({ curves, onLive, onCommit, onReset }: {
     if (drag === next.length - 1) next[next.length - 1].x = 1;
     updateChannel(next, false);
   };
-  const onUp = () => { if (drag != null) { setDrag(null); onCommit(curves); } };
+  const onUp = () => { if (drag != null) { onCommit(cloneCurves(draftRef.current)); setDrag(null); } };
   const removePoint = (index: number) => {
     if (points.length > 2 && index !== 0 && index !== points.length - 1) updateChannel(points.filter((_, candidate) => candidate !== index), true);
   };
@@ -141,9 +176,24 @@ export function LevelsEditor({ levels, onLive, onCommit, onReset }: {
   onCommit: (levels: LevelsParams) => void;
   onReset: () => void;
 }) {
-  const set = (patch: Partial<LevelsParams>) => onLive({ ...levels, ...patch });
+  const [draft, setDraft] = useState(levels);
+  const draftRef = useRef(levels);
+  const [editing, setEditing] = useState(false);
+  const current = editing ? draft : levels;
+  const set = (patch: Partial<LevelsParams>) => {
+    const next = { ...(editing ? draftRef.current : levels), ...patch };
+    draftRef.current = next;
+    setDraft(next);
+    setEditing(true);
+    onLive(next);
+  };
+  const commit = () => {
+    if (!editing) return;
+    onCommit(draftRef.current);
+    setEditing(false);
+  };
   const rows: Array<[keyof LevelsParams, string, number, number, number]> = [["inBlack", "In black", 0, 1, 0.001], ["inWhite", "In white", 0, 1, 0.001], ["gamma", "Gamma", 0.1, 9.99, 0.01], ["outBlack", "Out black", 0, 1, 0.001], ["outWhite", "Out white", 0, 1, 0.001]];
-  return <section className="glass-card tone-card"><header><strong>Levels</strong><button onClick={onReset} aria-label="Reset levels">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max, step]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={step} value={levels[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(levels)} /><output>{key === "gamma" ? levels[key].toFixed(2) : levels[key].toFixed(3)}</output></label>)}</div></section>;
+  return <section className="glass-card tone-card"><header><strong>Levels</strong><button onClick={onReset} aria-label="Reset levels">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max, step]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={step} value={current[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={commit} onPointerCancel={commit} onKeyUp={commit} onBlur={commit} /><output>{key === "gamma" ? current[key].toFixed(2) : current[key].toFixed(3)}</output></label>)}</div></section>;
 }
 
 export function HslEditor({ hsl, onLive, onCommit, onReset }: {
@@ -152,7 +202,22 @@ export function HslEditor({ hsl, onLive, onCommit, onReset }: {
   onCommit: (hsl: HslParams) => void;
   onReset: () => void;
 }) {
-  const set = (patch: Partial<HslParams>) => onLive({ ...hsl, ...patch });
+  const [draft, setDraft] = useState(hsl);
+  const draftRef = useRef(hsl);
+  const [editing, setEditing] = useState(false);
+  const current = editing ? draft : hsl;
+  const set = (patch: Partial<HslParams>) => {
+    const next = { ...(editing ? draftRef.current : hsl), ...patch };
+    draftRef.current = next;
+    setDraft(next);
+    setEditing(true);
+    onLive(next);
+  };
+  const commit = () => {
+    if (!editing) return;
+    onCommit(draftRef.current);
+    setEditing(false);
+  };
   const rows: Array<[keyof HslParams, string, number, number]> = [["hue", "Hue", -180, 180], ["saturation", "Saturation", -100, 100], ["lightness", "Lightness", -100, 100]];
-  return <section className="glass-card tone-card"><header><strong>Hue / Saturation</strong><button onClick={onReset} aria-label="Reset hue and saturation">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={1} value={hsl[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={() => onCommit(hsl)} /><output>{Math.round(hsl[key])}</output></label>)}</div></section>;
+  return <section className="glass-card tone-card"><header><strong>Hue / Saturation</strong><button onClick={onReset} aria-label="Reset hue and saturation">↺</button></header><div className="tone-controls">{rows.map(([key, label, min, max]) => <label key={key}><span>{label}</span><input type="range" min={min} max={max} step={1} value={current[key]} onChange={(event) => set({ [key]: Number(event.target.value) })} onPointerUp={commit} onPointerCancel={commit} onKeyUp={commit} onBlur={commit} /><output>{Math.round(current[key])}</output></label>)}</div></section>;
 }

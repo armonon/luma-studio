@@ -8,6 +8,7 @@ import {
   LUMA_PROJECT_LIMITS,
 } from "../app/engine/project.ts";
 import { saveNativeProject } from "../app/engine/native-files.ts";
+import { resolvedBlendIf } from "../app/engine/document.ts";
 import { testCanvas } from "./canvas-harness.ts";
 
 test("document dirty state follows its saved history cursor and remembers its path", () => {
@@ -55,6 +56,61 @@ test("live layer-effect updates coalesce to one history operation", () => {
   assert.equal(studio.historyState().operations, before + 1);
   studio.undo();
   assert.equal(layer.effects?.[0].blur, 24);
+  studio.dispose();
+});
+
+test("live adjustment previews mark the document dirty and commit once", () => {
+  const studio = new Studio(8, 8, testCanvas(8, 8));
+  const layer = studio.addLevelsLayer();
+  studio.markDocumentSaved();
+  const before = studio.historyState().operations;
+
+  studio.liveUpdateLevels(layer.id, { ...layer.levels!, gamma: 1.4 });
+  studio.liveUpdateLevels(layer.id, { ...layer.levels!, gamma: 2.2 });
+  assert.equal(studio.activeDocumentState().dirty, true);
+  assert.equal(studio.historyState().operations, before);
+  assert.equal(layer.levels?.gamma, 2.2);
+
+  studio.updateLevels(layer.id, { ...layer.levels!, gamma: 2.2 });
+  assert.equal(studio.historyState().operations, before + 1);
+  studio.undo();
+  assert.equal(layer.levels?.gamma, 1);
+  assert.equal(studio.activeDocumentState().dirty, false);
+  studio.dispose();
+});
+
+test("Blend If preview remains live but produces one undo node", () => {
+  const studio = new Studio(8, 8, testCanvas(8, 8));
+  const layer = studio.addBlankRaster("Blend If");
+  studio.markDocumentSaved();
+  const before = studio.historyState().operations;
+  const original = resolvedBlendIf(layer);
+  const first = {
+    ...original,
+    channels: {
+      ...original.channels,
+      gray: { ...original.channels.gray, source: { ...original.channels.gray.source, black: 0.1 } },
+    },
+  };
+  const final = {
+    ...first,
+    channels: {
+      ...first.channels,
+      gray: { ...first.channels.gray, source: { ...first.channels.gray.source, black: 0.25 } },
+    },
+  };
+
+  studio.liveUpdateLayerBlendIf(layer.id, first);
+  studio.liveUpdateLayerBlendIf(layer.id, final);
+  assert.equal(studio.activeDocumentState().dirty, true);
+  assert.equal(studio.historyState().operations, before);
+  assert.equal(resolvedBlendIf(layer).channels.gray.source.black, 0.25);
+
+  studio.commitLayerBlendIf(layer.id, final);
+  assert.equal(studio.historyState().operations, before + 1);
+  studio.undo();
+  assert.equal(resolvedBlendIf(layer).channels.gray.source.black, 0);
+  assert.equal(studio.activeDocumentState().dirty, false);
   studio.dispose();
 });
 

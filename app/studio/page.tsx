@@ -118,6 +118,7 @@ import {
 } from "../desktop/native-menu";
 import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/recent-files";
 import type { StudioCommand } from "../desktop/menu-model";
+import { runDesktopUpdateFlow } from "../desktop/desktop-updater";
 import { StartupOpenCoordinator } from "./startup-open-coordinator";
 import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
 import type { TransformCorner } from "./canvas-geometry";
@@ -508,6 +509,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const [pendingCloseDocumentId, setPendingCloseDocumentId] = useState<string | null>(null);
   const [pendingNativeClose, setPendingNativeClose] = useState(false);
+  const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
@@ -2065,6 +2067,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   useEffect(() => {
     if (!studio) return;
     const crashReporter = createCrashReporterFromEnv(desktop ? "pro" : "web");
+    if (crashReporter.enabled) void crashReporter.flush(localDiagnostics.list());
     return installGlobalDiagnostics({
       context: () => ({
         edition: desktop ? "pro" : "web",
@@ -2333,7 +2336,39 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
    * than a menu item that quietly does nothing.
    */
   const runStudioCommand = (command: StudioCommand) => {
+    if (desktopUpdateInstalling) {
+      notify("A signed update is being installed");
+      return;
+    }
     switch (command) {
+      case "check-for-updates":
+        if (studio?.dirtyDocuments().length) {
+          notify("Save all open documents before installing an update");
+          return;
+        }
+        void runDesktopUpdateFlow({
+          onStatus: notify,
+          confirmInstall: (update) => {
+            if (studio?.dirtyDocuments().length) {
+              notify("Documents changed during the update check. Save them before installing");
+              return false;
+            }
+            return window.confirm(`Luma Studio ${update.version} is available. Download, verify, install, and restart now?`);
+          },
+          beforeInstall: async () => {
+            if (!studio) throw new Error("No workspace is available to checkpoint");
+            await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
+            setDesktopUpdateInstalling(true);
+          },
+        }).then((result) => {
+          if (result.status === "unavailable") notify("Automatic updates are available in signed release builds");
+          else if (result.status === "current") notify("Luma Studio is up to date");
+          else if (result.status === "cancelled" && !studio?.dirtyDocuments().length) notify("Update cancelled");
+        }).catch((error) => {
+          setDesktopUpdateInstalling(false);
+          notify(error instanceof Error ? error.message : "Update check failed");
+        });
+        return;
       case "open": requestDocumentOpen(); return;
       case "save": void saveProject(); return;
       case "save-as": void saveProject(true); return;
@@ -2765,6 +2800,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (desktopUpdateInstalling) {
+        e.preventDefault();
+        return;
+      }
       const editingText = isEditableTextTarget(e.target);
       if (!editingText && passDeckOpen && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
@@ -2920,7 +2959,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
+  }, [desktop, desktopUpdateInstalling, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -3542,33 +3581,30 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <strong>Layers</strong>
                 <div className="layer-add-menu">
                   <button onClick={addBlank} title="Add paint layer" aria-label="Add paint layer">＋</button>
-                  <button onClick={addAdjust} title="Add tone adjustment" aria-label="Add tone adjustment">◐</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addCurvesLayer()); }} title="Add curves" aria-label="Add curves adjustment">∿</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addLevelsLayer()); }} title="Add levels" aria-label="Add levels adjustment">▦</button>
-                  <button onClick={() => { if (studio) selectLayerForEditing(studio.addHslLayer()); }} title="Add HSL" aria-label="Add HSL adjustment">◉</button>
                   <select
-                    aria-label="Add professional adjustment"
-                    title="Add professional adjustment"
+                    aria-label="Add adjustment layer"
+                    title="Add adjustment layer"
                     value=""
                     onChange={(event) => {
-                      const kind = event.target.value as ProAdjustmentKind;
-                      if (kind) addProfessionalAdjustment(kind);
+                      const kind = event.target.value;
+                      if (kind === "tone") addAdjust();
+                      else if (kind === "curves" && studio) selectLayerForEditing(studio.addCurvesLayer());
+                      else if (kind === "levels" && studio) selectLayerForEditing(studio.addLevelsLayer());
+                      else if (kind === "hsl" && studio) selectLayerForEditing(studio.addHslLayer());
+                      else if (kind) addProfessionalAdjustment(kind as ProAdjustmentKind);
                     }}
                   >
-                    <option value="">＋ Adjust</option>
-                    {PRO_ADJUSTMENT_KINDS.map((kind) => <option key={kind} value={kind}>{PRO_ADJUSTMENT_LABELS[kind]}</option>)}
+                    <option value="">＋ Adjustment</option>
+                    <optgroup label="Core">
+                      <option value="tone">Tone</option>
+                      <option value="curves">Curves</option>
+                      <option value="levels">Levels</option>
+                      <option value="hsl">Hue / Saturation</option>
+                    </optgroup>
+                    <optgroup label="Professional">
+                      {PRO_ADJUSTMENT_KINDS.map((kind) => <option key={kind} value={kind}>{PRO_ADJUSTMENT_LABELS[kind]}</option>)}
+                    </optgroup>
                   </select>
-                  <button onClick={() => {
-                    if (!studio || !activeLayerId) return;
-                    if (activeLayer?.kind === "group") studio.ungroupLayer(activeLayer.id);
-                    else {
-                      const group = studio.groupLayer(activeLayerId);
-                      if (group) setActiveLayerId(group.id);
-                    }
-                  }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"} aria-label={activeLayer?.kind === "group" ? "Ungroup active layer" : "Group active layer"}>⌘</button>
-                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up" aria-label="Move active layer up">↑</button>
-                  <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down" aria-label="Move active layer down">↓</button>
-                  <button onClick={removeActive} title="Delete active" aria-label="Delete active layer">×</button>
                 </div>
               </header>
               <Suspense fallback={<div className="layer-stack" aria-label="Loading layers" />}>
@@ -3603,6 +3639,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   }}
                 />
               </Suspense>
+              <div className="layer-stack-footer" aria-label="Layer actions">
+                <button onClick={() => {
+                    if (!studio || !activeLayerId) return;
+                    if (activeLayer?.kind === "group") studio.ungroupLayer(activeLayer.id);
+                    else {
+                      const group = studio.groupLayer(activeLayerId);
+                      if (group) setActiveLayerId(group.id);
+                    }
+                  }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"} aria-label={activeLayer?.kind === "group" ? "Ungroup active layer" : "Group active layer"}>⌘</button>
+                <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up" aria-label="Move active layer up">↑</button>
+                <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down" aria-label="Move active layer down">↓</button>
+                <button onClick={() => activeLayer && setStyleLayerId(activeLayer.id)} title="Layer styles and advanced blending" aria-label="Open layer styles">fx</button>
+                <button className="danger" onClick={removeActive} title="Delete active" aria-label="Delete active layer">⌫</button>
+              </div>
               {activeLayer && (
                 <div className="layer-controls">
                   <label>
@@ -3684,7 +3734,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                           setInspectorTab(value === "neural" ? "ai" : "properties");
                         }}
                       >
-                        <option value="">Auto · {contextualPanel.replaceAll("-", " ")}</option>
+                        <option value="">Auto</option>
                         {CONTEXTUAL_PANEL_CHOICES.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}
                       </select>
                     </label>
@@ -5040,6 +5090,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <button type="button" className="danger" onClick={() => { setPendingNativeClose(false); void confirmNativeClose(); }}>Don’t Save</button>
               <button type="button" className="primary" onClick={() => void saveAllAndCloseNative()}>Save All</button>
             </footer>
+          </section>
+        </div>
+      )}
+      {desktopUpdateInstalling && (
+        <div className="spatial-modal" role="presentation">
+          <section className="unsaved-document-dialog" role="alertdialog" aria-modal="true" aria-labelledby="desktop-update-title">
+            <header><strong id="desktop-update-title">Installing verified update…</strong></header>
+            <p>Your workspace has been checkpointed. Luma Studio will restart automatically when signature verification and installation finish.</p>
+            <footer><span aria-live="polite">Do not close the application.</span></footer>
           </section>
         </div>
       )}

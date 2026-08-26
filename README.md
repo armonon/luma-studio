@@ -191,7 +191,23 @@ npm run pro:build
 
 `pro:build` can take several minutes because it compiles the Rust release binary
 and platform installer. Signing and notarization credentials remain a release
-operations concern and are not committed to the repository.
+operations concern and are not committed to the repository. Release builds also
+remap the build machine's home path out of Rust panic/location strings. Tauri's
+localhost development URL and CSP live only in `tauri.dev.conf.json`, so they
+cannot leak into a packaged app.
+
+Release builds use a separate ignored Tauri overlay so updater keys and signing
+identity cannot be replaced by checked-in placeholders. Set
+`LUMA_UPDATER_PUBKEY`, `LUMA_UPDATER_ENDPOINT`, and `APPLE_SIGNING_IDENTITY`,
+then run `npm run pro:release`. Tauri consumes the signing/notarization secrets
+from the release environment. After building, `npm run release:verify-macos --
+-- /absolute/path/to/Luma\ Studio.app` records evidence only when Developer ID,
+hardened runtime, Gatekeeper, and the stapled notarization ticket all verify.
+
+`npm run bundle:audit -- --launch` is safe to run on local ad-hoc builds. It
+checks the sealed bundle, associations, development-path leaks, and a launch
+with an isolated HOME/PATH. Its report is deliberately not treated as
+clean-machine evidence.
 
 ## Scripting and plugins
 

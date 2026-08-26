@@ -1,0 +1,16 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Your Company (TEAMID1234)"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "BASE64_ENCODED_MINISIGN_PUBLIC_KEY",
+      "endpoints": [
+        "https://updates.example.com/luma/{{target}}/{{arch}}/{{current_version}}"
+      ]
+    }
+  }
+}

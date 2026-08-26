@@ -15,6 +15,8 @@
 
 /** Everything the menu can ask the studio to do. */
 export type StudioCommand =
+  // Application
+  | "check-for-updates"
   // File
   | "open"
   | "save"
@@ -73,6 +75,8 @@ export const DESKTOP_MENU: MenuSection[] = [
     label: "Luma Studio",
     items: [
       { kind: "predefined", role: "about" },
+      { kind: "separator" },
+      { kind: "command", id: "check-for-updates", label: "Check for Updates…" },
       { kind: "separator" },
       { kind: "predefined", role: "services" },
       { kind: "separator" },

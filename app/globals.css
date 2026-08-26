@@ -10533,6 +10533,21 @@ html[data-luma-platform="desktop"] .studio-titlebar .studio-app-mark {
   padding: 2px 6px 6px;
 }
 
+.layer-stack-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--studio-line);
+}
+
+.layer-stack-footer button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 6px;
+}
+
 .spatial-layer {
   width: 100%;
   min-height: 40px;
@@ -12516,8 +12531,220 @@ html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
   border-radius: 9px;
 }
 
+/* RC desktop hierarchy: keep the canvas dominant, but make the right rail a
+   usable editing surface rather than a stack of tiny diagnostic cards. */
+html[data-luma-platform="desktop"] .spatial-workspace {
+  grid-template-columns: 54px minmax(0, 1fr) 328px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
+  height: 48%;
+  min-height: 292px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .desktop-properties-card {
+  max-height: 164px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header strong {
+  font-size: 11.5px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header small,
+html[data-luma-platform="desktop"] .desktop-property-switch small {
+  font-size: 8.5px;
+}
+
+html[data-luma-platform="desktop"] .layer-add-menu {
+  gap: 5px;
+}
+
+html[data-luma-platform="desktop"] .layer-add-menu > button {
+  width: 27px;
+  height: 27px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #a4aab4;
+}
+
+html[data-luma-platform="desktop"] .layer-add-menu > select {
+  width: 126px;
+  height: 27px;
+  padding: 0 22px 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: #191c21;
+  color: #d7dbe2;
+  font-size: 9.5px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header button:hover,
+html[data-luma-platform="desktop"] .layer-add-menu button:hover {
+  border-color: rgba(52, 151, 255, 0.32);
+  background: rgba(18, 126, 239, 0.16);
+  color: #69b3ff;
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-controls {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 7px;
+  padding: 7px 10px;
+}
+
+html[data-luma-platform="desktop"] .layers-card .blend-recipe-strip {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .layers-card .layer-stack {
+  padding: 4px 6px;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer {
+  min-height: 40px;
+  grid-template-columns: 17px 34px minmax(0, 1fr);
+  gap: 7px;
+  padding: 3px 7px;
+  border-radius: 6px;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer-thumb {
+  width: 34px;
+  height: 29px;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer strong,
+html[data-luma-platform="desktop"] .spatial-layer .layer-name strong {
+  font-size: 10.5px;
+}
+
+html[data-luma-platform="desktop"] .layer-stack-footer {
+  order: 4;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+  padding: 3px 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.065);
+  background: rgba(7, 8, 11, 0.14);
+}
+
+html[data-luma-platform="desktop"] .layer-stack-footer button {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #9299a4;
+  font-size: 10px;
+}
+
+html[data-luma-platform="desktop"] .layer-stack-footer button:hover {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: #20242a;
+  color: #e4e8ee;
+}
+
+html[data-luma-platform="desktop"] .layer-stack-footer button.danger:hover {
+  border-color: rgba(255, 95, 103, 0.28);
+  background: rgba(194, 50, 59, 0.14);
+  color: #ff9298;
+}
+
+html[data-luma-platform="desktop"] .desktop-properties-body {
+  padding: 4px 12px 10px;
+}
+
+html[data-luma-platform="desktop"] .desktop-property-switch,
+html[data-luma-platform="desktop"] .desktop-property-row,
+html[data-luma-platform="desktop"] .desktop-property-range {
+  min-height: 42px;
+  font-size: 10px;
+}
+
+html[data-luma-platform="desktop"] .desktop-context-panel-picker {
+  grid-template-columns: 42px minmax(0, 1fr);
+  padding-bottom: 6px;
+  font-size: 9.5px;
+}
+
+html[data-luma-platform="desktop"] .desktop-context-panel-picker select {
+  height: 26px;
+}
+
+html[data-luma-platform="desktop"] .studio-context-identity strong,
+html[data-luma-platform="desktop"] .context-range,
+html[data-luma-platform="desktop"] .context-select,
+html[data-luma-platform="desktop"] .context-range output {
+  font-size: 10px;
+}
+
+/* The tool library is part of the native shell. Its cards must not fall back
+   to the light browser palette when opened from the dark desktop workspace. */
+html[data-luma-platform="desktop"] .tool-palette > header,
+html[data-luma-platform="desktop"] .tool-palette-group,
+html[data-luma-platform="desktop"] .tool-palette-group > header {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: #171a1f;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-search {
+  border-color: rgba(255, 255, 255, 0.11);
+  background: #101216;
+  color: #888f9a;
+}
+
+html[data-luma-platform="desktop"] .tool-palette > header > button,
+html[data-luma-platform="desktop"] .tool-palette-search > button {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #252930;
+  color: #aeb5bf;
+}
+
+html[data-luma-platform="desktop"] .tool-palette > header > button:hover,
+html[data-luma-platform="desktop"] .tool-palette-search > button:hover {
+  border-color: rgba(58, 158, 255, 0.32);
+  background: #2a3038;
+  color: #74bbff;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-search input {
+  color: #e4e8ee !important;
+}
+
+html[data-luma-platform="desktop"] .tool-palette > header span,
+html[data-luma-platform="desktop"] .tool-palette-group > header span,
+html[data-luma-platform="desktop"] .tool-palette-group > header small,
+html[data-luma-platform="desktop"] .tool-palette-group button small {
+  color: #848b96;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-group > header strong,
+html[data-luma-platform="desktop"] .tool-palette-group button strong {
+  color: #e2e6ec;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-group > header small,
+html[data-luma-platform="desktop"] .tool-palette-group kbd {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: #252930;
+  color: #a7aeb9;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-group > div > button {
+  color: #abb1bb;
+}
+
+html[data-luma-platform="desktop"] .tool-palette-group > div > button:hover,
+html[data-luma-platform="desktop"] .tool-palette-group > div > button.active {
+  border-color: rgba(49, 151, 255, 0.28);
+  background: rgba(12, 123, 235, 0.14);
+  color: #70b7ff;
+}
+
 @media (max-width: 1060px) {
-  html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 50px minmax(0, 1fr) 286px; }
+  html[data-luma-platform="desktop"] .spatial-workspace { grid-template-columns: 50px minmax(0, 1fr) 296px; }
 }
 
 @media (max-height: 760px) {
@@ -12537,11 +12764,11 @@ html[data-luma-platform="desktop"] .spatial-toolbar .tool-library-trigger {
   }
 
   html[data-luma-platform="desktop"] .spatial-inspector > .layers-card {
-    height: 36%;
-    min-height: 200px;
+    height: 48%;
+    min-height: 270px;
   }
 
   html[data-luma-platform="desktop"] .spatial-inspector[data-tab] > .desktop-properties-card {
-    max-height: 190px;
+    max-height: 148px;
   }
 }

@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { validUpdaterConfiguration } from "./release-config.mjs";
 
 const requested = process.argv[2] ?? "status";
 const phases = { rc0: 0, rc1: 1, rc2: 2, status: 2 };
@@ -22,11 +23,17 @@ function tagged(name) {
 
 const cargo = await readFile("src-tauri/Cargo.toml", "utf8");
 const tauri = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
+const tauriRelease = await json("src-tauri/tauri.release.conf.json");
+const updaterConfig = tauriRelease?.plugins?.updater ?? tauri.plugins?.updater;
+const updaterArtifacts = tauriRelease?.bundle?.createUpdaterArtifacts ?? tauri.bundle?.createUpdaterArtifacts;
+const nativeMain = await readFile("src-tauri/src/main.rs", "utf8");
 const corpus = await json("artifacts/compatibility-corpus-report.json");
 const notarization = await json("artifacts/notarization-report.json");
 const updater = await json("artifacts/updater-report.json");
 const crashes = await json("artifacts/crash-reporting-report.json");
 const cleanInstall = await json("artifacts/clean-install-report.json");
+const cleanMachines = Array.isArray(cleanInstall?.results) ? cleanInstall.results : [];
+const uniqueCleanMachines = new Set(cleanMachines.map((entry) => entry?.machineId).filter(Boolean));
 
 const checks = [
   { phase: 0, name: "P0 checkpoint tagged", pass: tagged("v0.5.0-alpha-p0"), detail: "v0.5.0-alpha-p0" },
@@ -43,33 +50,44 @@ const checks = [
   {
     phase: 2,
     name: "Updater configured",
-    pass: cargo.includes("tauri-plugin-updater") && !!tauri.plugins?.updater?.pubkey &&
-      Array.isArray(tauri.plugins?.updater?.endpoints) && tauri.plugins.updater.endpoints.length > 0,
-    detail: "signed endpoint + embedded public key",
+    pass: cargo.includes("tauri-plugin-updater") && nativeMain.includes("tauri_plugin_updater::Builder") &&
+      updaterArtifacts === true && validUpdaterConfiguration(updaterConfig),
+    detail: validUpdaterConfiguration(updaterConfig)
+      ? "runtime + signed artifacts + validated HTTPS endpoint/public key"
+      : "runtime ready; production HTTPS endpoint/public key missing",
   },
   {
     phase: 2,
     name: "Updater failure campaign",
-    pass: updater?.signatureVerified === true && updater?.previousVersionUpgrade === true && updater?.interruptedUpdateRecovered === true,
+    pass: updater?.signatureVerified === true && updater?.previousVersionUpgrade === true &&
+      updater?.interruptedUpdateRecovered === true && updater?.invalidSignatureRejected === true &&
+      updater?.offlineRetryRecovered === true && typeof updater?.fromVersion === "string" &&
+      typeof updater?.toVersion === "string" && updater.fromVersion !== updater.toVersion &&
+      /^[a-f0-9]{64}$/.test(updater?.artifactSha256 ?? ""),
     detail: updater ? "evidence loaded" : "report missing",
   },
   {
     phase: 2,
     name: "Apple signing and notarization",
-    pass: notarization?.status === "Accepted" && notarization?.bundleId === tauri.identifier && notarization?.gatekeeperAccepted === true,
+    pass: notarization?.status === "Accepted" && notarization?.bundleId === tauri.identifier &&
+      notarization?.gatekeeperAccepted === true && notarization?.stapledTicket === true &&
+      notarization?.hardenedRuntime === true && /^[A-Z0-9]{10}$/.test(notarization?.teamId ?? "") &&
+      /^[a-f0-9]{64}$/.test(notarization?.executableSha256 ?? ""),
     detail: notarization ? String(notarization.status ?? "invalid report") : "report missing",
   },
   {
     phase: 2,
     name: "Remote crash reporting",
-    pass: crashes?.remoteCrashReceived === true && crashes?.symbolsResolved === true && crashes?.sensitiveDataScrubbed === true,
+    pass: crashes?.remoteCrashReceived === true && crashes?.symbolsResolved === true && crashes?.sensitiveDataScrubbed === true &&
+      typeof crashes?.receiptId === "string" && crashes.receiptId.length > 8,
     detail: crashes ? "evidence loaded" : "report missing",
   },
   {
     phase: 2,
     name: "Clean-machine installation",
-    pass: cleanInstall?.withoutDevEnvironment === true && cleanInstall?.machines >= 2 && cleanInstall?.fileAssociations === true,
-    detail: cleanInstall ? `${cleanInstall.machines ?? 0} machines` : "report missing",
+    pass: cleanInstall?.withoutDevEnvironment === true && uniqueCleanMachines.size >= 2 &&
+      cleanMachines.every((entry) => entry?.installed === true && entry?.launched === true && entry?.fileAssociations === true),
+    detail: cleanInstall ? `${uniqueCleanMachines.size} independently identified machines` : "report missing",
   },
 ];
 

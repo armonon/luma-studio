@@ -60,13 +60,36 @@ The focused campaign passed 64/64 tests:
 - Native Rust tests passed 5/5.
 - The initial static bundle budget passed at 1,017,370 bytes raw / 281,927 gzip / 265,853 Brotli with a 371,468-byte studio entry.
 
+## Release operations added after the local campaign
+
+- The native Application menu now contains a wired Check for Updates flow.
+- The Rust updater checks the signed endpoint, re-checks the exact accepted
+  version before install, lets Tauri verify the artifact signature, and
+  relaunches only after installation succeeds.
+- Release-only updater configuration is generated from validated environment
+  inputs and ignored by Git; placeholders and HTTP endpoints do not satisfy the
+  release gate.
+- `/api/diagnostics/crash` now provides a bounded, rate-limited, CORS-scoped,
+  server-side scrubber/proxy to an authenticated HTTPS collector.
+- Automated local-bundle and final Developer ID/notarization verifiers were
+  added. The former cannot impersonate clean-machine evidence, and the latter
+  refuses ad-hoc or unstapled bundles.
+- The verifier caught and drove fixes for an updater-plugin startup abort,
+  release-binary localhost metadata, and absolute build-home source paths.
+- The final local `0.6.0-rc.0` app is 12.72 MiB, passes strict deep signature
+  validation, contains the required associations, contains neither development
+  URL nor build-home path, and remained alive for the six-second isolated launch
+  probe. Its signature is still ad-hoc, so this is not notarization evidence.
+
 ## Honest remaining blockers
 
 - No local camera RAW files were available for the representative RAW corpus.
 - The real compatibility report is below the required 50 projects.
-- A production updater public key and signed HTTPS release endpoint do not exist in the repository.
+- Updater runtime and signed-artifact generation are wired, but a production
+  public key and HTTPS release endpoint must be supplied by release operations.
 - Apple Developer ID signing and notarization require release credentials and Apple service evidence.
-- Remote crash receipt/symbolication needs a production crash endpoint.
+- Remote crash ingestion is deployable, but receipt and symbolication still
+  need the production collector and exact release symbols.
 - Clean-machine installation and upgrade testing needs at least two machines without the development environment.
 
 Those items must remain failing in `npm run release:status` until real evidence is supplied.

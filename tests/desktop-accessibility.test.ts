@@ -10,13 +10,11 @@ const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8")
 test("desktop icon-only commands expose stable assistive names", () => {
   for (const label of [
     "Add paint layer",
-    "Add tone adjustment",
-    "Add curves adjustment",
-    "Add levels adjustment",
-    "Add HSL adjustment",
+    "Add adjustment layer",
     "Group active layer",
     "Move active layer up",
     "Move active layer down",
+    "Open layer styles",
     "Delete active layer",
     "Focus this layer",
     "Record action",
@@ -35,6 +33,6 @@ test("short desktop windows preserve room for contextual editing", () => {
   const finalLowHeightRule = css.lastIndexOf("@media (max-height: 760px)");
   assert.ok(finalLowHeightRule >= 0);
   const rule = css.slice(finalLowHeightRule);
-  assert.match(rule, /\.layers-card\s*\{\s*height: 36%;\s*min-height: 200px;/);
-  assert.match(rule, /\.desktop-properties-card\s*\{\s*max-height: 190px;/);
+  assert.match(rule, /\.layers-card\s*\{\s*height: 48%;\s*min-height: 270px;/);
+  assert.match(rule, /\.desktop-properties-card\s*\{\s*max-height: 148px;/);
 });

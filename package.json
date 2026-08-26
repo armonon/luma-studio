@@ -1,6 +1,6 @@
 {
   "name": "luma-studio",
-  "version": "0.1.0",
+  "version": "0.6.0-rc.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -15,14 +15,19 @@
     "rc1:check": "npm run rc0:check && npm run corpus:check && node build/check-release-evidence.mjs rc1",
     "rc2:check": "npm run rc1:check && node build/check-release-evidence.mjs rc2",
     "release:status": "node build/check-release-evidence.mjs status",
+    "release:configure": "node build/generate-tauri-release-config.mjs",
+    "release:verify-macos": "node build/verify-macos-release.mjs",
+    "bundle:audit": "node build/audit-desktop-bundle.mjs",
+    "crash:verify": "node build/verify-crash-endpoint.mjs",
     "desktop:build": "vite build --config vite.desktop.config.ts",
     "desktop:dev": "vite --config vite.desktop.config.ts --port 3000 --strictPort",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "npm run build && node --test tests/rendered-html.test.mjs && tsx --test tests/*.test.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
-    "pro:dev": "NEXT_PUBLIC_LUMA_EDITION=pro tauri dev",
-    "pro:build": "NEXT_PUBLIC_LUMA_EDITION=pro tauri build"
+    "pro:dev": "NEXT_PUBLIC_LUMA_EDITION=pro tauri dev --config src-tauri/tauri.dev.conf.json",
+    "pro:build": "node build/run-tauri-build.mjs",
+    "pro:release": "npm run release:configure && node build/run-tauri-build.mjs --config src-tauri/tauri.release.conf.json"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
