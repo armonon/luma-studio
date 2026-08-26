@@ -5,6 +5,7 @@ import test from "node:test";
 const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
 const focusPanel = readFileSync(new URL("../app/studio/layer-focus-panel.tsx", import.meta.url), "utf8");
 const layerEditors = readFileSync(new URL("../app/studio/layer-editors.tsx", import.meta.url), "utf8");
+const layerStack = readFileSync(new URL("../app/studio/virtual-layer-stack.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
 
 test("desktop icon-only commands expose stable assistive names", () => {
@@ -27,6 +28,16 @@ test("desktop icon-only commands expose stable assistive names", () => {
   assert.match(focusPanel, /aria-label=\{item\.pinned \? "Unpin from Focus" : "Pin in Focus"\}/);
   assert.match(layerEditors, /aria-label="Reset levels"/);
   assert.match(layerEditors, /aria-label="Reset hue and saturation"/);
+});
+
+test("layer rows expose keyboard selection and real visibility/delete buttons", () => {
+  assert.match(layerStack, /role="listbox"/);
+  assert.match(layerStack, /role="option"/);
+  assert.match(layerStack, /onKeyDown=/);
+  assert.match(layerStack, /className="spatial-layer-visibility"/);
+  assert.match(layerStack, /aria-label=\{`\$\{layer\.visible \? "Hide" : "Show"\}/);
+  assert.match(layerStack, /className="spatial-layer-delete"/);
+  assert.doesNotMatch(layerStack, /<i[^>]+spatial-layer-delete/);
 });
 
 test("short desktop windows preserve room for contextual editing", () => {

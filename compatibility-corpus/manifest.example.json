@@ -8,9 +8,16 @@
       "kind": "psd",
       "expected": {
         "outcome": "pass",
+        "width": 4096,
+        "height": 3072,
+        "sourceLayers": 6,
         "minimumLayers": 5,
         "maximumWarnings": 0,
-        "maximumPsdMeanError": 2
+        "maximumPsdMeanError": 2,
+        "referencePng": "references/photoshop-layered-rgb8.png",
+        "maximumReferenceMeanError": 2,
+        "maximumPeakRssMiB": 1536,
+        "maximumDurationMs": 60000
       }
     },
     {
@@ -19,8 +26,15 @@
       "kind": "psb",
       "expected": {
         "outcome": "pass",
+        "width": 50000,
+        "height": 12000,
+        "sourceLayers": 2,
         "minimumLayers": 2,
-        "maximumPsdMeanError": 3
+        "maximumPsdMeanError": 3,
+        "referencePng": "references/photoshop-large-document.png",
+        "maximumReferenceMeanError": 3,
+        "maximumPeakRssMiB": 2048,
+        "maximumDurationMs": 120000
       }
     },
     {
@@ -29,7 +43,11 @@
       "kind": "raw",
       "expected": {
         "outcome": "pass",
-        "rawMode": "developed-raw"
+        "width": 6048,
+        "height": 4024,
+        "rawMode": "developed-raw",
+        "maximumPeakRssMiB": 1536,
+        "maximumDurationMs": 90000
       }
     },
     {

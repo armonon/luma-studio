@@ -19,7 +19,7 @@ if (!identity || identity === "-" || !/^Developer ID Application: .+\([A-Z0-9]{1
 const config = {
   app: {
     security: {
-      csp: `default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost ${crashOrigin} https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'`,
+      csp: `default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost ${crashOrigin} https://huggingface.co https://*.huggingface.co https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'`,
     },
   },
   bundle: {

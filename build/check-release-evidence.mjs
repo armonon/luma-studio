@@ -28,6 +28,12 @@ const updaterConfig = tauriRelease?.plugins?.updater ?? tauri.plugins?.updater;
 const updaterArtifacts = tauriRelease?.bundle?.createUpdaterArtifacts ?? tauri.bundle?.createUpdaterArtifacts;
 const nativeMain = await readFile("src-tauri/src/main.rs", "utf8");
 const corpus = await json("artifacts/compatibility-corpus-report.json");
+const corpusResults = Array.isArray(corpus?.results) ? corpus.results : [];
+const photoshopResults = corpusResults.filter((entry) => entry.kind === "psd" || entry.kind === "psb");
+const corpusIsEditable = photoshopResults.length > 0 && photoshopResults.every((entry) =>
+  entry.status === "pass" && ["layered", "composite-only"].includes(entry.metrics?.importMode));
+const corpusHasReferences = photoshopResults.length > 0 && photoshopResults.every((entry) =>
+  entry.status === "pass" && entry.metrics?.reference === "photoshop-golden");
 const notarization = await json("artifacts/notarization-report.json");
 const updater = await json("artifacts/updater-report.json");
 const crashes = await json("artifacts/crash-reporting-report.json");
@@ -44,8 +50,11 @@ const checks = [
     phase: 1,
     name: "Real compatibility corpus",
     pass: !!corpus && corpus.total >= 50 && corpus.failed === 0 &&
-      ["psd", "psb", "raw"].every((kind) => corpus.results?.some((entry) => entry.kind === kind && entry.status === "pass")),
-    detail: corpus ? `${corpus.passed ?? 0}/${corpus.total ?? 0} pass` : "report missing",
+      ["psd", "psb", "raw"].every((kind) => corpusResults.some((entry) => entry.kind === kind && entry.status === "pass")) &&
+      corpusIsEditable && corpusHasReferences,
+    detail: corpus
+      ? `${corpus.passed ?? 0}/${corpus.total ?? 0} pass · editable ${corpusIsEditable ? "yes" : "no"} · Photoshop goldens ${corpusHasReferences ? "yes" : "no"}`
+      : "report missing",
   },
   {
     phase: 2,

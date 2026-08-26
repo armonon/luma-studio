@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import JSZip from "jszip";
 import { Studio } from "../app/engine/studio.ts";
 import {
@@ -10,6 +11,14 @@ import {
 import { saveNativeProject } from "../app/engine/native-files.ts";
 import { resolvedBlendIf } from "../app/engine/document.ts";
 import { testCanvas } from "./canvas-harness.ts";
+
+test("desktop CSP permits the narrowly scoped first-run model download", () => {
+  const config = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const csp = String(config.app.security.csp);
+  assert.match(csp, /connect-src[^;]*https:\/\/huggingface\.co/);
+  assert.match(csp, /connect-src[^;]*https:\/\/\*\.huggingface\.co/);
+  assert.doesNotMatch(csp, /connect-src[^;]*(?:^|\s)https:\/\/\*(?:\s|;)/);
+});
 
 test("document dirty state follows its saved history cursor and remembers its path", () => {
   const studio = new Studio(8, 8, testCanvas(8, 8));

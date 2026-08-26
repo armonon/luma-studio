@@ -32,6 +32,22 @@ test("crash recovery checkpoints every open document and restores the active tab
   studio.dispose();
 });
 
+test("routine recovery exports only the active document", async () => {
+  const studio = new Studio(64, 48, testCanvas(1, 1));
+  const firstId = studio.activeDocumentState().id;
+  studio.addBlankRaster("First work").bitmap = undefined;
+  studio.resetDocument(80, 60);
+  studio.addBlankRaster("Second work").bitmap = undefined;
+
+  const checkpoint = await studio.exportRecoveryDocument();
+  assert.notEqual(checkpoint.id, firstId);
+  assert.equal(checkpoint.active, true);
+  const decoded = await decodeLumaProject(await checkpoint.blob.arrayBuffer(), { restoreHistory: false });
+  assert.deepEqual([decoded.doc.width, decoded.doc.height], [80, 60]);
+  assert.equal(decoded.doc.layers[0].name, "Second work");
+  studio.dispose();
+});
+
 test("a corrupt recovery import cannot replace or damage the open document", async () => {
   const studio = new Studio(32, 24, testCanvas(1, 1));
   const layer = studio.addBlankRaster("Protected work");

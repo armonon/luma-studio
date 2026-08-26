@@ -3713,6 +3713,26 @@ body:has(.spatial-studio) {
   flex-shrink: 0;
 }
 
+.spatial-layer-actions > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.spatial-layer-actions > button:hover,
+.spatial-layer-actions > button:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+}
+
 /*
  * The delete affordance stays out of the way until you point at the row you
  * mean to remove, but unlike the header's collapse-on-hover icons (which hide
@@ -3721,24 +3741,24 @@ body:has(.spatial-studio) {
  * Keyboard/touch users still reach it: it participates in normal focus order
  * and stays visible while the row itself is active or focus-visible.
  */
-.spatial-layer i.spatial-layer-delete {
+.spatial-layer .spatial-layer-delete {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   color: #a7566a;
   opacity: 0;
   transition: opacity 120ms ease, background 120ms ease;
 }
 
-.spatial-layer:hover i.spatial-layer-delete,
-.spatial-layer.active i.spatial-layer-delete,
-.spatial-layer i.spatial-layer-delete:focus-visible {
+.spatial-layer:hover .spatial-layer-delete,
+.spatial-layer.active .spatial-layer-delete,
+.spatial-layer .spatial-layer-delete:focus-visible {
   opacity: 1;
 }
 
-.spatial-layer i.spatial-layer-delete:hover {
+.spatial-layer .spatial-layer-delete:hover {
   background: rgba(226, 92, 92, 0.18);
   color: #e25c5c;
 }
@@ -12277,7 +12297,7 @@ html[data-luma-platform="desktop"] .spatial-layer {
   display: grid;
   width: 100%;
   min-height: 43px;
-  grid-template-columns: 17px 37px minmax(0, 1fr);
+  grid-template-columns: 37px minmax(0, 1fr) auto;
   gap: 7px;
   margin: 1px 0 !important;
   padding: 3px 7px;
@@ -12298,17 +12318,8 @@ html[data-luma-platform="desktop"] .spatial-layer.active {
   box-shadow: inset 2px 0 #238df4;
 }
 
-html[data-luma-platform="desktop"] .spatial-layer > i {
-  grid-column: 1;
-  grid-row: 1;
-  order: -1;
-  color: #aeb4be;
-  opacity: 0.8;
-  font-size: 10px;
-}
-
 html[data-luma-platform="desktop"] .spatial-layer-thumb {
-  grid-column: 2;
+  grid-column: 1;
   width: 37px;
   height: 32px;
   border-color: rgba(255, 255, 255, 0.18);
@@ -12320,7 +12331,7 @@ html[data-luma-platform="desktop"] .spatial-layer-thumb {
 }
 
 html[data-luma-platform="desktop"] .spatial-layer .layer-name {
-  grid-column: 3;
+  grid-column: 2;
   min-width: 0;
 }
 
@@ -12601,7 +12612,7 @@ html[data-luma-platform="desktop"] .layers-card .layer-stack {
 
 html[data-luma-platform="desktop"] .spatial-layer {
   min-height: 40px;
-  grid-template-columns: 17px 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) auto;
   gap: 7px;
   padding: 3px 7px;
   border-radius: 6px;

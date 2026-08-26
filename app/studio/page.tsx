@@ -41,7 +41,12 @@ import {
   type ProAdjustmentKind,
 } from "@/app/engine/pro-adjustments";
 import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
-import { readRecoveryWorkspace, writeRecoveryWorkspace } from "@/app/engine/autosave";
+import {
+  readRecoveryWorkspace,
+  removeRecoveryDocument,
+  writeRecoveryDocument,
+  writeRecoveryWorkspace,
+} from "@/app/engine/autosave";
 import { CoalescedSaveQueue } from "@/app/engine/save-queue";
 import { installGlobalDiagnostics, localDiagnostics } from "@/app/engine/diagnostics";
 import { createCrashReporterFromEnv } from "@/app/engine/crash-reporting";
@@ -1556,7 +1561,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       setActiveAdjustmentId(null);
       setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
       studio.markDocumentSaved(undefined, nativePath);
-      await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
+      await writeRecoveryDocument(await studio.exportRecoveryDocument());
       setSaveState("saved");
       const restoredOperations = project.history?.summary().operations ?? 0;
       notify(`${project.name} opened · ${restoredOperations} versions restored`);
@@ -1944,7 +1949,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       }
       studio.markDocumentSaved(undefined, savedPath);
       if (savedPath) setCustomName(savedPath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "") ?? saveName);
-      await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
+      await writeRecoveryDocument(await studio.exportRecoveryDocument());
       setSaveState("saved");
       notify("Project + version history saved");
       return true;
@@ -1963,6 +1968,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     studio.closeDocument(id);
+    void removeRecoveryDocument(id);
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -1975,6 +1981,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const id = pendingCloseDocumentId;
     setPendingCloseDocumentId(null);
     studio.closeDocument(id);
+    void removeRecoveryDocument(id);
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -1983,6 +1990,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const id = pendingCloseDocumentId;
     setPendingCloseDocumentId(null);
     studio.closeDocument(id);
+    void removeRecoveryDocument(id);
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -2031,9 +2039,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!studio) return;
     let timer = 0;
     let active = true;
-    const queue = new CoalescedSaveQueue<Awaited<ReturnType<Studio["exportRecoveryWorkspace"]>>>({
-      produce: () => studio.exportRecoveryWorkspace(),
-      commit: (workspace) => writeRecoveryWorkspace(workspace),
+    const queue = new CoalescedSaveQueue<Awaited<ReturnType<Studio["exportRecoveryDocument"]>>>({
+      produce: () => studio.exportRecoveryDocument(),
+      commit: (checkpoint) => writeRecoveryDocument(checkpoint),
       onState: (state) => {
         if (!active) return;
         if (state === "producing" || state === "committing") setSaveState("saving");
@@ -3952,9 +3960,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <details className="document-diagnostics">
                   <summary>
                     <span>Engine details</span>
-                    <small>{engineState?.precisionTiles ?? 0} tiles · {formatBytes(engineState?.precisionBytes ?? 0)}</small>
+                    <small>{engineState?.precisionTiles ?? 0} precision tiles · ≥{formatBytes(engineState?.estimatedResidentBytes ?? 0)}</small>
                   </summary>
                   <div className="document-diagnostics-body">
+                    <div><span>Memory floor</span><b>≥{formatBytes(engineState?.estimatedResidentBytes ?? 0)} resident</b></div>
+                    <div><span>Tile budget</span><b>{formatBytes(engineState?.residentMemoryBudget.residentBytes ?? 0)} / {formatBytes(engineState?.residentMemoryBudget.ceilingBytes ?? 0)}</b></div>
                     <div><span>Precision</span><b>Linear · {doc?.bitDepth ?? 8}-bit</b></div>
                     <div><span>Color</span><b>{engineState?.colorManagement.profiles ?? 0} ICC profiles</b></div>
                     <div><span>Canvas</span><b>{engineState?.virtualCanvas.levels ?? 1} mip · {engineState?.virtualCanvas.plannedTiles ?? 0} ready</b></div>
@@ -4591,7 +4601,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             <section className="glass-card neural-card neural-compact" data-contextual-panel="neural">
               <header>
                 <strong><span>✦</span> Neural Lab</strong>
-                <small>LOCAL + GPT IMAGE</small>
+                <small>ON-DEVICE MODEL + GPT IMAGE</small>
               </header>
               <div style={{ display: "grid", gap: 6, padding: "8px 10px 4px" }}>
                 <textarea
@@ -4712,7 +4722,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               dimensions={doc ? `${doc.width.toLocaleString()} × ${doc.height.toLocaleString()} px` : "No document open"}
               bitDepth={doc?.bitDepth ?? 8}
               colorSpace={doc?.colorSpace ?? "sRGB"}
-              accelerated={useGL}
+              interactiveRenderer={engineState?.renderer ?? "canvas2d-rgba8"}
+              exportRenderer={engineState?.exportRenderer ?? "canvas2d-rgba8"}
               tool={activeToolMeta?.[2] ?? "Tool"}
               shortcut={activeToolMeta ? resolveShortcut(activeToolMeta[0], activeToolMeta[3], workflowPreferences) : ""}
               zoom={Math.round(view.zoom * 100)}

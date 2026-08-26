@@ -35,6 +35,30 @@ async function idbPutValue(value: unknown, key: IDBValidKey) {
   db.close();
 }
 
+async function idbUpdateValue<T>(key: IDBValidKey, update: (current: T | null) => T | null) {
+  const db = await openDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.get(key);
+    request.onsuccess = () => {
+      try {
+        const next = update((request.result as T | undefined) ?? null);
+        if (next === null) store.delete(key);
+        else store.put(next, key);
+      } catch (error) {
+        tx.abort();
+        reject(error);
+      }
+    };
+    request.onerror = () => reject(request.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error("Recovery transaction was aborted"));
+  });
+  db.close();
+}
+
 async function idbGet(): Promise<Blob | null> {
   const db = await openDb();
   const value = await new Promise<Blob | undefined>((resolve, reject) => {
@@ -106,6 +130,37 @@ export async function writeRecoveryWorkspace(documents: Array<Omit<RecoveryWorks
   });
   if (!normalized.length) return;
   await idbPutValue({ version: 2, documents: normalized }, WORKSPACE_KEY);
+}
+
+/**
+ * Transactionally replaces one document checkpoint while retaining the other
+ * tabs. Routine autosave uses this path so a brush stroke in one tab never
+ * recompresses every open project at once.
+ */
+export async function writeRecoveryDocument(document: Omit<RecoveryWorkspaceDocument, "updatedAt"> & { updatedAt?: number }) {
+  const updatedAt = document.updatedAt ?? Date.now();
+  const normalized = normalizeRecoveryWorkspace({ documents: [{ ...document, updatedAt }] })[0];
+  if (!normalized) throw new Error("Invalid recovery document checkpoint");
+  await idbUpdateValue<{ version?: number; documents?: unknown }>(WORKSPACE_KEY, (current) => {
+    const retained = normalizeRecoveryWorkspace(current).filter((entry) => entry.id !== normalized.id);
+    if (normalized.active) {
+      for (const entry of retained) entry.active = false;
+    }
+    return {
+      version: 2,
+      documents: normalizeRecoveryWorkspace({ documents: [...retained, normalized] }),
+    };
+  });
+}
+
+/** Removes a closed tab from crash recovery without rewriting its project blob. */
+export async function removeRecoveryDocument(id: string) {
+  if (!id) return;
+  await idbUpdateValue<{ version?: number; documents?: unknown }>(WORKSPACE_KEY, (current) => {
+    const retained = normalizeRecoveryWorkspace(current).filter((entry) => entry.id !== id);
+    if (!retained.length) return null;
+    return { version: 2, documents: retained };
+  });
 }
 
 export async function readRecoveryWorkspace(): Promise<RecoveryWorkspaceDocument[]> {

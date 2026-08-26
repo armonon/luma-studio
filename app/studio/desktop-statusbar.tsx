@@ -2,7 +2,8 @@ export default function DesktopStatusbar({
   dimensions,
   bitDepth,
   colorSpace,
-  accelerated,
+  interactiveRenderer,
+  exportRenderer,
   tool,
   shortcut,
   zoom,
@@ -10,7 +11,8 @@ export default function DesktopStatusbar({
   dimensions: string;
   bitDepth: number;
   colorSpace: string;
-  accelerated: boolean;
+  interactiveRenderer: "viewport-tiled-canvas2d" | "canvas2d-rgba8";
+  exportRenderer: "webgl2-rgba16f" | "canvas2d-rgba8";
   tool: string;
   shortcut: string;
   zoom: number;
@@ -19,7 +21,9 @@ export default function DesktopStatusbar({
     <footer className="desktop-statusbar">
       <span className="desktop-status-brand"><i /> Luma Desktop</span>
       <span>{dimensions}</span>
-      <span>{bitDepth}-bit · {colorSpace} · {accelerated ? "GPU" : "CPU"}</span>
+      <span title={`Interactive: ${interactiveRenderer} · Export: ${exportRenderer}`}>
+        {bitDepth}-bit · {colorSpace} · {interactiveRenderer === "viewport-tiled-canvas2d" ? "Tiled CPU" : "CPU"}
+      </span>
       <span className="desktop-status-spacer" />
       <span>{tool} <kbd>{shortcut}</kbd></span>
       <span>{zoom}%</span>

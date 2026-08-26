@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { loadImage } from "@napi-rs/canvas";
 import "../tests/canvas-harness.ts";
 import { newCanvas, type Document } from "../app/engine/document.ts";
 import { exceedsBrowserCanvas } from "../app/engine/large-documents.ts";
@@ -23,10 +24,16 @@ type CorpusCase = {
     errorPattern?: string;
     width?: number;
     height?: number;
+    sourceLayers?: number;
     minimumLayers?: number;
+    allowFlattenedFallback?: boolean;
     rawMode?: "developed-raw" | "embedded-preview";
     maximumPsdMeanError?: number;
+    referencePng?: string;
+    maximumReferenceMeanError?: number;
     maximumWarnings?: number;
+    maximumPeakRssMiB?: number;
+    maximumDurationMs?: number;
   };
 };
 type CorpusManifest = { version: 1; sourceRoot?: string; cases: CorpusCase[] };
@@ -114,6 +121,23 @@ function assertManifest(value: unknown): asserts value is CorpusManifest {
   for (const entry of manifest.cases) {
     if (!entry || typeof entry.id !== "string" || !entry.id || ids.has(entry.id)) throw new Error("Corpus case ids must be non-empty and unique");
     if (!entry.file || !["psd", "psb", "raw"].includes(entry.kind)) throw new Error(`Corpus case ${entry.id} is malformed`);
+    if (entry.expected?.outcome !== "reject") {
+      if (!entry.expected || !Number.isInteger(entry.expected.width) || !Number.isInteger(entry.expected.height)) {
+        throw new Error(`Corpus case ${entry.id} must declare expected width and height`);
+      }
+      if (!Number.isFinite(entry.expected.maximumPeakRssMiB) || (entry.expected.maximumPeakRssMiB ?? 0) <= 0 ||
+          !Number.isFinite(entry.expected.maximumDurationMs) || (entry.expected.maximumDurationMs ?? 0) <= 0) {
+        throw new Error(`Corpus case ${entry.id} must declare peak-RAM and duration ceilings`);
+      }
+      if (entry.kind !== "raw") {
+        if (!Number.isInteger(entry.expected.sourceLayers) || (entry.expected.sourceLayers ?? -1) < 0) {
+          throw new Error(`Corpus case ${entry.id} must declare the source Photoshop layer count`);
+        }
+        if ((entry.expected.sourceLayers ?? 0) > 0 && entry.expected.minimumLayers === undefined && !entry.expected.allowFlattenedFallback) {
+          throw new Error(`Corpus case ${entry.id} must require editable layers or explicitly declare a flattened fallback`);
+        }
+      }
+    }
     ids.add(entry.id);
   }
 }
@@ -155,17 +179,44 @@ function meanAbsoluteError(a: Uint8ClampedArray, b: Uint8ClampedArray) {
   return total / a.length;
 }
 
+async function referencePreview(root: string, file: string, width: number, height: number) {
+  const path = safeCasePath(root, file);
+  const image = await loadImage(await readFile(path));
+  const canvas = newCanvas(width, height);
+  canvas.getContext("2d")!.drawImage(image as unknown as CanvasImageSource, 0, 0, width, height);
+  return canvas.getContext("2d")!.getImageData(0, 0, width, height).data;
+}
+
 function applyCorpusEdit(doc: Document) {
   const layer = doc.layers.find((candidate) => candidate.kind !== "group") ?? doc.layers[0];
   if (!layer) throw new Error("document has no editable layer");
   layer.opacity = layer.opacity > 0.98 ? 0.97 : Math.min(1, layer.opacity + 0.01);
 }
 
-async function runPhotoshop(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
+async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
   const header = assertSafePhotoshopHeader(bytes, entry.file, exceedsBrowserCanvas, { allowFlattenedFallback: true });
   if (header.container !== entry.kind) throw new Error(`container is ${header.container}, manifest says ${entry.kind}`);
+  if (entry.expected?.sourceLayers !== header.layers) throw new Error(`source has ${header.layers} layers, manifest expects ${entry.expected?.sourceLayers}`);
   const opened = await importPsd(bytes);
   assertExpectedDimensions(entry, opened);
+  const importMode = header.layers === 0
+    ? "composite-only"
+    : opened.layers.length < Math.max(1, header.layers)
+      ? "flattened-fallback"
+      : "layered";
+  if (importMode === "flattened-fallback" && !entry.expected?.allowFlattenedFallback) {
+    throw new Error(`editable import collapsed ${header.layers} source layers to ${opened.layers}`);
+  }
+  const openedPreview = preview(opened);
+  let referenceMeanError: number | undefined;
+  if (entry.expected?.referencePng) {
+    const scale = Math.min(192 / opened.width, 192 / opened.height, 1);
+    const reference = await referencePreview(root, entry.expected.referencePng,
+      Math.max(1, Math.round(opened.width * scale)), Math.max(1, Math.round(opened.height * scale)));
+    referenceMeanError = meanAbsoluteError(openedPreview, reference);
+    const maximum = entry.expected.maximumReferenceMeanError ?? 3;
+    if (referenceMeanError > maximum) throw new Error(`Photoshop reference mean error ${referenceMeanError.toFixed(3)} exceeds ${maximum}`);
+  }
   applyCorpusEdit(opened);
   const importPeakRssMiB = peakRssMiB();
 
@@ -190,7 +241,11 @@ async function runPhotoshop(entry: CorpusCase, bytes: ArrayBuffer): Promise<Reco
   return {
     width: opened.width,
     height: opened.height,
+    sourceLayers: header.layers,
     layers: opened.layers.length,
+    importMode,
+    reference: entry.expected?.referencePng ? "photoshop-golden" : "self-roundtrip-only",
+    ...(referenceMeanError === undefined ? {} : { referenceMeanError: Number(referenceMeanError.toFixed(4)) }),
     warnings: warningCount,
     nativeMeanError: nativeError,
     photoshopMeanError: Number(psdError.toFixed(4)),
@@ -248,7 +303,7 @@ async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
       ? source.buffer as ArrayBuffer
       : source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
     inputReady = true;
-    const metrics = entry.kind === "raw" ? await runRaw(entry, bytes) : await runPhotoshop(entry, bytes);
+    const metrics = entry.kind === "raw" ? await runRaw(entry, bytes) : await runPhotoshop(root, entry, bytes);
     if (entry.expected?.outcome === "reject") {
       return {
         id: entry.id,
@@ -260,7 +315,16 @@ async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
         metrics,
       };
     }
-    return { id: entry.id, kind: entry.kind, status: "pass", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: "workflow passed", metrics };
+    const durationMs = elapsedMs(started);
+    const rss = peakRssMiB();
+    if (durationMs > (entry.expected?.maximumDurationMs ?? Number.POSITIVE_INFINITY)) {
+      throw new Error(`duration ${durationMs.toFixed(0)} ms exceeds ${entry.expected?.maximumDurationMs} ms`);
+    }
+    if (rss > (entry.expected?.maximumPeakRssMiB ?? Number.POSITIVE_INFINITY)) {
+      throw new Error(`peak RSS ${rss.toFixed(1)} MiB exceeds ${entry.expected?.maximumPeakRssMiB} MiB`);
+    }
+    const fallback = metrics.importMode === "flattened-fallback" ? " with declared flattened fallback" : "";
+    return { id: entry.id, kind: entry.kind, status: "pass", durationMs, peakRssMiB: rss, detail: `workflow passed${fallback}`, metrics };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (inputReady && entry.expected?.outcome === "reject") {

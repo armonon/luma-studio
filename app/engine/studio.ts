@@ -177,6 +177,8 @@ import {
 import { calculateDisplayViewport, sameDisplayViewport, type DisplayViewport } from "./viewport";
 import { appendDirtyRegion } from "./dirty-regions";
 import { AdaptiveRenderGovernor } from "./performance-governor";
+import { computeResidencyBudget } from "./tile-residency";
+import { ResidentMemoryBudget } from "./resident-memory";
 import {
   normalizeAiEditConfig,
   runAiEditVariations,
@@ -491,6 +493,7 @@ export class Studio {
   private styleClipboard: CopiedLayerStyle | null = null;
   private history: OperationHistory<HistoryEntry>;
   private readonly historyBudgetBytes: number;
+  private readonly residentMemoryBudget: ResidentMemoryBudget;
   private renderScheduled = false;
   private renderRevision = 0;
   private layerHierarchyRevision = 0;
@@ -539,7 +542,18 @@ export class Studio {
   private renderQualityTimer: number | null = null;
 
   constructor(width: number, height: number, target: HTMLCanvasElement) {
-    this.historyBudgetBytes = historyBudgetForDeviceMemory(runtimeDeviceMemoryGiB());
+    const deviceMemoryGiB = runtimeDeviceMemoryGiB();
+    this.historyBudgetBytes = historyBudgetForDeviceMemory(deviceMemoryGiB);
+    this.residentMemoryBudget = new ResidentMemoryBudget(computeResidencyBudget({
+      // navigator.deviceMemory is optional (notably under tests and hardened
+      // webviews). Eight GiB is a conservative desktop fallback; the 1.5 GiB
+      // hard cap below remains authoritative.
+      availableMemoryBytes: (deviceMemoryGiB ?? 8) * 1024 * 1024 * 1024,
+      fraction: 0.25,
+      reserveBytes: 512 * 1024 * 1024,
+      minimumBytes: 256 * 1024 * 1024,
+      maximumBytes: 1536 * 1024 * 1024,
+    }));
     this.history = newHistory(this.historyBudgetBytes);
     this.doc = createDocument(width, height);
     this.target = target;
@@ -733,6 +747,10 @@ export class Studio {
   }
 
   private commit(entry: HistoryEntry) {
+    // Surface creation is relatively rare compared with interactive redraws.
+    // Register here instead of in requestRender so a 10K-layer document does
+    // not pay an O(layer-count) scan for every brush segment.
+    this.bindDocumentMemory(this.doc);
     this.history.commit(entry.label, entry);
     const session = this.sessions.find((candidate) => candidate.id === this.activeSessionId);
     if (session && this.liveSnapshots.size === 0 && !this.liveGlobalLightDocument) {
@@ -796,6 +814,13 @@ export class Studio {
     }
     workingSetBytes += precisionBytes;
     workingSetBytes += alphaBytes;
+    const historyStats = this.history.summary();
+    const gpuStats = gpuTextureCacheStats();
+    const viewportCache = viewportRenderCacheStats();
+    // This is deliberately labelled as a floor: browser canvas backing stores
+    // and model/runtime heaps cannot be measured precisely from JavaScript.
+    const estimatedResidentBytes = workingSetBytes + historyStats.bytes +
+      gpuStats.residentBytes + gpuStats.framebufferBytes + viewportCache.scratchCacheBytes;
     const blendPasses = this.doc.layers.reduce((count, layer) => count + (layer.kind === "group" ? 0 : resolvedBlendPasses(layer).length), 0);
     const advancedBlendLayers = this.doc.layers.filter((layer) => !isNeutralBlendIf(resolvedBlendIf(layer)) || resolvedFillOpacity(layer) < 1).length;
     const photoshopMetadata = getPhotoshopDocumentMetadata(this.doc);
@@ -823,6 +848,8 @@ export class Studio {
       alphaBytes,
       surfaces: surfaces.length,
       workingSetBytes,
+      estimatedResidentBytes,
+      residentMemoryBudget: this.residentMemoryBudget.stats(),
       layers: this.doc.layers.length,
       blendPasses,
       advancedBlendLayers,
@@ -852,13 +879,13 @@ export class Studio {
       },
       proofing: { ...this.doc.proofing },
       previewCache: precisionPreviewCacheStats(),
-      viewportCache: viewportRenderCacheStats(),
+      viewportCache,
       viewportPerformance: viewportRenderPerformanceStats(),
       adaptivePreview: this.renderGovernor.stats(),
-      gpuTextureCache: gpuTextureCacheStats(),
+      gpuTextureCache: gpuStats,
       channelView: this.channelView,
       tileBacking: this.tileBacking?.stats() ?? { supported: false, writes: 0, bytesWritten: 0, failures: 0 },
-      history: this.history.summary(),
+      history: historyStats,
     };
   }
 
@@ -1022,6 +1049,8 @@ export class Studio {
       if (!layer) continue;
       const { bitmapReplaced } = applyLayerSnapshot(layer, snap);
       if (bitmapReplaced && !snap.surface) this.syncLayerSurface(layer);
+      layer.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+      layer.maskSurface?.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
       this.checkpointLayerSurface(layer);
     }
   }
@@ -1072,12 +1101,14 @@ export class Studio {
       const layer = this.findLayer(patch.layerId);
       if (!layer) continue;
       const surface = layerMaskSurface(layer, this.doc.width, this.doc.height, true)!;
+      surface.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
       surface.applyPatch({ key: patch.key, before: patch.before, after: patch.after }, side);
     }
   }
 
   private applySelectionTranslation(patch: SelectionTranslationPatch, side: "before" | "after") {
     const surface = new SparseAlphaSurface(this.doc.width, this.doc.height);
+    surface.bindMemoryBudget(this.residentMemoryBudget, "selection");
     if (patch.source) {
       const alpha = new Uint8Array(patch.source.width * patch.source.height);
       for (let pixel = 0; pixel < alpha.length; pixel += 1) alpha[pixel] = patch.source.data[pixel * 4 + 3];
@@ -2018,6 +2049,7 @@ export class Studio {
     colorSpace = this.doc.colorSpace,
   ) {
     const surface = new PrecisionTileSurface(canvas.width, canvas.height, format, colorSpace);
+    surface.store.bindMemoryBudget(this.residentMemoryBudget, "raster pixels");
     const context = canvas.getContext("2d")!;
     for (let row = 0; row < surface.grid.rows; row += 1) {
       for (let column = 0; column < surface.grid.columns; column += 1) {
@@ -2059,11 +2091,14 @@ export class Studio {
   private ensureDocumentSurfaces(doc: Document) {
     const format = pixelFormatForDepth(doc.bitDepth);
     for (const layer of doc.layers) {
+      layer.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+      layer.maskSurface?.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
       if (!layer.bitmap) continue;
       if (layer.surface && layer.surface.grid.width === layer.bitmap.width &&
           layer.surface.grid.height === layer.bitmap.height && layer.surface.format === format &&
           layer.surface.colorSpace === doc.colorSpace) continue;
       const surface = new PrecisionTileSurface(layer.bitmap.width, layer.bitmap.height, format, doc.colorSpace);
+      surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
       const context = layer.bitmap.getContext("2d")!;
       for (let row = 0; row < surface.grid.rows; row += 1) {
         for (let column = 0; column < surface.grid.columns; column += 1) {
@@ -2073,6 +2108,15 @@ export class Studio {
       }
       layer.surface = surface;
     }
+    doc.selection?.surface?.bindMemoryBudget(this.residentMemoryBudget, "selection");
+  }
+
+  private bindDocumentMemory(doc: Document) {
+    for (const layer of doc.layers) {
+      layer.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+      layer.maskSurface?.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
+    }
+    doc.selection?.surface?.bindMemoryBudget(this.residentMemoryBudget, "selection");
   }
 
   private surfaceBackingId(layerId: string, sessionId = this.activeSessionId) {
@@ -2246,6 +2290,7 @@ export class Studio {
         pixelFormatForDepth(this.doc.bitDepth),
         this.doc.colorSpace,
       );
+    layer.surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
     this.actions.push({ op: "addRaster", name });
     this.checkpointLayerSurface(layer);
@@ -3552,7 +3597,9 @@ export class Studio {
     const layer = this.findLayer(layerId);
     if (!layer || layer.locked) return;
     const maskPaint = params.mode === "mask-add" || params.mode === "mask-remove";
-    if (maskPaint) layerMaskSurface(layer, this.doc.width, this.doc.height, true);
+    if (maskPaint) layerMaskSurface(layer, this.doc.width, this.doc.height, true)!
+      .bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
+    layer.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
     const localPoint = this.layerStrokePoint(layer, params, point);
     if (!localPoint) return;
     const precisionPaint = (params.mode === "paint" || params.mode === "erase") && !!layer.surface;
@@ -4549,22 +4596,43 @@ export class Studio {
     return encodeLumaProject(this.doc, this.actions.list(), name, this.history.snapshot());
   }
 
+  async exportRecoveryDocument(id = this.activeSessionId) {
+    const { encodeLumaProject } = await import("./project");
+    this.saveActiveSession();
+    const session = this.sessions.find((candidate) => candidate.id === id);
+    if (!session) throw new Error(`Recovery document ${id} is no longer open`);
+    return {
+      id: session.id,
+      name: session.name,
+      active: session.id === this.activeSessionId,
+      updatedAt: Date.now(),
+      blob: await encodeLumaProject(session.doc, this.actions.list(), session.name),
+    };
+  }
+
   async exportRecoveryWorkspace() {
     const { encodeLumaProject } = await import("./project");
     this.saveActiveSession();
     const actions = this.actions.list();
     const updatedAt = Date.now();
-    return Promise.all(this.sessions.map(async (session) => ({
-      id: session.id,
-      name: session.name,
-      active: session.id === this.activeSessionId,
-      updatedAt,
-      // Crash recovery is a current-state checkpoint, not a second project
-      // archive. Persisting the complete undo graph here multiplied precision
-      // assets across snapshots and could inflate a tiny document into an
-      // 80+ MB startup payload. Explicit saves still include full history.
-      blob: await encodeLumaProject(session.doc, actions, session.name),
-    })));
+    const checkpoints = [];
+    // Full-workspace checkpoints are reserved for explicit lifecycle events.
+    // Encode serially so several large JSZip archives cannot coexist while
+    // they are being compressed.
+    for (const session of this.sessions) {
+      checkpoints.push({
+        id: session.id,
+        name: session.name,
+        active: session.id === this.activeSessionId,
+        updatedAt,
+        // Crash recovery is a current-state checkpoint, not a second project
+        // archive. Persisting the complete undo graph here multiplied precision
+        // assets across snapshots and could inflate a tiny document into an
+        // 80+ MB startup payload. Explicit saves still include full history.
+        blob: await encodeLumaProject(session.doc, actions, session.name),
+      });
+    }
+    return checkpoints;
   }
 
   async importProject(blob: Blob, options: { restoreHistory?: boolean } = {}) {

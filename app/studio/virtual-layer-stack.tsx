@@ -113,6 +113,8 @@ export default function VirtualLayerStack({
     <div
       ref={hostRef}
       className="layer-stack virtual-layer-stack"
+      role="listbox"
+      aria-label="Document layers"
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       data-layer-count={layers.length}
     >
@@ -121,9 +123,12 @@ export default function VirtualLayerStack({
           {layers.slice(range.start, range.end).map((layer, localIndex) => {
             const targetIndex = range.start + localIndex;
             return (
-              <button
+              <div
                 key={layer.id}
                 className={`spatial-layer ${activeLayerId === layer.id ? "active" : ""}`}
+                role="option"
+                aria-selected={activeLayerId === layer.id}
+                tabIndex={activeLayerId === layer.id ? 0 : -1}
                 style={{ height: ROW_HEIGHT, top: localIndex * ROW_HEIGHT, "--layer-indent": layer.parentId ? "12px" : "0px" } as CSSProperties}
                 title={layer.ai
                   ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}`
@@ -136,6 +141,11 @@ export default function VirtualLayerStack({
                   if (draggedLayerId && draggedLayerId !== layer.id) onDrop(draggedLayerId, targetIndex);
                 }}
                 onClick={() => onSelect(layer)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  onSelect(layer);
+                }}
                 onDoubleClick={() => onOpenStyle(layer)}
               >
                 <span className={`spatial-layer-thumb kind-${layer.kind}`}>{layerGlyph(layer)}</span>
@@ -150,20 +160,27 @@ export default function VirtualLayerStack({
                   <small>{layerDetails(layer)}</small>
                 </span>
                 <span className="spatial-layer-actions">
-                  <i onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}>
+                  <button
+                    type="button"
+                    className="spatial-layer-visibility"
+                    aria-label={`${layer.visible ? "Hide" : "Show"} ${layer.name}`}
+                    aria-pressed={layer.visible}
+                    title={layer.visible ? "Hide layer" : "Show layer"}
+                    onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}
+                  >
                     {layer.visible ? "◉" : "○"}
-                  </i>
-                  <i
+                  </button>
+                  <button
+                    type="button"
                     className="spatial-layer-delete"
-                    role="button"
                     aria-label={`Delete ${layer.name}`}
                     title="Delete layer"
                     onClick={(event) => { event.stopPropagation(); onDelete(layer); }}
                   >
                     ×
-                  </i>
+                  </button>
                 </span>
-              </button>
+              </div>
             );
           })}
         </div>

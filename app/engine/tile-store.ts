@@ -4,6 +4,7 @@ import {
   displaySrgbToWorking,
   workingToDisplaySrgb,
 } from "./color";
+import { ResidentMemoryBudget, type ResidentMemoryAccount } from "./resident-memory";
 
 export const DEFAULT_TILE_SIZE = 256;
 export const DEFAULT_SURFACE_MEMORY_CEILING = 512 * 1024 * 1024;
@@ -155,6 +156,8 @@ export class SparseTileStore {
   private readonly tileRevisions = new Map<string, number>();
   private revision = 0;
   private residentBytes = 0;
+  private residentMemoryAccount: ResidentMemoryAccount | null = null;
+  private residentMemoryBudget: ResidentMemoryBudget | null = null;
 
   constructor(grid: TileGrid, format: PixelFormat = "rgba8", memoryCeiling = DEFAULT_SURFACE_MEMORY_CEILING) {
     this.grid = grid;
@@ -163,6 +166,19 @@ export class SparseTileStore {
   }
 
   has(key: string) { return this.tiles.has(key); }
+
+  bindMemoryBudget(budget: ResidentMemoryBudget, label = "pixel surface") {
+    if (this.residentMemoryBudget === budget && this.residentMemoryAccount) return;
+    this.residentMemoryAccount?.release();
+    this.residentMemoryBudget = budget;
+    this.residentMemoryAccount = budget.register(this, label, this.residentBytes);
+  }
+
+  unbindMemoryBudget() {
+    this.residentMemoryAccount?.release();
+    this.residentMemoryAccount = null;
+    this.residentMemoryBudget = null;
+  }
 
   read(key: string) {
     this.grid.parseKey(key);
@@ -211,7 +227,9 @@ export class SparseTileStore {
     this.grid.parseKey(key);
     const existing = this.tiles.get(key);
     if (!existing || !this.tiles.delete(key)) return false;
-    this.residentBytes -= existing.byteLength;
+    const nextBytes = this.residentBytes - existing.byteLength;
+    this.residentMemoryAccount?.resize(nextBytes);
+    this.residentBytes = nextBytes;
     this.revision += 1;
     this.dirty.set(key, this.revision);
     this.tileRevisions.set(key, this.revision);
@@ -248,6 +266,7 @@ export class SparseTileStore {
   clear() {
     const keys = [...this.tiles.keys()];
     if (!keys.length) return;
+    this.residentMemoryAccount?.resize(0);
     this.tiles.clear();
     this.residentBytes = 0;
     for (const key of keys) {
@@ -280,9 +299,11 @@ export class SparseTileStore {
 
   [COMMIT_OWNED_TILE](key: string, data: Uint8Array) {
     const previous = this.tiles.get(key);
-    this.assertResidentBytes(this.residentBytes + data.byteLength - (previous?.byteLength ?? 0));
+    const nextBytes = this.residentBytes + data.byteLength - (previous?.byteLength ?? 0);
+    this.assertResidentBytes(nextBytes);
+    this.residentMemoryAccount?.resize(nextBytes);
     this.tiles.set(key, data);
-    this.residentBytes += data.byteLength - (previous?.byteLength ?? 0);
+    this.residentBytes = nextBytes;
     this.revision += 1;
     this.dirty.set(key, this.revision);
     this.tileRevisions.set(key, this.revision);

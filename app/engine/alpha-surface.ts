@@ -1,4 +1,5 @@
 import { DEFAULT_TILE_SIZE, PixelRect, TileAddress, TileGrid } from "./tile-store";
+import { ResidentMemoryBudget, type ResidentMemoryAccount } from "./resident-memory";
 
 export const DEFAULT_ALPHA_MEMORY_CEILING = 256 * 1024 * 1024;
 export const DEFAULT_ALPHA_RECORD_CEILING = 1_000_000;
@@ -85,6 +86,8 @@ export class SparseAlphaSurface {
   private residentBytes = 0;
   private _defaultAlpha: number;
   private _revision = 0;
+  private residentMemoryAccount: ResidentMemoryAccount | null = null;
+  private residentMemoryBudget: ResidentMemoryBudget | null = null;
 
   constructor(
     width: number,
@@ -108,6 +111,19 @@ export class SparseAlphaSurface {
   get defaultAlpha() { return this._defaultAlpha; }
   get revision() { return this._revision; }
 
+  bindMemoryBudget(budget: ResidentMemoryBudget, label = "alpha surface") {
+    if (this.residentMemoryBudget === budget && this.residentMemoryAccount) return;
+    this.residentMemoryAccount?.release();
+    this.residentMemoryBudget = budget;
+    this.residentMemoryAccount = budget.register(this, label, this.residentBytes);
+  }
+
+  unbindMemoryBudget() {
+    this.residentMemoryAccount?.release();
+    this.residentMemoryAccount = null;
+    this.residentMemoryBudget = null;
+  }
+
   stats() {
     return {
       width: this.width,
@@ -124,6 +140,7 @@ export class SparseAlphaSurface {
   }
 
   reset(defaultAlpha = this.defaultAlpha) {
+    this.residentMemoryAccount?.resize(0);
     this.records.clear();
     this.residentBytes = 0;
     this._defaultAlpha = clampByte(defaultAlpha);
@@ -527,8 +544,10 @@ export class SparseAlphaSurface {
     const nextBytes = this.residentBytes - alphaTileRecordBytes(previous) + alphaTileRecordBytes(record);
     if (nextCount > this.recordCeiling) throw new AlphaMemoryLimitError(`Alpha surface would exceed ${this.recordCeiling.toLocaleString()} resident tiles`);
     if (nextBytes > this.memoryCeiling) throw new AlphaMemoryLimitError(`Alpha surface would exceed its ${Math.floor(this.memoryCeiling / 1024 / 1024)} MB memory ceiling`);
+    const prepared = cloneRecord(record);
+    this.residentMemoryAccount?.resize(nextBytes);
     if (record === null) this.records.delete(key);
-    else this.records.set(key, cloneRecord(record)!);
+    else this.records.set(key, prepared!);
     this.residentBytes = nextBytes;
     this._revision += 1;
   }
@@ -549,8 +568,10 @@ export class SparseAlphaSurface {
     if (nextBytes > this.memoryCeiling) {
       throw new AlphaMemoryLimitError(`Alpha surface would exceed its ${Math.floor(this.memoryCeiling / 1024 / 1024)} MB memory ceiling`);
     }
+    const prepared = [...staged].map(([key, record]) => [key, cloneRecord(record)] as const);
+    this.residentMemoryAccount?.resize(nextBytes);
     const patches: AlphaTilePatch[] = [];
-    for (const [key, record] of staged) {
+    for (const [key, record] of prepared) {
       const before = this.record(key);
       if (record === null) this.records.delete(key);
       else this.records.set(key, cloneRecord(record)!);

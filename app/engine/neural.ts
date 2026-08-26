@@ -1,5 +1,7 @@
 // On-device subject matting via MODNet running through transformers.js.
-// The model (~26MB) downloads on first use and is cached by the browser.
+// The model downloads on first use and is cached by the webview. Packaged
+// desktop CSP permits only Hugging Face's model origins for this fetch; all
+// inference remains local after the verified runtime has loaded the assets.
 // We keep the import lazy so the initial JS bundle stays lean.
 
 export type ProgressFn = (msg: string, pct: number) => void;
