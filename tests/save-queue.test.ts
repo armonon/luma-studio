@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CoalescedSaveQueue } from "../app/engine/save-queue.ts";
+import { CoalescedSaveQueue, recoveryCheckpointDelayMs } from "../app/engine/save-queue.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -74,4 +74,12 @@ test("errors settle the failed revision and a later request retries", async () =
   assert.equal(attempts, 2);
   assert.ok(states.includes("error"));
   assert.equal(states.at(-1), "idle");
+});
+
+test("large and layer-heavy documents avoid continuous recovery recompression", () => {
+  assert.equal(recoveryCheckpointDelayMs({ documentPixels: 24_000_000, estimatedResidentBytes: 0, layers: 20 }), 1_600);
+  assert.equal(recoveryCheckpointDelayMs({ documentPixels: 100_000_000, estimatedResidentBytes: 0, layers: 20 }), 4_000);
+  assert.equal(recoveryCheckpointDelayMs({ documentPixels: 400_000_000, estimatedResidentBytes: 0, layers: 20 }), 8_000);
+  assert.equal(recoveryCheckpointDelayMs({ documentPixels: 1, estimatedResidentBytes: 384 * 1024 * 1024, layers: 20 }), 4_000);
+  assert.equal(recoveryCheckpointDelayMs({ documentPixels: 1, estimatedResidentBytes: 0, layers: 2_000 }), 8_000);
 });

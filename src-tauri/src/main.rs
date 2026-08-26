@@ -582,6 +582,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("save-as", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .separator()
         .item(&item("export", "Export…", Some("CmdOrCtrl+E"))?)
+        .item(&item("batch", "Batch Process…", None)?)
         .separator()
         .close_window()
         .build()?;
@@ -596,13 +597,24 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .copy()
         .paste()
         .separator()
+        .item(&item("copy-layer-style", "Copy Layer Style", None)?)
+        .item(&item("paste-layer-style", "Paste Layer Style", None)?)
+        .separator()
         .item(&item("history", "Version History…", None)?)
+        .build()?;
+
+    let image = SubmenuBuilder::new(app, "Image")
+        .item(&item("document-properties", "Document Properties…", None)?)
+        .separator()
+        .item(&item("crop-selection", "Crop to Selection", None)?)
         .build()?;
 
     let layer = SubmenuBuilder::new(app, "Layer")
         .item(&item("new-layer", "New Layer", Some("CmdOrCtrl+Shift+N"))?)
+        .item(&item("duplicate-layer", "Duplicate Layer", Some("CmdOrCtrl+J"))?)
         .item(&item("group-layer", "Group Layer", Some("CmdOrCtrl+G"))?)
         .item(&item("delete-layer", "Delete Layer", None)?)
+        .item(&item("convert-smart-object", "Convert to Smart Object", None)?)
         .separator()
         .item(&item("bring-forward", "Bring Forward", Some("CmdOrCtrl+]"))?)
         .item(&item("send-backward", "Send Backward", Some("CmdOrCtrl+["))?)
@@ -622,6 +634,15 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("select-subject", "Subject", None)?)
         .build()?;
 
+    let filter = SubmenuBuilder::new(app, "Filter")
+        .item(&item("filter-gallery", "Filter Gallery…", None)?)
+        .separator()
+        .item(&item("filter-invert", "Invert Pixels", None)?)
+        .item(&item("filter-blur", "Gaussian Blur", None)?)
+        .item(&item("filter-sharpen", "Sharpen", None)?)
+        .item(&item("filter-desaturate", "Desaturate", None)?)
+        .build()?;
+
     let view = SubmenuBuilder::new(app, "View")
         .item(&item("zoom-in", "Zoom In", Some("CmdOrCtrl+Plus"))?)
         .item(&item("zoom-out", "Zoom Out", Some("CmdOrCtrl+-"))?)
@@ -629,12 +650,26 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("zoom-fit", "Fit on Screen", Some("CmdOrCtrl+0"))?)
         .item(&item("zoom-actual", "Actual Size", Some("CmdOrCtrl+1"))?)
         .separator()
+        .item(&item("toggle-guides", "Show Guides", None)?)
+        .separator()
         .fullscreen()
         .minimize()
         .build()?;
 
+    let window = SubmenuBuilder::new(app, "Window")
+        .item(&item("panel-layers", "Layers", None)?)
+        .item(&item("panel-document", "Document & Color", None)?)
+        .item(&item("panel-channels", "Channels", None)?)
+        .item(&item("panel-comps", "Layer Comps & Artboards", None)?)
+        .item(&item("panel-assets", "Plugins & Assets", None)?)
+        .item(&item("panel-neural", "Neural Lab", None)?)
+        .item(&item("panel-actions", "Actions", None)?)
+        .separator()
+        .item(&item("workspace-settings", "Workspace Settings…", None)?)
+        .build()?;
+
     MenuBuilder::new(app)
-        .items(&[&app_menu, &file, &edit, &layer, &select, &view])
+        .items(&[&app_menu, &file, &edit, &image, &layer, &select, &filter, &view, &window])
         .build()
 }
 

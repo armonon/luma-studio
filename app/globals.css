@@ -12783,3 +12783,50 @@ html[data-luma-platform="desktop"] .tool-palette-group > div > button.active {
     max-height: 148px;
   }
 }
+
+/* RC readability floor. The native workspace intentionally stays dense, but
+   professional density must not depend on 7–9px labels. These final rules are
+   kept after responsive overrides so every desktop panel and Space deck has a
+   predictable, legible baseline at both Retina and non-Retina scaling. */
+html[data-luma-platform="desktop"] .spatial-inspector button,
+html[data-luma-platform="desktop"] .spatial-inspector select,
+html[data-luma-platform="desktop"] .spatial-inspector input,
+html[data-luma-platform="desktop"] .spatial-inspector output,
+html[data-luma-platform="desktop"] .spatial-inspector label {
+  font-size: 10.5px;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector small,
+html[data-luma-platform="desktop"] .spatial-inspector .desktop-property-switch small,
+html[data-luma-platform="desktop"] .spatial-inspector .glass-card > header small {
+  color: #949aa5;
+  font-size: 9.5px;
+}
+
+html[data-luma-platform="desktop"] .spatial-layer strong,
+html[data-luma-platform="desktop"] .spatial-layer .layer-name strong {
+  font-size: 11px;
+}
+
+html[data-luma-platform="desktop"] .spatial-topbar button,
+html[data-luma-platform="desktop"] .spatial-contextbar button,
+html[data-luma-platform="desktop"] .layer-add-menu > select {
+  font-size: 10px;
+}
+
+html[data-luma-platform="desktop"] .space-deck button,
+html[data-luma-platform="desktop"] .space-deck select,
+html[data-luma-platform="desktop"] .space-deck output,
+html[data-luma-platform="desktop"] .space-deck strong {
+  font-size: 9.5px;
+}
+
+html[data-luma-platform="desktop"] .space-deck small,
+html[data-luma-platform="desktop"] .space-deck kbd {
+  font-size: 8.5px;
+}
+
+html[data-luma-platform="desktop"] :is(button, select, input, [role="button"], [role="option"]):focus-visible {
+  outline: 2px solid #4ba7ff;
+  outline-offset: 2px;
+}

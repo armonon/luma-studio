@@ -47,3 +47,14 @@ test("short desktop windows preserve room for contextual editing", () => {
   assert.match(rule, /\.layers-card\s*\{\s*height: 48%;\s*min-height: 270px;/);
   assert.match(rule, /\.desktop-properties-card\s*\{\s*max-height: 148px;/);
 });
+
+test("native editing controls keep a legible RC type floor and keyboard focus", () => {
+  const floor = css.lastIndexOf("RC readability floor");
+  assert.ok(floor >= 0, "the desktop readability floor must remain the final cascade layer");
+  assert.ok(floor > css.lastIndexOf("@media (max-height: 760px)"));
+  const rule = css.slice(floor);
+  assert.match(rule, /\.spatial-inspector button,[\s\S]*font-size: 10\.5px;/);
+  assert.match(rule, /\.spatial-inspector small,[\s\S]*font-size: 9\.5px;/);
+  assert.match(rule, /\.spatial-layer \.layer-name strong[\s\S]*font-size: 11px;/);
+  assert.match(rule, /:focus-visible\s*\{[\s\S]*outline: 2px solid #4ba7ff;/);
+});

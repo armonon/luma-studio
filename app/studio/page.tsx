@@ -47,7 +47,7 @@ import {
   writeRecoveryDocument,
   writeRecoveryWorkspace,
 } from "@/app/engine/autosave";
-import { CoalescedSaveQueue } from "@/app/engine/save-queue";
+import { CoalescedSaveQueue, recoveryCheckpointDelayMs } from "@/app/engine/save-queue";
 import { installGlobalDiagnostics, localDiagnostics } from "@/app/engine/diagnostics";
 import { createCrashReporterFromEnv } from "@/app/engine/crash-reporting";
 import { assertFileSize, assertSafePhotoshopHeader, assertSafeRasterHeader } from "@/app/engine/input-limits";
@@ -2057,7 +2057,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const unsubscribe = studio.subscribe(() => {
       window.clearTimeout(timer);
       setSaveState(studio.activeDocumentState().dirty ? "unsaved" : "saved");
-      timer = window.setTimeout(flush, 1600);
+      timer = window.setTimeout(flush, recoveryCheckpointDelayMs({
+        documentPixels: studio.doc.width * studio.doc.height,
+        // Dimensions/layer count are O(1); never add an engine-wide scan to
+        // the hot edit notification path merely to schedule background I/O.
+        estimatedResidentBytes: 0,
+        layers: studio.doc.layers.length,
+      }));
     });
     const onVisibility = () => { if (document.visibilityState === "hidden") flush(); };
     window.addEventListener("pagehide", flush);
@@ -2381,10 +2387,28 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       case "save": void saveProject(); return;
       case "save-as": void saveProject(true); return;
       case "export": setShowExportMenu(true); return;
+      case "batch": setShowBatch(true); return;
 
       case "undo": studio?.undo(); forceUpdate(); return;
       case "redo": studio?.redo(); forceUpdate(); return;
       case "history": setShowHistory(true); return;
+      case "copy-layer-style":
+        if (!studio || !activeLayerId || !studio.copyLayerStyle(activeLayerId)) notify("Select a layer to copy its style");
+        else notify("Layer style copied");
+        return;
+      case "paste-layer-style":
+        if (!studio || !activeLayerId || !studio.pasteLayerStyle(activeLayerId)) notify("Copy a style, then select an unlocked layer");
+        else { forceUpdate(); notify("Layer style pasted"); }
+        return;
+
+      case "document-properties":
+        setInspectorTab("properties");
+        setNativePanelOverride("document");
+        return;
+      case "crop-selection":
+        if (!studio?.cropToSelection()) notify("Create a selection before cropping");
+        else forceUpdate();
+        return;
 
       case "select-all": studio?.selectAll(); return;
       case "deselect": studio?.deselect(); return;
@@ -2396,11 +2420,24 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         return;
 
       case "new-layer": addBlank(); return;
+      case "duplicate-layer":
+        if (studio && activeLayerId) {
+          const layer = studio.duplicateLayer(activeLayerId);
+          if (layer) setActiveLayerId(layer.id);
+          forceUpdate();
+        } else notify("Select a layer to duplicate");
+        return;
       case "group-layer":
         if (studio && activeLayerId) studio.groupLayer(activeLayerId);
         forceUpdate();
         return;
       case "delete-layer": removeActive(); return;
+      case "convert-smart-object":
+        if (studio && activeLayerId) {
+          studio.convertToSmartObject(activeLayerId);
+          forceUpdate();
+        } else notify("Select a layer to convert");
+        return;
       case "bring-forward":
         if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1);
         forceUpdate();
@@ -2434,11 +2471,43 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }
         return;
 
+      case "filter-gallery": setShowFilters(true); return;
+      case "filter-invert":
+      case "filter-blur":
+      case "filter-sharpen":
+      case "filter-desaturate": {
+        if (!studio || !activeLayerId || activeLayer?.kind !== "raster" || !activeLayer.bitmap || activeLayer.locked) {
+          notify("Select an unlocked raster layer to apply this filter");
+          return;
+        }
+        if (command === "filter-invert") studio.filter(activeLayerId, "invert");
+        else if (command === "filter-blur") studio.filter(activeLayerId, "blur", { radius: blurRadius });
+        else if (command === "filter-sharpen") studio.filter(activeLayerId, "sharpen", { radius: 2, amount: sharpAmount });
+        else studio.filter(activeLayerId, "desaturate", { amount: 1 });
+        forceUpdate();
+        return;
+      }
+
       case "zoom-in": setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return;
       case "zoom-out": setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return;
       case "zoom-fit": setView({ zoom: 1, panX: 0, panY: 0 }); return;
       case "zoom-actual": setView((v) => ({ ...v, zoom: 1 })); return;
+      case "toggle-guides": setShowGuides((visible) => !visible); return;
+
+      case "panel-layers":
+        setInspectorTab("layers");
+        setNativePanelOverride(null);
+        return;
+      case "panel-document": setInspectorTab("properties"); setNativePanelOverride("document"); return;
+      case "panel-channels": setInspectorTab("properties"); setNativePanelOverride("channels"); return;
+      case "panel-comps": setInspectorTab("properties"); setNativePanelOverride("structure"); return;
+      case "panel-assets": setInspectorTab("properties"); setNativePanelOverride("assets"); return;
+      case "panel-neural": focusInspector("ai"); return;
+      case "panel-actions": setInspectorTab("properties"); setNativePanelOverride("actions"); return;
+      case "workspace-settings": setShowWorkspaceSettings(true); return;
     }
+    const exhaustive: never = command;
+    return exhaustive;
   };
 
   const spaceDeckContext = resolveSpaceDeckContext({

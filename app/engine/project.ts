@@ -1,5 +1,5 @@
 import JSZip from "jszip";
-import { Action } from "./actions";
+import { isSafeAction, type Action } from "./actions";
 import {
   Document,
   CapturedBrushAsset,
@@ -960,7 +960,9 @@ export async function encodeLumaProject(
   actions: Action[],
   name: string,
   history?: OperationHistorySnapshot<HistoryEntry>,
+  options: { mode?: "project" | "recovery" } = {},
 ): Promise<Blob> {
+  const recovery = options.mode === "recovery";
   const zip = new JSZip();
   const context: EncodeContext = {
     zip,
@@ -982,11 +984,14 @@ export async function encodeLumaProject(
     actions,
     history: history ? await serializeHistory(history, context) : undefined,
   };
-  zip.file("manifest.json", JSON.stringify(manifest, null, 2));
+  // Recovery runs repeatedly and must finish quickly under memory pressure.
+  // A compact manifest and low-cost deflate reduce both transient work and
+  // checkpoint latency; explicit project saves keep the stronger compression.
+  zip.file("manifest.json", recovery ? JSON.stringify(manifest) : JSON.stringify(manifest, null, 2));
   return zip.generateAsync({
     type: "blob",
     compression: "DEFLATE",
-    compressionOptions: { level: 4 },
+    compressionOptions: { level: recovery ? 1 : 4 },
     mimeType: "application/x-luma-project",
   });
 }
@@ -1015,6 +1020,7 @@ function assertManifest(value: unknown): asserts value is ProjectManifest {
     if (!Array.isArray(manifest.actions) || manifest.actions.length > LUMA_PROJECT_LIMITS.actions) throw new Error("Luma project contains too many actions");
     const steps = manifest.actions.reduce((count, action) => count + (Array.isArray(action?.steps) ? action.steps.length : LUMA_PROJECT_LIMITS.actionSteps + 1), 0);
     if (steps > LUMA_PROJECT_LIMITS.actionSteps) throw new Error("Luma project contains too many action steps");
+    if (!manifest.actions.every(isSafeAction)) throw new Error("Luma project contains a malformed or unsupported action");
   }
   if (manifest.history?.nodes && manifest.history.nodes.length > LUMA_PROJECT_LIMITS.historyNodes) {
     throw new Error("Luma project contains too many history nodes");

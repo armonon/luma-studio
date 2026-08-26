@@ -22,10 +22,16 @@ export type StudioCommand =
   | "save"
   | "save-as"
   | "export"
+  | "batch"
   // Edit
   | "undo"
   | "redo"
   | "history"
+  | "copy-layer-style"
+  | "paste-layer-style"
+  // Image
+  | "document-properties"
+  | "crop-selection"
   // Select
   | "select-all"
   | "deselect"
@@ -33,19 +39,37 @@ export type StudioCommand =
   | "select-subject"
   // Layer
   | "new-layer"
+  | "duplicate-layer"
   | "group-layer"
   | "delete-layer"
+  | "convert-smart-object"
   | "bring-forward"
   | "send-backward"
   | "layer-style"
   | "curves"
   | "levels"
   | "hsl"
+  // Filter
+  | "filter-gallery"
+  | "filter-invert"
+  | "filter-blur"
+  | "filter-sharpen"
+  | "filter-desaturate"
   // View
   | "zoom-in"
   | "zoom-out"
   | "zoom-fit"
-  | "zoom-actual";
+  | "zoom-actual"
+  | "toggle-guides"
+  // Window
+  | "panel-layers"
+  | "panel-document"
+  | "panel-channels"
+  | "panel-comps"
+  | "panel-assets"
+  | "panel-neural"
+  | "panel-actions"
+  | "workspace-settings";
 
 export type MenuEntry =
   | { kind: "command"; id: StudioCommand; label: string; accelerator?: string }
@@ -95,6 +119,7 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "save-as", label: "Save As…", accelerator: "CmdOrCtrl+Shift+S" },
       { kind: "separator" },
       { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+E" },
+      { kind: "command", id: "batch", label: "Batch Process…" },
       { kind: "separator" },
       { kind: "predefined", role: "close-window" },
     ],
@@ -111,15 +136,28 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "predefined", role: "copy" },
       { kind: "predefined", role: "paste" },
       { kind: "separator" },
+      { kind: "command", id: "copy-layer-style", label: "Copy Layer Style" },
+      { kind: "command", id: "paste-layer-style", label: "Paste Layer Style" },
+      { kind: "separator" },
       { kind: "command", id: "history", label: "Version History…" },
+    ],
+  },
+  {
+    label: "Image",
+    items: [
+      { kind: "command", id: "document-properties", label: "Document Properties…" },
+      { kind: "separator" },
+      { kind: "command", id: "crop-selection", label: "Crop to Selection" },
     ],
   },
   {
     label: "Layer",
     items: [
       { kind: "command", id: "new-layer", label: "New Layer", accelerator: "CmdOrCtrl+Shift+N" },
+      { kind: "command", id: "duplicate-layer", label: "Duplicate Layer", accelerator: "CmdOrCtrl+J" },
       { kind: "command", id: "group-layer", label: "Group Layer", accelerator: "CmdOrCtrl+G" },
       { kind: "command", id: "delete-layer", label: "Delete Layer" },
+      { kind: "command", id: "convert-smart-object", label: "Convert to Smart Object" },
       { kind: "separator" },
       { kind: "command", id: "bring-forward", label: "Bring Forward", accelerator: "CmdOrCtrl+]" },
       { kind: "command", id: "send-backward", label: "Send Backward", accelerator: "CmdOrCtrl+[" },
@@ -142,6 +180,17 @@ export const DESKTOP_MENU: MenuSection[] = [
     ],
   },
   {
+    label: "Filter",
+    items: [
+      { kind: "command", id: "filter-gallery", label: "Filter Gallery…" },
+      { kind: "separator" },
+      { kind: "command", id: "filter-invert", label: "Invert Pixels" },
+      { kind: "command", id: "filter-blur", label: "Gaussian Blur" },
+      { kind: "command", id: "filter-sharpen", label: "Sharpen" },
+      { kind: "command", id: "filter-desaturate", label: "Desaturate" },
+    ],
+  },
+  {
     label: "View",
     items: [
       { kind: "command", id: "zoom-in", label: "Zoom In", accelerator: "CmdOrCtrl+Plus" },
@@ -150,8 +199,24 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "zoom-fit", label: "Fit on Screen", accelerator: "CmdOrCtrl+0" },
       { kind: "command", id: "zoom-actual", label: "Actual Size", accelerator: "CmdOrCtrl+1" },
       { kind: "separator" },
+      { kind: "command", id: "toggle-guides", label: "Show Guides" },
+      { kind: "separator" },
       { kind: "predefined", role: "fullscreen" },
       { kind: "predefined", role: "minimize" },
+    ],
+  },
+  {
+    label: "Window",
+    items: [
+      { kind: "command", id: "panel-layers", label: "Layers" },
+      { kind: "command", id: "panel-document", label: "Document & Color" },
+      { kind: "command", id: "panel-channels", label: "Channels" },
+      { kind: "command", id: "panel-comps", label: "Layer Comps & Artboards" },
+      { kind: "command", id: "panel-assets", label: "Plugins & Assets" },
+      { kind: "command", id: "panel-neural", label: "Neural Lab" },
+      { kind: "command", id: "panel-actions", label: "Actions" },
+      { kind: "separator" },
+      { kind: "command", id: "workspace-settings", label: "Workspace Settings…" },
     ],
   },
 ];

@@ -38,6 +38,7 @@ import {
   inverseAffineForLayerTransform,
   rotateLayerTransformAround,
   cloneCurves,
+  cloneCanvas,
   createAdjustmentLayer,
   createCurvesLayer,
   createDocument,
@@ -1400,7 +1401,9 @@ export class Studio {
   cropToSelection() {
     const bounds = this.doc.selection?.bounds;
     if (!bounds) return false;
-    return this.cropRect(bounds.x, bounds.y, bounds.w, bounds.h, "Crop to selection");
+    const cropped = this.cropRect(bounds.x, bounds.y, bounds.w, bounds.h, "Crop to selection");
+    if (cropped) this.actions.push({ op: "cropSelection" });
+    return cropped;
   }
 
   cropRect(inputX: number, inputY: number, requestedWidth: number, requestedHeight: number, label = "Crop") {
@@ -2216,6 +2219,7 @@ export class Studio {
   addCurvesLayer(name = "Curves") {
     const layer = createCurvesLayer(name, cloneCurves(NEUTRAL_CURVES));
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addCurves" });
     this.requestRender();
     return layer;
   }
@@ -2223,6 +2227,7 @@ export class Studio {
   addLevelsLayer(name = "Levels") {
     const layer = createLevelsLayer(name, { ...NEUTRAL_LEVELS });
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addLevels" });
     this.requestRender();
     return layer;
   }
@@ -2230,6 +2235,7 @@ export class Studio {
   addHslLayer(name = "HSL") {
     const layer = createHslLayer(name, { ...NEUTRAL_HSL });
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addHsl" });
     this.requestRender();
     return layer;
   }
@@ -2241,6 +2247,7 @@ export class Studio {
     const name = PRO_ADJUSTMENT_LABELS[kind];
     const layer = createProAdjustmentLayer(name, params);
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addProAdjustment", kind, params: { ...params } });
     this.requestRender();
     return layer;
   }
@@ -2296,6 +2303,51 @@ export class Studio {
     this.checkpointLayerSurface(layer);
     this.requestRender();
     return layer;
+  }
+
+  duplicateLayer(id: string) {
+    const source = this.findLayer(id);
+    if (!source) return null;
+    const subtreeIds = new Set([id]);
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const layer of this.doc.layers) {
+        if (layer.parentId && subtreeIds.has(layer.parentId) && !subtreeIds.has(layer.id)) {
+          subtreeIds.add(layer.id);
+          expanded = true;
+        }
+      }
+    }
+    const sources = this.doc.layers.filter((layer) => subtreeIds.has(layer.id));
+    const idMap = new Map(sources.map((layer) => [layer.id, nextId("layer")]));
+    const duplicates = sources.map((original) => {
+      const copy = shallowCloneLayer(original);
+      copy.id = idMap.get(original.id)!;
+      copy.name = original.id === id ? `${original.name} copy` : original.name;
+      copy.parentId = original.parentId && idMap.has(original.parentId)
+        ? idMap.get(original.parentId)
+        : original.parentId;
+      copy.bitmap = original.bitmap ? cloneCanvas(original.bitmap) : undefined;
+      copy.mask = original.mask ? cloneCanvas(original.mask) : undefined;
+      copy.surface = original.surface?.clone();
+      copy.maskSurface = original.maskSurface?.clone();
+      copy.filters = copy.filters?.map((filter) => ({ ...filter, id: nextId("filter") }));
+      copy.effects = copy.effects?.map((effect) => ({ ...effect, id: nextId("effect") }));
+      copy.blendStack = copy.blendStack?.map((pass) => ({ ...pass, id: nextId("pass") }));
+      copy.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${copy.id}`);
+      copy.maskSurface?.bindMemoryBudget(this.residentMemoryBudget, `mask:${copy.id}`);
+      return copy;
+    });
+    const duplicate = duplicates[sources.findIndex((layer) => layer.id === id)];
+    const index = this.doc.layers.findIndex((layer) => layer.id === id);
+    this.commitStructural(source.kind === "group" ? "Layer group duplicated" : "Layer duplicated", () => {
+      this.doc.layers.splice(Math.max(0, index), 0, ...duplicates);
+    });
+    this.actions.push({ op: "duplicateActive" });
+    for (const copy of duplicates) this.checkpointLayerSurface(copy);
+    this.requestRender();
+    return duplicate;
   }
 
   groupLayer(id: string) {
@@ -2950,6 +3002,7 @@ export class Studio {
     this.commitStructural("Layer deleted", () => {
       this.doc.layers = this.doc.layers.filter((layer) => !removed.has(layer.id));
     });
+    this.actions.push({ op: "deleteActive" });
     if (this.tileBacking) {
       for (const layerId of removed) {
         void this.tileBacking.deleteSurface(this.surfaceBackingId(layerId)).catch(() => undefined);
@@ -3011,6 +3064,9 @@ export class Studio {
     }
     layer[key] = value;
     this.commit({ label: label || `${String(key)} changed`, before: [before], after: [after] });
+    if (key === "opacity") this.actions.push({ op: "setOpacity", opacity: value as number });
+    else if (key === "fillOpacity") this.actions.push({ op: "setFillOpacity", opacity: value as number });
+    else if (key === "blend") this.actions.push({ op: "setBlendMode", mode: value as BlendMode });
     this.requestRender();
   }
 
@@ -4138,6 +4194,7 @@ export class Studio {
     const before = [this.maskSnapshot(layer)];
     invertMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask inverted", before, after: [this.maskSnapshot(layer)] });
+    this.actions.push({ op: "invertMask" });
     this.requestRender();
   }
 
@@ -4147,6 +4204,7 @@ export class Studio {
     const before = [this.maskSnapshot(layer)];
     clearMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask cleared", before, after: [this.maskSnapshot(layer)] });
+    this.actions.push({ op: "clearMask" });
     this.requestRender();
   }
 
@@ -4551,6 +4609,10 @@ export class Studio {
       case "selectAll": this.selectAll(); break;
       case "deselect": this.deselect(); break;
       case "addAdjustment": nextTarget = this.addAdjustmentLayer("Tone", step.tone as Partial<ToneParams>).id; break;
+      case "addCurves": nextTarget = this.addCurvesLayer().id; break;
+      case "addLevels": nextTarget = this.addLevelsLayer().id; break;
+      case "addHsl": nextTarget = this.addHslLayer().id; break;
+      case "addProAdjustment": nextTarget = this.addProAdjustmentLayer(step.kind, step.params).id; break;
       case "addRaster": nextTarget = this.addBlankRaster(step.name).id; break;
       case "addShape": nextTarget = this.addShapeLayer(step.style).id; break;
       case "addText": nextTarget = this.addTextLayer(step.text, step.style, step.transform).id; break;
@@ -4558,6 +4620,14 @@ export class Studio {
       case "addDropShadow": if (activeLayerId) this.addDropShadow(activeLayerId); break;
       case "convertSmartObject": if (activeLayerId) this.convertToSmartObject(activeLayerId); break;
       case "groupActive": if (activeLayerId) nextTarget = this.groupLayer(activeLayerId)?.id ?? activeLayerId; break;
+      case "duplicateActive": if (activeLayerId) nextTarget = this.duplicateLayer(activeLayerId)?.id ?? activeLayerId; break;
+      case "deleteActive": if (activeLayerId) { this.removeLayer(activeLayerId); nextTarget = null; } break;
+      case "setOpacity": if (activeLayerId) this.setLayerProp(activeLayerId, "opacity", step.opacity, "Opacity"); break;
+      case "setFillOpacity": if (activeLayerId) this.setLayerProp(activeLayerId, "fillOpacity", step.opacity, "Fill opacity"); break;
+      case "setBlendMode": if (activeLayerId) this.setLayerProp(activeLayerId, "blend", step.mode, "Blend mode"); break;
+      case "invertMask": if (activeLayerId) this.invertMask(activeLayerId); break;
+      case "clearMask": if (activeLayerId) this.clearMask(activeLayerId); break;
+      case "cropSelection": this.cropToSelection(); break;
       case "setTransform": if (activeLayerId) this.updateTransform(activeLayerId, step.transform); break;
       case "updateShape": if (activeLayerId) this.updateShape(activeLayerId, step.shape); break;
       case "updateText": if (activeLayerId) this.updateText(activeLayerId, step.text); break;
@@ -4606,7 +4676,7 @@ export class Studio {
       name: session.name,
       active: session.id === this.activeSessionId,
       updatedAt: Date.now(),
-      blob: await encodeLumaProject(session.doc, this.actions.list(), session.name),
+      blob: await encodeLumaProject(session.doc, this.actions.list(), session.name, undefined, { mode: "recovery" }),
     };
   }
 
@@ -4629,7 +4699,7 @@ export class Studio {
         // archive. Persisting the complete undo graph here multiplied precision
         // assets across snapshots and could inflate a tiny document into an
         // 80+ MB startup payload. Explicit saves still include full history.
-        blob: await encodeLumaProject(session.doc, actions, session.name),
+        blob: await encodeLumaProject(session.doc, actions, session.name, undefined, { mode: "recovery" }),
       });
     }
     return checkpoints;

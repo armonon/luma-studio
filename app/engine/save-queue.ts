@@ -6,6 +6,27 @@ export type SaveQueueOptions<T> = {
   onState?(state: SaveQueueState, error?: unknown): void;
 };
 
+export type RecoveryPressure = {
+  documentPixels: number;
+  estimatedResidentBytes: number;
+  layers: number;
+};
+
+/**
+ * Debounce recovery more aggressively when encoding itself is expensive.
+ * Lifecycle events still flush immediately; this only prevents a large,
+ * actively edited project from continuously rebuilding ZIP archives.
+ */
+export function recoveryCheckpointDelayMs(pressure: RecoveryPressure) {
+  if (pressure.documentPixels >= 400_000_000 || pressure.estimatedResidentBytes >= 1024 * 1024 * 1024 || pressure.layers >= 2_000) {
+    return 8_000;
+  }
+  if (pressure.documentPixels >= 100_000_000 || pressure.estimatedResidentBytes >= 384 * 1024 * 1024 || pressure.layers >= 500) {
+    return 4_000;
+  }
+  return 1_600;
+}
+
 /**
  * Serializes autosaves and skips snapshots superseded while they are encoding.
  * This prevents a slow, older project archive from overwriting newer recovery.
