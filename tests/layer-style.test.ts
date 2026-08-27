@@ -1608,3 +1608,44 @@ test("effects added through the dialog actually change the composite", () => {
   assert.ok(pixelAt(after, 50, 32).a > 10, "the glow should reach beyond the square");
   studio.dispose();
 });
+
+test("a locked layer refuses every appearance change, not just effects", () => {
+  // The effects mutators learned this lesson already (see the locked-layer
+  // effect test above, and pasteLayerStyle). The blending family, the
+  // adjustment family and clearMask never did — so a locked adjustment layer
+  // could still be re-curved and a locked layer could still lose its mask.
+  const studio = new Studio(SIZE, SIZE, testCanvas(SIZE, SIZE));
+
+  const raster = studio.addBlankRaster("raster");
+  raster.mask = newCanvas(SIZE, SIZE);
+  studio.setLayerProp(raster.id, "locked", true, "Lock");
+  const live = () => studio.doc.layers.find((layer) => layer.id === raster.id)!;
+
+  studio.setLayerFillOpacity(raster.id, 0.25);
+  assert.notEqual(resolvedFillOpacity(live()), 0.25, "fill opacity is an appearance change");
+
+  studio.setBlendStack(raster.id, [{ id: "p1", mode: "multiply", opacity: 1, enabled: true }]);
+  assert.equal(live().blendStack, undefined, "blend stack is an appearance change");
+
+  studio.clearMask(raster.id);
+  assert.ok(live().mask || live().maskSurface, "clearing a locked layer's mask is destructive");
+
+  const curves = studio.addCurvesLayer("Curves");
+  studio.setLayerProp(curves.id, "locked", true, "Lock");
+  const beforeCurves = JSON.stringify(studio.doc.layers.find((l) => l.id === curves.id)!.curves);
+  studio.updateCurves(curves.id, {
+    rgb: [{ x: 0, y: 0 }, { x: 0.5, y: 0.9 }, { x: 1, y: 1 }],
+    r: [{ x: 0, y: 0 }, { x: 1, y: 1 }], g: [{ x: 0, y: 0 }, { x: 1, y: 1 }], b: [{ x: 0, y: 0 }, { x: 1, y: 1 }],
+  });
+  assert.equal(
+    JSON.stringify(studio.doc.layers.find((l) => l.id === curves.id)!.curves),
+    beforeCurves,
+    "a locked adjustment layer must not be re-curved",
+  );
+
+  // The lock must never be a one-way door.
+  studio.setLayerProp(raster.id, "visible", false, "Hide");
+  assert.equal(live().visible, false, "a locked layer stays hideable");
+  studio.setLayerProp(raster.id, "locked", false, "Unlock");
+  assert.equal(live().locked, false, "unlocking must always work");
+});

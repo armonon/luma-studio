@@ -890,11 +890,28 @@ export class Studio {
     };
   }
 
+  /**
+   * Drop every in-flight live edit.
+   *
+   * `liveSnapshots` and `liveGlobalLightDocument` are two halves of the same
+   * idea — the "before" state of an edit still under the pointer — and they
+   * must die together. They did not: liveGlobalLightDocument was cleared in
+   * only two places, so an abandoned Global Light drag survived a document
+   * switch and was later committed as *another* document's undo baseline.
+   * Undo then replaced that document wholesale. Clearing both here, and
+   * calling this everywhere either was cleared, makes the pair impossible to
+   * separate again.
+   */
+  private discardLiveEdits() {
+    this.liveSnapshots.clear();
+    this.liveGlobalLightDocument = null;
+  }
+
   undo() {
     const node = this.history.undo();
     if (!node?.value) return;
     this.applyHistoryEntry(node.value, "before");
-    this.liveSnapshots.clear();
+    this.discardLiveEdits();
     this.requestRender();
     this.emit();
   }
@@ -902,7 +919,7 @@ export class Studio {
     const node = this.history.redo(branchId);
     if (!node?.value) return;
     this.applyHistoryEntry(node.value, "after");
-    this.liveSnapshots.clear();
+    this.discardLiveEdits();
     this.requestRender();
     this.emit();
   }
@@ -916,7 +933,7 @@ export class Studio {
     for (const node of transition.redo) {
       if (node.value) this.applyHistoryEntry(node.value, "after");
     }
-    this.liveSnapshots.clear();
+    this.discardLiveEdits();
     this.requestRender();
     this.emit();
     return true;
@@ -1164,10 +1181,7 @@ export class Studio {
     if (!session) return false;
     session.savedHistoryNodeId = session.history.current;
     session.transientDirty = false;
-    if (id === this.activeSessionId) {
-      this.liveSnapshots.clear();
-      this.liveGlobalLightDocument = null;
-    }
+    if (id === this.activeSessionId) this.discardLiveEdits();
     if (nativePath) {
       session.nativePath = nativePath;
       const fileName = nativePath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "");
@@ -1190,6 +1204,8 @@ export class Studio {
     const next = this.sessions.find((session) => session.id === id);
     if (!next) return;
     this.saveActiveSession();
+    // An edit still under the pointer belongs to the document being left.
+    this.discardLiveEdits();
     this.activeSessionId = next.id;
     this.doc = next.doc;
     this.history = next.history;
@@ -1202,6 +1218,7 @@ export class Studio {
 
   closeDocument(id: string) {
     if (this.sessions.length <= 1) return;
+    this.discardLiveEdits();
     const index = this.sessions.findIndex((session) => session.id === id);
     if (index < 0) return;
     const closing = this.sessions[index];
@@ -1237,6 +1254,9 @@ export class Studio {
   }
 
   private installDocument(doc: Document, name: string) {
+    // Opening a file is a document change like any other: a pending live edit
+    // from the outgoing document must not become the incoming one's baseline.
+    this.discardLiveEdits();
     this.rawSessions.clear();
     this.focusPreview = null;
     this.resetVirtualGeometry(doc.width, doc.height);
@@ -3038,9 +3058,20 @@ export class Studio {
     this.commit({ label, before: [], after: [], layersBefore: before, layersAfter: after });
   }
 
+  /**
+   * Props a locked layer still accepts.
+   *
+   * Locking protects a layer's *appearance*, not its bookkeeping — you must
+   * always be able to unlock it again, and hiding or renaming a locked layer
+   * is how Photoshop behaves too. Everything else (opacity, blend, fill
+   * opacity, clipping) is an appearance change and is refused below.
+   */
+  private static readonly LOCKED_LAYER_WRITABLE_PROPS = new Set<keyof Layer>(["locked", "visible", "name"]);
+
   setLayerProp<K extends keyof Layer>(id: string, key: K, value: Layer[K], label?: string) {
     const layer = this.findLayer(id);
     if (!layer) return;
+    if (layer.locked && !Studio.LOCKED_LAYER_WRITABLE_PROPS.has(key)) return;
     const liveKey = `layer-prop:${id}:${String(key)}`;
     const liveBefore = this.liveSnapshots.get(liveKey);
     if (!liveBefore && Object.is(layer[key], value)) return;
@@ -3072,7 +3103,8 @@ export class Studio {
 
   liveUpdateLayerProp<K extends "opacity" | "fillOpacity">(id: string, key: K, value: Layer[K]) {
     const layer = this.findLayer(id);
-    if (!layer || layer.locked) return false;
+    if (!layer) return false;
+    if (layer.locked && !Studio.LOCKED_LAYER_WRITABLE_PROPS.has(key)) return false;
     const liveKey = `layer-prop:${id}:${String(key)}`;
     if (!this.liveSnapshots.has(liveKey)) {
       this.liveSnapshots.set(liveKey, { layerId: id, [key]: layer[key] ?? null } as LayerSnapshot);
@@ -3097,7 +3129,7 @@ export class Studio {
 
   setBlendStack(id: string, passes: ReadonlyArray<BlendPass>, label = "Blend stack changed") {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind === "group") return false;
+    if (!layer || layer.kind === "group" || layer.locked) return false;
     const ids = new Set<string>();
     const next = passes.slice(0, MAX_LAYER_BLEND_PASSES).map((pass) => {
       let passId = pass.id || nextId("blend");
@@ -3160,7 +3192,7 @@ export class Studio {
    */
   liveUpdateBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind === "group") return false;
+    if (!layer || layer.kind === "group" || layer.locked) return false;
     const passes = resolvedBlendPasses(layer);
     const index = passes.findIndex((pass) => pass.id === passId);
     if (index < 0) return false;
@@ -3186,7 +3218,7 @@ export class Studio {
 
   commitBlendPass(id: string, passId: string, patch: Partial<Omit<BlendPass, "id">>) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind === "group") return false;
+    if (!layer || layer.kind === "group" || layer.locked) return false;
     const passes = resolvedBlendPasses(layer);
     const index = passes.findIndex((pass) => pass.id === passId);
     if (index < 0) return false;
@@ -3243,7 +3275,7 @@ export class Studio {
 
   liveUpdateLayerBlendIf(id: string, settings: BlendIf) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind === "group") return false;
+    if (!layer || layer.kind === "group" || layer.locked) return false;
     const key = `blend-if:${id}`;
     if (!this.liveSnapshots.has(key)) {
       this.liveSnapshots.set(key, {
@@ -3260,7 +3292,7 @@ export class Studio {
 
   commitLayerBlendIf(id: string, settings: BlendIf) {
     const layer = this.findLayer(id);
-    if (!layer || layer.kind === "group") return false;
+    if (!layer || layer.kind === "group" || layer.locked) return false;
     const key = `blend-if:${id}`;
     const before: LayerSnapshot = this.liveSnapshots.get(key) ?? {
       layerId: id,
@@ -3387,7 +3419,9 @@ export class Studio {
    *  time so the committing call can undo cleanly. */
   private liveAdjustment<K extends AdjustmentKind>(id: string, kind: K, params: AdjustmentParams[K]) {
     const layer = this.findLayer(id);
-    if (!isAdjustmentLayer(layer, kind)) return;
+    // isAdjustmentLayer is a kind test only, so the lock has to be checked
+    // separately here — every other layer-style mutator refuses a locked layer.
+    if (!isAdjustmentLayer(layer, kind) || layer.locked) return;
     const key = `${kind}:${id}`;
     if (!this.liveSnapshots.has(key)) {
       this.liveSnapshots.set(key, snapshotForAdjustment(layer, kind));
@@ -3401,7 +3435,7 @@ export class Studio {
    *  side of the commit, ensuring a single history entry per drag. */
   private commitAdjustment<K extends AdjustmentKind>(id: string, kind: K, params: AdjustmentParams[K]) {
     const layer = this.findLayer(id);
-    if (!isAdjustmentLayer(layer, kind)) return;
+    if (!isAdjustmentLayer(layer, kind) || layer.locked) return;
     const key = `${kind}:${id}`;
     const before = this.liveSnapshots.get(key) ?? snapshotForAdjustment(layer, kind);
     this.liveSnapshots.delete(key);
@@ -4200,7 +4234,8 @@ export class Studio {
 
   clearMask(layerId: string) {
     const layer = this.findLayer(layerId);
-    if (!layer || !hasLayerMask(layer)) return;
+    // A locked layer must not lose its mask — this is destructive.
+    if (!layer || !hasLayerMask(layer) || layer.locked) return;
     const before = [this.maskSnapshot(layer)];
     clearMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask cleared", before, after: [this.maskSnapshot(layer)] });

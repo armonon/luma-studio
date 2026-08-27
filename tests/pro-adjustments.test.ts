@@ -9,6 +9,7 @@ import {
   cloneProAdjustment,
   defaultProAdjustment,
 } from "../app/engine/pro-adjustments.ts";
+import type { ProAdjustmentParams } from "../app/engine/pro-adjustments.ts";
 import { renderClean } from "../app/engine/renderer.ts";
 import { glCanRenderDocument } from "../app/engine/gl-renderer.ts";
 import { pixelAt, solidCanvas, testCanvas } from "./canvas-harness.ts";
@@ -104,4 +105,25 @@ test("live professional adjustment edits collapse into one undo operation", () =
   studio.undo();
   assert.equal(layer.proAdjustment?.kind === "threshold" && layer.proAdjustment.level, 0.5);
   studio.dispose();
+});
+
+test("a params object that is not an adjustment is refused rather than stored", () => {
+  // The Pro adjustment panel hands `commit` straight to DOM handlers
+  // (onPointerUp/onBlur/onKeyUp), which React invokes with a SyntheticEvent.
+  // A defaulted parameter never sees its default in that position, so the event
+  // itself used to reach cloneProAdjustment, whose `default` arm spread it into
+  // the layer: the panel then lost every control (no `kind` matches) and the
+  // adjustment silently stopped affecting the composite.
+  const syntheticEventShaped = { type: "pointerup", target: {}, nativeEvent: {} };
+  assert.throws(
+    () => cloneProAdjustment(syntheticEventShaped as unknown as ProAdjustmentParams),
+    /Not a professional adjustment/,
+  );
+  assert.throws(() => cloneProAdjustment(undefined as unknown as ProAdjustmentParams), /Not a professional adjustment/);
+
+  // Every real kind still clones, and deeply.
+  for (const kind of PRO_ADJUSTMENT_KINDS) {
+    const clone = cloneProAdjustment(defaultProAdjustment(kind));
+    assert.equal(clone.kind, kind);
+  }
 });

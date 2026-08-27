@@ -60,6 +60,14 @@ export function defaultProAdjustment(kind: ProAdjustmentKind): ProAdjustmentPara
 }
 
 export function cloneProAdjustment(params: ProAdjustmentParams): ProAdjustmentParams {
+  // A params object with no recognised `kind` is not an adjustment — it is
+  // something that arrived by mistake. The `default` arm below spreads whatever
+  // it is given, so without this a React SyntheticEvent (or any stray object)
+  // would be stored as the layer's adjustment: the editor would lose every
+  // control and the adjustment would silently stop affecting the composite.
+  if (!params || !PRO_ADJUSTMENT_KINDS.includes(params.kind)) {
+    throw new TypeError(`Not a professional adjustment: ${JSON.stringify(params)?.slice(0, 80)}`);
+  }
   switch (params.kind) {
     case "color-balance": return {
       ...params,

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
+import "./canvas-harness.ts";
 import { createDocument, createRasterLayer, newCanvas } from "../app/engine/document.ts";
 import { OperationHistory } from "../app/engine/operation-history.ts";
 import { decodeLumaProject, encodeLumaProject, LUMA_PROJECT_VERSION } from "../app/engine/project.ts";
 import { PrecisionTileSurface } from "../app/engine/tile-store.ts";
+import { Studio } from "../app/engine/studio.ts";
 import type { HistoryEntry } from "../app/engine/studio.ts";
 
 class TestImageData {
@@ -367,4 +369,29 @@ test("a subject matte is not written into the project and cannot poison a reopen
   // moment anything drew it. Absent is the only safe value here; the render
   // path for a missing matte is covered in layer-style.test.ts.
   assert.ok(!("subjectMask" in restored) || restored.subjectMask === undefined);
+});
+
+test("an abandoned live edit never becomes another document's undo baseline", () => {
+  // liveGlobalLightDocument stashes a whole-document clone on the first tick of
+  // a Global Light drag. It used to be cleared in only two places, so an
+  // abandoned drag survived into the next document and was committed there as
+  // documentBefore — one Cmd+Z then replaced that document wholesale with the
+  // previous one. Reachable by opening any file mid-drag, not just tab switching.
+  const studio = new Studio(64, 48, newCanvas(8, 8));
+  studio.addBlankRaster("LAYER_FROM_DOC_A");
+
+  studio.liveUpdateGlobalLight({ angle: 42 });   // drag started, never released
+
+  studio.resetDocument(80, 60);                  // goes through installDocument
+  studio.addBlankRaster("LAYER_FROM_DOC_B");
+  const before = studio.doc.layers.map((layer) => layer.name).join(",");
+
+  studio.setGlobalLight({ angle: 99 });
+  studio.undo();
+
+  assert.equal(
+    studio.doc.layers.map((layer) => layer.name).join(","),
+    before,
+    "undo must restore this document, not the one the abandoned drag came from",
+  );
 });

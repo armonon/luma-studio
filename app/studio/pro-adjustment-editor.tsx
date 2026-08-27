@@ -53,8 +53,13 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
     onLive(next);
     return next;
   };
-  const commit = (next = lastValue.current) => {
-    onCommit(next);
+  // Zero-arg on purpose. This is handed straight to Range's DOM handlers
+  // (onPointerUp/onBlur/onKeyUp), which React invokes with a SyntheticEvent as
+  // the first argument — so a defaulted parameter would never see its default
+  // and the event object itself would be committed as the adjustment params.
+  // layer-editors.tsx:192 has always done it this way; this file did not.
+  const commit = () => {
+    onCommit(lastValue.current);
     setEditing(false);
   };
 
@@ -85,7 +90,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
             live({ [balanceBand]: band });
           }} onCommit={commit} />)}
         <label><span>Preserve luminosity</span><input type="checkbox" checked={current.preserveLuminosity}
-          onChange={(event) => { const next = update({ preserveLuminosity: event.target.checked }); onLive(next); commit(next); }} /><output>{current.preserveLuminosity ? "On" : "Off"}</output></label>
+          onChange={(event) => { const next = update({ preserveLuminosity: event.target.checked }); onLive(next); commit(); }} /><output>{current.preserveLuminosity ? "On" : "Off"}</output></label>
       </>}
 
       {current.kind === "photo-filter" && <>
@@ -94,7 +99,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
         <Range label="Density" value={current.density * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ density: value / 100 })} onCommit={commit} />
         <label><span>Preserve luminosity</span><input type="checkbox" checked={current.preserveLuminosity}
-          onChange={(event) => { const next = update({ preserveLuminosity: event.target.checked }); onLive(next); commit(next); }} /><output>{current.preserveLuminosity ? "On" : "Off"}</output></label>
+          onChange={(event) => { const next = update({ preserveLuminosity: event.target.checked }); onLive(next); commit(); }} /><output>{current.preserveLuminosity ? "On" : "Off"}</output></label>
       </>}
 
       {current.kind === "channel-mixer" && <>
@@ -110,7 +115,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
 
       {current.kind === "color-lookup" && <>
         <label><span>Look</span><select value={current.preset} onChange={(event) => {
-          const next = update({ preset: event.target.value }); onLive(next); commit(next);
+          const next = update({ preset: event.target.value }); onLive(next); commit();
         }}><option value="cinematic">Cinematic</option><option value="teal-orange">Teal & Orange</option><option value="film">Film</option><option value="chrome">Chrome</option></select><output>LUT</output></label>
         <Range label="Intensity" value={current.intensity * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ intensity: value / 100 })} onCommit={commit} />
@@ -122,7 +127,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
         <Range label="Smooth" value={current.smoothness * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ smoothness: value / 100 })} onCommit={commit} />
         <label><span>Reverse</span><input type="checkbox" checked={current.reverse} onChange={(event) => {
-          const next = update({ reverse: event.target.checked }); onLive(next); commit(next);
+          const next = update({ reverse: event.target.checked }); onLive(next); commit();
         }} /><output>{current.reverse ? "On" : "Off"}</output></label>
       </>}
 
@@ -150,7 +155,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
       {current.kind === "invert" && <p style={{ padding: "4px 12px 10px", margin: 0, opacity: .65, fontSize: 11 }}>Colors are inverted nondestructively.</p>}
     </div>
     <footer style={{ padding: "4px 12px 10px" }}>
-      <button type="button" onClick={() => { const next = defaultProAdjustment(current.kind); onLive(next); commit(next); }}>Reset</button>
+      <button type="button" onClick={() => { const next = defaultProAdjustment(current.kind); onLive(next); commit(); }}>Reset</button>
     </footer>
   </section>;
 }
