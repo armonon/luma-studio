@@ -74,3 +74,68 @@ test("crash ingest fails closed for malformed, oversized, foreign-origin, and un
     if (previousUrl === undefined) delete process.env.LUMA_CRASH_WEBHOOK_URL; else process.env.LUMA_CRASH_WEBHOOK_URL = previousUrl;
   }
 });
+
+test("crash ingest normalizes the timestamp instead of forwarding what was sent", async () => {
+  // Date.parse is not a validator: its legacy fallback silently ignores
+  // anything in parentheses, so this string parses to a real instant. The
+  // timestamp was the one field forwarded raw, bypassing the scrubbing every
+  // other string on the report goes through.
+  resetCrashIngestRateLimitsForTests();
+  const previousUrl = process.env.LUMA_CRASH_WEBHOOK_URL;
+  const previousFetch = globalThis.fetch;
+  process.env.LUMA_CRASH_WEBHOOK_URL = "https://collector.example.test/luma";
+  let forwarded = "";
+  globalThis.fetch = (async (_input, init) => {
+    forwarded = String((init as RequestInit).body);
+    return new Response(null, { status: 202 });
+  }) as typeof fetch;
+  try {
+    const response = await POST(new Request("https://luma.test/api/diagnostics/crash", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...validReport,
+        event: { ...validReport.event, timestamp: "2020-01-01 (ATTACKER-CONTROLLED PAYLOAD)" },
+      }),
+    }));
+    assert.equal(response.status, 202);
+    assert.doesNotMatch(forwarded, /ATTACKER-CONTROLLED/, "the raw timestamp string must not reach the collector");
+    assert.match(forwarded, /"timestamp":"20\d\d-\d\d-\d\dT\d\d:\d\d:\d\d\.\d\d\dZ"/);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) delete process.env.LUMA_CRASH_WEBHOOK_URL; else process.env.LUMA_CRASH_WEBHOOK_URL = previousUrl;
+  }
+});
+
+test("rotating a forwarded-for header does not buy an unbounded crash quota", async () => {
+  // cf-connecting-ip and x-forwarded-for are client-settable unless a proxy
+  // in front of this route rewrites them, so keying the limiter on them let a
+  // single sender mint a fresh bucket per request. Absent an explicit trusted
+  // proxy the limiter now shares one bucket, and a global ceiling bounds the
+  // trusted-proxy case too.
+  resetCrashIngestRateLimitsForTests();
+  const previousUrl = process.env.LUMA_CRASH_WEBHOOK_URL;
+  const previousProxy = process.env.LUMA_TRUSTED_PROXY;
+  const previousFetch = globalThis.fetch;
+  process.env.LUMA_CRASH_WEBHOOK_URL = "https://collector.example.test/luma";
+  delete process.env.LUMA_TRUSTED_PROXY;
+  let delivered = 0;
+  globalThis.fetch = (async () => { delivered += 1; return new Response(null, { status: 202 }); }) as typeof fetch;
+  try {
+    let limited = 0;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const response = await POST(new Request("https://luma.test/api/diagnostics/crash", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": `198.51.100.${attempt}` },
+        body: JSON.stringify(validReport),
+      }));
+      if (response.status === 429) limited += 1;
+    }
+    assert.ok(limited > 0, "a header-rotating sender must still get rate limited");
+    assert.ok(delivered <= 20, `at most one bucket's worth reaches the collector (got ${delivered})`);
+  } finally {
+    globalThis.fetch = previousFetch;
+    if (previousUrl === undefined) delete process.env.LUMA_CRASH_WEBHOOK_URL; else process.env.LUMA_CRASH_WEBHOOK_URL = previousUrl;
+    if (previousProxy === undefined) delete process.env.LUMA_TRUSTED_PROXY; else process.env.LUMA_TRUSTED_PROXY = previousProxy;
+  }
+});

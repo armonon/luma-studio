@@ -45,8 +45,34 @@ function webhookUrl() {
   }
 }
 
+/**
+ * Identify the caller for rate limiting.
+ *
+ * Both of these headers are set by the client unless something in front of
+ * this route overwrites them, so a sender that rotates `x-forwarded-for` gets
+ * a fresh bucket per request and the limit does nothing. Trust them only when
+ * the deployment says a proxy is stripping and rewriting them; otherwise every
+ * request shares one bucket, which is strictly safer than a bypassable one.
+ */
 function clientKey(request: Request) {
+  if (process.env.LUMA_TRUSTED_PROXY !== "1") return "shared";
   return (request.headers.get("cf-connecting-ip") ?? request.headers.get("x-forwarded-for")?.split(",")[0] ?? "unknown").trim().slice(0, 80);
+}
+
+/**
+ * The ceiling no amount of key rotation can climb past.
+ *
+ * Generous enough that a genuine fleet behind a trusted proxy will not hit it,
+ * low enough that it still bounds what this route will forward upstream.
+ */
+const GLOBAL_RATE_LIMIT = RATE_LIMIT * 50;
+let globalWindow: RateWindow = { resetAt: 0, used: 0 };
+
+function acquireGlobal(now: number) {
+  if (now >= globalWindow.resetAt) globalWindow = { resetAt: now + RATE_WINDOW_MS, used: 0 };
+  if (globalWindow.used >= GLOBAL_RATE_LIMIT) return Math.max(1, Math.ceil((globalWindow.resetAt - now) / 1000));
+  globalWindow.used++;
+  return 0;
 }
 
 function acquire(key: string, now = Date.now()) {
@@ -74,7 +100,13 @@ function sanitizedPayload(value: unknown) {
   const event = report.event as Record<string, unknown>;
   if (event.kind !== "crash" && event.kind !== "rejection") throw new Error("Unsupported crash event kind");
   if (typeof event.id !== "string" || !event.id || event.id.length > 120) throw new Error("Crash event id is invalid");
-  if (typeof event.timestamp !== "string" || !Number.isFinite(Date.parse(event.timestamp))) throw new Error("Crash timestamp is invalid");
+  // Date.parse is not a validator. Its legacy fallback ignores anything inside
+  // parentheses, so "2020-01-01 (arbitrary attacker text)" parses fine — and
+  // the raw string was what got forwarded, the one field on the report that
+  // skipped sanitizeDiagnosticValue. Forward the normalized instant instead.
+  if (typeof event.timestamp !== "string") throw new Error("Crash timestamp is invalid");
+  const timestamp = Date.parse(event.timestamp);
+  if (!Number.isFinite(timestamp)) throw new Error("Crash timestamp is invalid");
   const context = event.context && typeof event.context === "object" && !Array.isArray(event.context)
     ? Object.fromEntries(Object.entries(event.context as Record<string, unknown>).slice(0, 32).map(([key, item]) => [
       sanitizeDiagnosticValue(key, 80),
@@ -90,7 +122,7 @@ function sanitizedPayload(value: unknown) {
     event: {
       id: sanitizeDiagnosticValue(event.id, 120),
       kind: event.kind,
-      timestamp: event.timestamp,
+      timestamp: new Date(timestamp).toISOString(),
       message: sanitizeDiagnosticValue(event.message, 600),
       ...(event.stack ? { stack: sanitizeDiagnosticValue(event.stack, 4000) } : {}),
       ...(context ? { context } : {}),
@@ -100,6 +132,7 @@ function sanitizedPayload(value: unknown) {
 
 export function resetCrashIngestRateLimitsForTests() {
   rateWindows.clear();
+  globalWindow = { resetAt: 0, used: 0 };
 }
 
 export function OPTIONS(request: Request) {
@@ -128,7 +161,8 @@ export async function POST(request: Request) {
     return json(request, { error: error instanceof Error ? error.message : "Invalid crash report" }, 400);
   }
 
-  const retryAfter = acquire(clientKey(request));
+  const now = Date.now();
+  const retryAfter = acquireGlobal(now) || acquire(clientKey(request), now);
   if (retryAfter) return respond(request, JSON.stringify({ error: "Crash report rate limit reached" }), {
     status: 429,
     headers: { "content-type": "application/json", "retry-after": String(retryAfter) },
