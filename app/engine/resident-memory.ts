@@ -80,11 +80,38 @@ export class ResidentMemoryBudget {
     };
   }
 
+  /**
+   * Release every account whose owner is not in `live` (or already collected).
+   *
+   * Admission is synchronous but reclamation was GC-deferred: unbindMemoryBudget
+   * existed and was called from nowhere, so every surface replaced by a crop,
+   * resize or re-sync stayed charged until a finalizer happened to run. The
+   * budget then rejected work against memory that was not live — a spurious
+   * ResidentMemoryLimitError on an unrelated later edit.
+   *
+   * The callers that replace surfaces are scattered and easy to miss one of, so
+   * reconciliation happens against the document's live set instead: whatever is
+   * bound is charged, and nothing else is.
+   */
+  retainOnly(live: ReadonlySet<object>) {
+    for (const [token, record] of this.records) {
+      const owner = record.owner.deref();
+      if (!owner || !live.has(owner)) this.releaseToken(token);
+    }
+  }
+
   private resizeToken(token: symbol, bytes: number, registering: boolean) {
     assertBytes(bytes, "resident bytes");
     const record = this.records.get(token);
     if (!record) throw new Error("Resident-memory account is no longer registered");
-    const nextTotal = this.residentBytes - record.bytes + bytes;
+    let nextTotal = this.residentBytes - record.bytes + bytes;
+    // Reclaim anything already collected before refusing: rejecting against
+    // memory that is merely awaiting a finalizer turns a routine edit into a
+    // hard error.
+    if (!registering && bytes > record.bytes && nextTotal > this.ceilingBytes) {
+      this.sweep();
+      nextTotal = this.residentBytes - record.bytes + bytes;
+    }
     // An imported/pre-existing document may already exceed the preferred
     // ceiling. Register it honestly, but reject every subsequent increase;
     // decreases remain available so the user can close or simplify it.

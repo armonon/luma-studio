@@ -2135,11 +2135,27 @@ export class Studio {
   }
 
   private bindDocumentMemory(doc: Document) {
+    // The live set is collected as we bind so the budget can drop everything
+    // else. Crop, resize and syncLayerSurface all *replace* a surface rather
+    // than mutating it, and none of them unbind the outgoing one, so without
+    // this reconciliation the budget keeps charging for surfaces the document
+    // no longer references until a finalizer happens to run.
+    const live = new Set<object>();
     for (const layer of doc.layers) {
-      layer.surface?.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
-      layer.maskSurface?.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
+      if (layer.surface) {
+        layer.surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+        live.add(layer.surface.store);
+      }
+      if (layer.maskSurface) {
+        layer.maskSurface.bindMemoryBudget(this.residentMemoryBudget, `mask:${layer.id}`);
+        live.add(layer.maskSurface);
+      }
     }
-    doc.selection?.surface?.bindMemoryBudget(this.residentMemoryBudget, "selection");
+    if (doc.selection?.surface) {
+      doc.selection.surface.bindMemoryBudget(this.residentMemoryBudget, "selection");
+      live.add(doc.selection.surface);
+    }
+    this.residentMemoryBudget.retainOnly(live);
   }
 
   private surfaceBackingId(layerId: string, sessionId = this.activeSessionId) {
