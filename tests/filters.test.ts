@@ -4,6 +4,7 @@ import "./canvas-harness.ts";
 import { createDocument, createRasterLayer } from "../app/engine/document.ts";
 import {
   SMART_FILTER_KINDS,
+  applySmartFilters,
   SMART_FILTER_SPECS,
   dustAndScratches,
   displace,
@@ -305,4 +306,53 @@ test("surface blur protects strong edges while dust removal replaces isolated de
   dustAndScratches(createDocument(9, 9), createRasterLayer("dust", dust), 1, 20);
   assert.equal(pixelAt(dust, 4, 4).r, 80);
   assert.equal(pixelAt(dust, 3, 4).r, 80);
+});
+
+test("displace ripples the same way in document space at every zoom", () => {
+  // Every other smart filter takes its radius in pixels and gets multiplied by
+  // displayScale so the preview matches the export. Displace's amplitude and
+  // wavelength are pixel quantities too, but were passed through raw: at 2x
+  // zoom the ripple stayed fixed in output pixels, so in document space it had
+  // half the amplitude and half the wavelength. The canvas showed one image
+  // and the exported file another, with zoom deciding which.
+  const measure = (displayScale: number) => {
+    const size = 256 * displayScale;
+    const canvas = testCanvas(size, size);
+    const paint = canvas.getContext("2d")!;
+    paint.fillStyle = "#000000";
+    paint.fillRect(0, 0, size, size);
+    paint.fillStyle = "#ffffff";
+    paint.fillRect(0, 0, 128 * displayScale, size);
+
+    applySmartFilters(
+      canvas as unknown as HTMLCanvasElement,
+      [{ id: "d", kind: "displace", enabled: true, opacity: 1, params: { amount: 20, scale: 48 } }],
+      displayScale,
+    );
+
+    // Where the white/black boundary ended up on each row, in document space.
+    const edges: number[] = [];
+    for (let y = 0; y < size; y += 1) {
+      let edge = 0;
+      for (let x = 0; x < size; x += 1) if (pixelAt(canvas, x, y).r > 128) edge = x;
+      edges.push(edge / displayScale);
+    }
+    return Math.max(...edges) - Math.min(...edges);
+  };
+
+  const oneToOne = measure(1);
+  assert.ok(oneToOne > 20, `the ripple should be plainly visible at 1x (got ${oneToOne})`);
+  assert.ok(
+    Math.abs(measure(2) - oneToOne) <= 2,
+    `the same ripple at 2x zoom (1x: ${oneToOne}, 2x: ${measure(2)})`,
+  );
+});
+
+test("displace overscan covers the amplitude it will actually use", () => {
+  // The influence radius feeds viewportLayerPlan's overscan. If it reports the
+  // unscaled amplitude while applySmartFilters displaces by the scaled one, a
+  // zoomed tile samples past what was rendered for it and leaves a seam.
+  const filter = { kind: "displace" as const, params: { amount: 20 } };
+  assert.equal(smartFilterInfluenceRadius(filter, 1), 22);
+  assert.equal(smartFilterInfluenceRadius(filter, 2), 42);
 });

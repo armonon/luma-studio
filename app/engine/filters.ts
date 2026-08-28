@@ -57,7 +57,8 @@ export function smartFilterInfluenceRadius(filter: Pick<SmartFilter, "kind" | "p
   if (["motion-blur", "surface-blur", "median", "dust-scratches", "maximum", "minimum", "lens-blur", "reduce-noise"].includes(filter.kind)) {
     return Math.ceil(radius);
   }
-  if (filter.kind === "displace") return Math.ceil(Math.abs(filter.params.amount ?? defaults.amount ?? 0)) + 2;
+  // Scaled to match the amplitude applySmartFilters actually uses.
+  if (filter.kind === "displace") return Math.ceil(Math.abs(filter.params.amount ?? defaults.amount ?? 0) * displayScale) + 2;
   return 0;
 }
 
@@ -662,7 +663,11 @@ export function applySmartFilters(
     else if (filter.kind === "dust-scratches") dustAndScratches(doc, layer, radius, filter.params.threshold ?? 18);
     else if (filter.kind === "reduce-noise") reduceNoise(doc, layer, radius, filter.params.strength ?? 0.65, filter.params.preserveDetail ?? 0.55, filter.params.reduceColor ?? 0.7);
     else if (filter.kind === "lens-blur") lensBlur(doc, layer, radius, filter.params.blades ?? 6, filter.params.rotation ?? 0, filter.params.highlights ?? 0.15);
-    else if (filter.kind === "displace") displace(doc, layer, filter.params.amount ?? 12, filter.params.scale ?? 48, filter.params.angle ?? 0);
+    // Displace is parameterised in pixels like every other filter here, so
+    // both its amplitude and its wavelength are display-scale quantities. Left
+    // unscaled they stay fixed in output pixels, which halves the ripple in
+    // document space at 2x zoom — the preview stops agreeing with the export.
+    else if (filter.kind === "displace") displace(doc, layer, (filter.params.amount ?? 12) * displayScale, (filter.params.scale ?? 48) * displayScale, filter.params.angle ?? 0);
     else if (filter.kind === "maximum") maximumFilter(doc, layer, radius);
     else if (filter.kind === "minimum") minimumFilter(doc, layer, radius);
     else if (filter.kind === "invert") invertColors(doc, layer);
