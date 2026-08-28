@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { setLayerMaskFromCanvas } from "../app/engine/layer-mask.ts";
 import { pixelAt, solidCanvas, testCanvas } from "./canvas-harness.ts";
-import { createAdjustmentLayer, createDocument, createRasterLayer, NEUTRAL_TONE } from "../app/engine/document.ts";
+import { createAdjustmentLayer, createDocument, createRasterLayer, newCanvas, NEUTRAL_TONE } from "../app/engine/document.ts";
 import {
   renderViewport,
   rendererLayerPlanningStats,
@@ -226,4 +227,57 @@ test("focused masks render as an unambiguous grayscale editing target", () => {
   const outside = pixelAt(target, 400, 20);
   assert.ok(inside.r > 240 && inside.g > 240 && inside.b > 240);
   assert.ok(outside.r < 50 && outside.g < 50 && outside.b < 50);
+});
+
+test("a layer mask lands on the same pixels as the layer it masks", () => {
+  // drawLayerMaskProjected read the mask through readRegion, which floors the
+  // origin and ceils the extent, then stretched that whole-pixel bitmap across
+  // the output as though it covered the exact fractional frame. The per-tile
+  // frame is `viewport.x + expandedLeft / scaleX`, fractional for nearly every
+  // tile and differently so per tile, so the mask drifted a pixel or two from
+  // its own layer and seamed at tile boundaries — while export, which renders
+  // one untiled integral frame, stayed correct. Preview disagreed with the file.
+  const DOC = 512;
+  const OUT = 512;
+
+  const transparentColumns = (mode: "content" | "mask", viewportX: number, zoom: number, gapX: number) => {
+    const doc = createDocument(DOC, DOC);
+    const bitmap = newCanvas(DOC, DOC);
+    const paint = bitmap.getContext("2d")!;
+    paint.fillStyle = "#ffffff";
+    paint.fillRect(0, 0, DOC, DOC);
+    if (mode === "content") paint.clearRect(gapX, 0, 8, DOC);
+
+    const layer = createRasterLayer("masked", bitmap);
+    if (mode === "mask") {
+      const mask = newCanvas(DOC, DOC);
+      const maskPaint = mask.getContext("2d")!;
+      maskPaint.fillStyle = "#ffffff";
+      maskPaint.fillRect(0, 0, DOC, DOC);
+      maskPaint.clearRect(gapX, 0, 8, DOC);
+      setLayerMaskFromCanvas(layer, mask, DOC, DOC);
+    }
+    doc.layers = [layer];
+
+    const out = testCanvas(OUT, OUT);
+    renderViewport(doc, out, {
+      x: viewportX, y: 0, width: OUT / zoom, height: OUT / zoom,
+      zoom, outputWidth: OUT, outputHeight: OUT, cssScale: 1, devicePixelRatio: 1,
+    }, { checkerboard: false, selectionOverlay: false, proofing: false });
+
+    const columns: number[] = [];
+    for (let x = 0; x < OUT; x += 1) if (pixelAt(out, x, 60).a < 128) columns.push(x);
+    return columns.join(",");
+  };
+
+  // Each case puts the gap across the output-256 tile seam, where the per-tile
+  // fractional origin differs between neighbouring tiles.
+  for (const [viewportX, zoom] of [[84, 3], [84.4, 3], [37.3, 2]] as Array<[number, number]>) {
+    const gapX = Math.round(viewportX + 256 / zoom) - 4;
+    assert.equal(
+      transparentColumns("mask", viewportX, zoom, gapX),
+      transparentColumns("content", viewportX, zoom, gapX),
+      `mask and content must coincide at viewportX=${viewportX} zoom=${zoom}`,
+    );
+  }
 });

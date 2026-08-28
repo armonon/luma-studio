@@ -518,13 +518,31 @@ function muteComposite(composite: CanvasRenderingContext2D, s: Scratch, frame: R
 }
 
 function drawLayerMaskProjected(target: CanvasRenderingContext2D, doc: Document, layer: Layer, frame: RenderFrame) {
-  const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, {
-    x: frame.x,
-    y: frame.y,
-    width: frame.width,
-    height: frame.height,
-  });
-  if (mask) target.drawImage(mask, 0, 0, frame.outputWidth, frame.outputHeight);
+  // readRegion floors the origin and ceils the extent, so the bitmap it returns
+  // covers whole document pixels — not the fractional rect asked for. Stretching
+  // it onto the output as though it did covered a slightly different area every
+  // tile (the per-tile frame is `viewport.x + expandedLeft / scaleX`, fractional
+  // for nearly all of them), which showed up as the mask sliding a pixel or two
+  // away from its own layer and seaming at tile boundaries. Export renders one
+  // untiled integral frame, so the preview disagreed with the file.
+  //
+  // Ask for the snapped rect explicitly and project *that*, so the mask lands on
+  // the same pixels the exact path (drawProjectedCanvas) puts the content on.
+  const left = Math.floor(frame.x);
+  const top = Math.floor(frame.y);
+  const region = {
+    x: left,
+    y: top,
+    width: Math.ceil(frame.x + frame.width) - left,
+    height: Math.ceil(frame.y + frame.height) - top,
+  };
+  const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, region);
+  if (!mask) return;
+  const scale = frameScale(frame);
+  target.save();
+  target.setTransform(scale.x, 0, 0, scale.y, (left - frame.x) * scale.x, (top - frame.y) * scale.y);
+  target.drawImage(mask, 0, 0);
+  target.restore();
 }
 
 function drawMaskSource(target: CanvasRenderingContext2D, doc: Document, layer: Layer, frame: RenderFrame) {
