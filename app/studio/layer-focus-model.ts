@@ -1,3 +1,4 @@
+import { hasLayerMask } from "../engine/layer-mask";
 import {
   documentPointToLayer,
   effectiveLayerVisible,
@@ -89,7 +90,10 @@ export function enterLayerFocus(
 ): LayerFocusState {
   const layer = doc.layers.find((candidate) => candidate.id === layerId);
   if (!layer || (layer.kind === "adjustment-tone" && !layer.tone)) return current;
-  const nextTarget = target === "mask" && !layer.mask ? "pixels" : target;
+  // A mask lives in `maskSurface` for everything the studio creates today;
+  // `layer.mask` is the legacy canvas form. Testing only the latter refused
+  // mask focus for every real mask in the app.
+  const nextTarget = target === "mask" && !hasLayerMask(layer) ? "pixels" : target;
   return {
     documentId,
     scope: { layerId, path: layerFocusPath(doc, layerId), target: nextTarget },
@@ -123,7 +127,7 @@ export function reconcileLayerFocus(
   const byId = new Map(doc.layers.map((layer) => [layer.id, layer]));
   const target = byId.get(state.scope.layerId);
   if (target) {
-    if (state.scope.target === "mask" && !target.mask) {
+    if (state.scope.target === "mask" && !hasLayerMask(target)) {
       return { ...state, scope: { ...state.scope, target: "pixels" } };
     }
     const path = layerFocusPath(doc, target.id);

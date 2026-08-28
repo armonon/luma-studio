@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import "./canvas-harness.ts";
+import { hasLayerMask, layerMaskSurface, removeLayerMask } from "../app/engine/layer-mask.ts";
 import {
   createDocument,
   createGroupLayer,
@@ -57,10 +58,19 @@ test("deleted targets recover to their nearest parent and document switches exit
 });
 
 test("a removed focused mask falls back to pixels without losing the scope", () => {
+  // The mask is added the way the studio adds one. This test used to fabricate
+  // `person.mask = {}`, the legacy canvas field, and so agreed with focus code
+  // that also only looked at `layer.mask` — while every mask the app actually
+  // creates lives in `maskSurface`. Both were wrong together, so the test
+  // passed and mask focus was dead in the product.
   const { doc, person } = nestedDocument();
-  person.mask = {} as HTMLCanvasElement;
+  layerMaskSurface(person, doc.width, doc.height, true);
+  assert.ok(hasLayerMask(person), "precondition: the layer has a real mask");
+
   const focused = enterLayerFocus(EMPTY_LAYER_FOCUS_STATE, doc, "document-a", person.id, { zoom: 1, panX: 0, panY: 0 }, "mask");
-  person.mask = undefined;
+  assert.equal(focused.scope?.target, "mask", "focus must be able to enter a real mask");
+
+  removeLayerMask(person);
   const recovered = reconcileLayerFocus(focused, doc, "document-a");
   assert.equal(recovered.scope?.layerId, person.id);
   assert.equal(recovered.scope?.target, "pixels");
