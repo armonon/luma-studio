@@ -2,6 +2,7 @@
 
 Audit date: 2026-08-25  
 Baseline: `main` at `3abd794`, plus the fixes documented below  
+Currency: see [Changes since the audit](#changes-since-the-audit) — `main` has moved on  
 Target: native desktop production build (`vite.desktop.config.ts` / Tauri)
 
 ## Status rules
@@ -240,6 +241,33 @@ The TypeScript model and Rust menu contain the same 24 ids in the same order. Un
 | Local updater startup abort | Registering the updater plugin without a config object caused the packaged app to abort during native startup | Local builds now carry an explicitly empty inert config; the validated release overlay replaces it with the real HTTPS endpoint/key |
 | Release build leaked development metadata | Localhost CSP/dev URL and absolute build-home paths were embedded in the packaged executable | Development Tauri config is isolated; release builds remap the build home and the bundle audit rejects either leak |
 | Update could restart over unsaved work | A naive updater install could bypass the close-confirmation path | The UI refuses dirty work before and after the check, checkpoints all documents, and blocks edits during verified installation |
+
+## Changes since the audit
+
+Every status in this matrix rests on evidence gathered against `3abd794`. The
+tree has moved since, and re-stamping the baseline hash without re-running the
+live sweep would claim evidence that does not exist. The rows below record what
+has landed that bears on a matrix status, so a reader can tell what is still
+attested and what would need re-checking.
+
+| Change | Bearing on the matrix |
+| --- | --- |
+| PSD layer masks were written on the alpha channel; ag-psd reads channel 0 | *Photoshop export.* Masks did not survive a round trip at the time of the audit, which the synthetic fidelity tests did not cover. Fixed and now tested. |
+| Color Lookup exports as a named LUT reference Photoshop cannot resolve | *Photoshop export.* Newly reported as a compatibility warning rather than lost in silence; the layer still arrives inert in Photoshop. |
+| Viewport layer masks were drawn at a snapped, stretched source rect | *Canvas rendering.* Preview disagreed with export by a pixel or two per tile at fractional pan. Export was always correct. |
+| Feathering a Select All ramped only one tile deep | *Selection.* The "50K paint/feather/undo" evidence did not exercise a default-alpha surface at a large radius. |
+| Displace ignored the display scale | *Smart Filters.* The Displace entry was Working at 1:1 only; the ripple halved in document space at 2x zoom. |
+| Focus could not enter a layer mask | *Focus.* Mask focus checked the legacy `layer.mask` field and so was dead for every mask the studio creates. The accessible-name row above is unaffected. |
+| Layer Lock was ignored by most appearance mutators | *Layers.* Locked layers could still be restyled, blended and unmasked. |
+| Live edits leaked across undo, document switch and close | *History.* A live adjustment abandoned rather than committed could reappear on another document. |
+| Exit confirmation latched after the first request | *Native commands.* A cancelled quit left the app unable to quit again. |
+| Resident memory was charged for surfaces no longer live | *Large documents.* The budget drifted upward across resizes rather than tracking what was bound. |
+
+None of these were caught by the live sweep, and all but the last two are
+engine defects the sweep could not have seen. Treat the Working rows they touch
+as re-tested by the suite, not by a fresh desktop session; the next live audit
+should re-run the Photoshop export, Focus, Selection and Smart Filter decks
+first.
 
 ## Remaining release gaps
 
