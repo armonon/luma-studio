@@ -18,14 +18,11 @@ import {
   type BlendMode,
   Layer,
   NEUTRAL_CURVES,
-  EFFECT_LABELS,
   NEUTRAL_HSL,
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
   PathAnchor,
   PathStyle,
-  ProofProfile,
-  ProofSettings,
   type SmartFilterKind,
   ToneParams,
   Transform,
@@ -35,7 +32,6 @@ import {
 } from "@/app/engine/document";
 import { SMART_FILTER_SPECS } from "@/app/engine/filters";
 import {
-  PRO_ADJUSTMENT_KINDS,
   PRO_ADJUSTMENT_LABELS,
   defaultProAdjustment,
   type ProAdjustmentKind,
@@ -134,7 +130,6 @@ import {
   type SelectionCombineMode,
 } from "./canvas-gesture";
 import {
-  CONTEXTUAL_PANEL_CHOICES,
   resolveContextualPanel,
   workspaceForLayer,
   type ContextualPanelId,
@@ -182,6 +177,12 @@ import {
   ToolRailRegion,
 } from "./app-shell";
 import DockManager, { DockPanelContent } from "./dock-manager";
+import LayersPanel from "./panels/layers-panel";
+import PropertiesPanel from "./panels/properties-panel";
+import { ActionsPanel, ChannelsPanel, MeasurePanel } from "./panels/operational-panels";
+import { AssetsPanel, StructurePanel } from "./panels/project-panels";
+import DocumentPanel from "./panels/document-panel";
+import NeuralPanel from "./panels/neural-panel";
 import {
   BUILT_IN_WORKSPACES,
   DOCK_LAYOUT_STORAGE_KEY,
@@ -201,10 +202,7 @@ const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
 const StudioTitlebar = lazy(() => import("./studio-titlebar"));
 const ContextToolbar = lazy(() => import("./context-toolbar"));
 const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
-const VirtualLayerStack = lazy(() => import("./virtual-layer-stack"));
-const BlendStackEditor = lazy(() => import("./blend-stack-editor"));
 const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
-const SmartFilterEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.SmartFilterEditor })));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
 const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.HslEditor })));
@@ -414,9 +412,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
   const [showGuides, setShowGuides] = useState(true);
-  const resizeWidthRef = useRef<HTMLInputElement>(null);
-  const resizeHeightRef = useRef<HTMLInputElement>(null);
-  const resolutionRef = useRef<HTMLInputElement>(null);
   const glSupported = !!studio && Studio.canUseGL();
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
@@ -3635,496 +3630,123 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             contextualPanel={contextualPanel}
           >
             <DockPanelContent panelId="layers">
-            <section className="glass-card layers-card">
-              <header>
-                <strong>Layers</strong>
-                <div className="layer-add-menu">
-                  <button onClick={addBlank} title="Add paint layer" aria-label="Add paint layer">＋</button>
-                  <select
-                    aria-label="Add adjustment layer"
-                    title="Add adjustment layer"
-                    value=""
-                    onChange={(event) => {
-                      const kind = event.target.value;
-                      if (kind === "tone") addAdjust();
-                      else if (kind === "curves" && studio) selectLayerForEditing(studio.addCurvesLayer());
-                      else if (kind === "levels" && studio) selectLayerForEditing(studio.addLevelsLayer());
-                      else if (kind === "hsl" && studio) selectLayerForEditing(studio.addHslLayer());
-                      else if (kind) addProfessionalAdjustment(kind as ProAdjustmentKind);
-                    }}
-                  >
-                    <option value="">＋ Adjustment</option>
-                    <optgroup label="Core">
-                      <option value="tone">Tone</option>
-                      <option value="curves">Curves</option>
-                      <option value="levels">Levels</option>
-                      <option value="hsl">Hue / Saturation</option>
-                    </optgroup>
-                    <optgroup label="Professional">
-                      {PRO_ADJUSTMENT_KINDS.map((kind) => <option key={kind} value={kind}>{PRO_ADJUSTMENT_LABELS[kind]}</option>)}
-                    </optgroup>
-                  </select>
-                </div>
-              </header>
-              <Suspense fallback={<div className="layer-stack" aria-label="Loading layers" />}>
-                <VirtualLayerStack
-                  layers={layers}
-                  activeLayerId={activeLayerId}
-                  draggedLayerId={draggedLayerId}
-                  onDragStart={setDraggedLayerId}
-                  onDragEnd={() => setDraggedLayerId(null)}
-                  onDrop={(sourceId, targetIndex) => {
-                    if (!studio) return;
-                    const sourceIndex = layers.findIndex((candidate) => candidate.id === sourceId);
-                    studio.reorderLayer(sourceId, targetIndex - sourceIndex);
-                    setDraggedLayerId(null);
-                  }}
-                  onSelect={(layer) => {
-                    selectLayerForEditing(layer);
-                  }}
-                  onOpenStyle={(layer) => {
-                    setActiveLayerId(layer.id);
-                    setStyleLayerId(layer.id);
-                  }}
-                  onRename={(layer) => {
-                    const name = window.prompt("Layer name", layer.name)?.trim();
-                    if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
-                  }}
-                  onToggleVisible={(layer) => setLayerVisible(layer.id, !layer.visible)}
-                  onDelete={(layer) => {
-                    if (!studio) return;
-                    studio.removeLayer(layer.id);
-                    if (activeLayerId === layer.id) setActiveLayerId(studio.doc.layers[0]?.id ?? null);
-                  }}
-                />
-              </Suspense>
-              <div className="layer-stack-footer" aria-label="Layer actions">
-                <button onClick={() => {
-                    if (!studio || !activeLayerId) return;
-                    if (activeLayer?.kind === "group") studio.ungroupLayer(activeLayer.id);
-                    else {
-                      const group = studio.groupLayer(activeLayerId);
-                      if (group) setActiveLayerId(group.id);
-                    }
-                  }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"} aria-label={activeLayer?.kind === "group" ? "Ungroup active layer" : "Group active layer"}>⌘</button>
-                <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up" aria-label="Move active layer up">↑</button>
-                <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down" aria-label="Move active layer down">↓</button>
-                <button onClick={() => activeLayer && setStyleLayerId(activeLayer.id)} title="Layer styles and advanced blending" aria-label="Open layer styles">fx</button>
-                <button className="danger" onClick={removeActive} title="Delete active" aria-label="Delete active layer">⌫</button>
-              </div>
-              {activeLayer && (
-                <div className="layer-controls">
-                  <label>
-                    <span>Master</span>
-                    <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(e) => previewLayerOpacity(activeLayer.id, Number(e.target.value) / 100)} onPointerUp={(e) => setLayerOpacity(activeLayer.id, Number(e.currentTarget.value) / 100)} onBlur={(e) => setLayerOpacity(activeLayer.id, Number(e.currentTarget.value) / 100)} />
-                    <output>{Math.round(activeLayer.opacity * 100)}%</output>
-                  </label>
-                  {activeLayer.kind === "group"
-                    ? <div className="blend-group-note">Group opacity · children pass through</div>
-                    : studio && (
-                      <Suspense fallback={<div className="blend-stack-editor" aria-label="Loading blending controls" />}>
-                        <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />
-                      </Suspense>
-                    )}
-                  <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
-                    <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
-                      {activeLayer.locked ? "Locked" : "Lock layer"}
-                    </button>
-                    {activeLayer.kind !== "group" && (
-                      <button onClick={() => studio?.setLayerProp(activeLayer.id, "clipping", !activeLayer.clipping, "Clipping mask")} style={{ flex: 1 }}>
-                        {activeLayer.clipping ? "✓ Clipped" : "Clip below"}
-                      </button>
-                    )}
-                  </div>
-                  {(
-                    <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
-                      {activeLayer.kind === "raster" && (
-                        <button onClick={() => studio?.convertToSmartObject(activeLayer.id)} style={{ flex: 1 }}>
-                          ◇ Smart object
-                        </button>
-                      )}
-                      <button onClick={() => setStyleLayerId(activeLayer.id)} style={{ flex: 1 }} title="Blending options, Blend If and layer effects">
-                        fx Layer style…
-                      </button>
-                    </div>
-                  )}
-                  {!!activeLayer.filters?.length && (
-                    <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
-                      <Suspense fallback={<div aria-label="Loading smart filters" />}>
-                        {activeLayer.filters.map((filter, index) => studio && (
-                          <SmartFilterEditor key={filter.id} layer={activeLayer} filter={filter} index={index} count={activeLayer.filters!.length} studio={studio} />
-                        ))}
-                      </Suspense>
-                    </div>
-                  )}
-                  {!!activeLayer.effects?.length && (
-                    <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
-                      {activeLayer.effects.map((effect) => (
-                        <div key={effect.id} className="layer-effect-row">
-                          <button onClick={() => setStyleLayerId(activeLayer.id)} title="Edit in Layer Style">
-                            <i aria-hidden="true">{effect.enabled ? "◉" : "○"}</i>
-                            <span>fx · {EFFECT_LABELS[effect.kind]}</span>
-                          </button>
-                          <button onClick={() => studio?.removeLayerEffect(activeLayer.id, effect.id)} aria-label={`Remove ${EFFECT_LABELS[effect.kind]}`} title="Remove layer effect">×</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </section>
+              <LayersPanel
+                studio={studio}
+                layers={layers}
+                activeLayerId={activeLayerId}
+                activeLayer={activeLayer}
+                draggedLayerId={draggedLayerId}
+                onDragStart={setDraggedLayerId}
+                onDragEnd={() => setDraggedLayerId(null)}
+                onSelectLayer={selectLayerForEditing}
+                onSetActiveLayerId={setActiveLayerId}
+                onOpenLayerStyle={setStyleLayerId}
+                onSetLayerVisible={setLayerVisible}
+                onPreviewOpacity={previewLayerOpacity}
+                onCommitOpacity={setLayerOpacity}
+                onAddBlank={addBlank}
+                onAddTone={addAdjust}
+                onAddProfessionalAdjustment={addProfessionalAdjustment}
+                onRemoveActive={removeActive}
+              />
             </DockPanelContent>
 
             {desktop && (
               <DockPanelContent panelId="properties">
-              <section className="glass-card desktop-properties-card">
-                <header>
-                  <strong>{activeToolMeta?.[2] ?? "Properties"}</strong>
-                  <small>{doc?.selection ? "SELECTION" : workspace.toUpperCase()}</small>
-                </header>
-                <div className="desktop-properties-body">
-                  {NATIVE_DESKTOP_BUILD && (
-                    <label className="desktop-context-panel-picker">
-                      <span>Panel</span>
-                      <select
-                        aria-label="Contextual inspector panel"
-                        value={nativePanelOverride ?? ""}
-                        onChange={(event) => {
-                          const value = event.target.value as ContextualPanelId | "";
-                          setNativePanelOverride(null);
-                          if (value) openStudioPanel(value);
-                          else selectInspectorTab("properties");
-                        }}
-                      >
-                        <option value="">Auto</option>
-                        {CONTEXTUAL_PANEL_CHOICES.map((panel) => <option key={panel.id} value={panel.id}>{panel.label}</option>)}
-                      </select>
-                    </label>
-                  )}
-                  <div className="desktop-property-target">
-                    <span className={`spatial-layer-thumb kind-${activeLayer?.kind ?? "canvas"}`} aria-hidden="true">
-                      {activeLayer?.kind === "text" ? "T" : activeLayer?.kind === "shape" ? "▭" : activeLayer?.kind === "group" ? "▾" : "▨"}
-                    </span>
-                    <span>
-                      <strong>{activeLayer?.name ?? "Canvas"}</strong>
-                      <small>{activeLayer ? `${activeLayer.kind} · ${activeLayer.visible ? "visible" : "hidden"}${activeLayer.locked ? " · locked" : ""}` : `${doc?.width ?? 0} × ${doc?.height ?? 0}`}</small>
-                    </span>
-                    {activeLayer && <button type="button" onClick={() => enterFocusMode(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer">◎</button>}
-                  </div>
-                  {activeTool === "radial-warp" ? <>
-                    <div className="desktop-property-switch">
-                      <span><strong>Radial warp</strong><small>Drag inside the ring to reshape locally</small></span>
-                      <button type="button" role="switch" aria-checked className="active" onClick={() => activateTool("move", "edit")} aria-label="Disable radial warp"><i /></button>
-                    </div>
-                    <label className="desktop-property-range">
-                      <span>Influence</span>
-                      <input type="range" min="16" max="600" value={warpRadius} onChange={(event) => setWarpRadius(Number(event.target.value))} />
-                      <output>{warpRadius}px</output>
-                    </label>
-                    <div className="desktop-property-row">
-                      <span>Overlay</span>
-                      <button type="button" className={showRadialOverlay ? "active" : ""} aria-pressed={showRadialOverlay} onClick={() => setShowRadialOverlay((visible) => !visible)}>{showRadialOverlay ? "Visible" : "Hidden"}</button>
-                    </div>
-                  </> : (paintingTool || workspace === "mask") ? <>
-                    <label className="desktop-property-range">
-                      <span>Size</span>
-                      <input type="range" min="1" max={activeTool === "capture-brush" ? 1200 : 400} value={brushSize} onChange={(event) => setBrushSize(Number(event.target.value))} />
-                      <output>{brushSize}px</output>
-                    </label>
-                    <label className="desktop-property-range">
-                      <span>Hardness</span>
-                      <input type="range" min="0" max="100" value={Math.round(hardness * 100)} onChange={(event) => setHardness(Number(event.target.value) / 100)} />
-                      <output>{Math.round(hardness * 100)}%</output>
-                    </label>
-                    <label className="desktop-property-range">
-                      <span>Opacity</span>
-                      <input type="range" min="1" max="100" value={Math.round(brushOpacity * 100)} onChange={(event) => setBrushOpacity(Number(event.target.value) / 100)} />
-                      <output>{Math.round(brushOpacity * 100)}%</output>
-                    </label>
-                  </> : activeLayer ? <>
-                    <label className="desktop-property-range">
-                      <span>Opacity</span>
-                      <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => previewLayerOpacity(activeLayer.id, Number(event.target.value) / 100)} onPointerUp={(event) => setLayerOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} onBlur={(event) => setLayerOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} />
-                      <output>{Math.round(activeLayer.opacity * 100)}%</output>
-                    </label>
-                    <div className="desktop-property-row">
-                      <span>Tool features</span>
-                      <button type="button" onClick={() => openSpaceDeck(true)}>{spaceToolLabel} · Open</button>
-                    </div>
-                    <div className="desktop-property-row desktop-property-buttons">
-                      <button type="button" className={activeLayer.visible ? "active" : ""} onClick={() => setLayerVisible(activeLayer.id, !activeLayer.visible)}>◉ Visible</button>
-                      <button type="button" className={activeLayer.locked ? "active" : ""} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>⌁ {activeLayer.locked ? "Locked" : "Unlocked"}</button>
-                    </div>
-                  </> : (
-                    <button className="desktop-empty-action" type="button" onClick={addBlank}>＋ Add your first layer</button>
-                  )}
-                  <div className="desktop-space-hint"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></div>
-                </div>
-              </section>
+                <PropertiesPanel
+                  showPanelPicker={NATIVE_DESKTOP_BUILD}
+                  toolLabel={activeToolMeta?.[2] ?? "Properties"}
+                  hasSelection={Boolean(doc?.selection)}
+                  workspace={workspace}
+                  contextualOverride={nativePanelOverride}
+                  activeLayer={activeLayer}
+                  documentWidth={doc?.width ?? 0}
+                  documentHeight={doc?.height ?? 0}
+                  activeTool={activeTool}
+                  paintingTool={paintingTool}
+                  warpRadius={warpRadius}
+                  showRadialOverlay={showRadialOverlay}
+                  brushSize={brushSize}
+                  hardness={hardness}
+                  brushOpacity={brushOpacity}
+                  spaceToolLabel={spaceToolLabel}
+                  studio={studio}
+                  onContextPanelChange={(panel) => {
+                    setNativePanelOverride(null);
+                    if (panel) openStudioPanel(panel);
+                    else selectInspectorTab("properties");
+                  }}
+                  onFocusLayer={enterFocusMode}
+                  onDisableRadialWarp={() => activateTool("move", "edit")}
+                  onWarpRadiusChange={setWarpRadius}
+                  onToggleRadialOverlay={() => setShowRadialOverlay((visible) => !visible)}
+                  onBrushSizeChange={setBrushSize}
+                  onHardnessChange={setHardness}
+                  onBrushOpacityChange={setBrushOpacity}
+                  onPreviewOpacity={previewLayerOpacity}
+                  onCommitOpacity={setLayerOpacity}
+                  onSetLayerVisible={setLayerVisible}
+                  onOpenSpaceDeck={() => openSpaceDeck(true)}
+                  onAddBlank={addBlank}
+                />
               </DockPanelContent>
             )}
 
             {(NATIVE_DESKTOP_BUILD || shouldMountLegacyInspector(desktop)) && <>
             <DockPanelContent panelId="channels">
-            <section className="glass-card mask-card" data-contextual-panel="channels">
-              <header><strong>Channels</strong><small title="Channel previews do not change RGB export">{(engineState?.channelView ?? "rgb").toUpperCase()}</small></header>
-              <div className="mask-segmented channel-switcher">
-                {(["rgb", "red", "green", "blue", "alpha"] as const).map((channel) => (
-                  <button
-                    key={channel}
-                    className={(engineState?.channelView ?? "rgb") === channel ? "active" : ""}
-                    onClick={() => studio?.setChannelView(channel)}
-                    aria-pressed={(engineState?.channelView ?? "rgb") === channel}
-                  >{channel === "rgb" ? "RGB" : channel === "alpha" ? "A" : channel[0].toUpperCase()}</button>
-                ))}
-              </div>
-            </section>
+              <ChannelsPanel channelView={engineState?.channelView ?? "rgb"} onChange={(channel) => studio?.setChannelView(channel)} />
             </DockPanelContent>
 
             <DockPanelContent panelId="structure">
-            <section className="glass-card mask-card" data-contextual-panel="structure">
-              <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}</small></header>
-              <div className="inspector-create-row">
-                <input value={layerCompName} maxLength={80} onChange={(event) => setLayerCompName(event.target.value)} aria-label="New layer comp name" />
-                <button onClick={() => {
-                  const comp = studio?.captureLayerComp(layerCompName);
-                  if (comp) notify(`Captured ${comp.name}`);
-                }} aria-label="Capture layer comp" title="Capture current layer state">＋</button>
-              </div>
-              {!!doc?.layerComps?.length && (
-                <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
-                  {doc.layerComps.map((comp) => (
-                    <div key={comp.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto auto", gap: 4, alignItems: "center" }}>
-                      <button onClick={() => studio?.applyLayerComp(comp.id)} style={{ textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={`Apply ${comp.name}`}>{comp.name}</button>
-                      <button onClick={() => { studio?.recaptureLayerComp(comp.id); notify(`Updated ${comp.name}`); }} title="Recapture from current layers">↻</button>
-                      <button onClick={() => studio?.applyLayerComp(comp.id)} title="Apply layer comp">▶</button>
-                      <button onClick={() => studio?.removeLayerComp(comp.id)} title="Remove layer comp">×</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="glass-card mask-card" data-contextual-panel="structure">
-              <header><strong>Artboards</strong><small>{doc?.artboards?.length ?? 0}</small></header>
-              <div className="inspector-create-row">
-                <input value={artboardName} maxLength={80} onChange={(event) => setArtboardName(event.target.value)} aria-label="New artboard name" />
-                <button onClick={() => {
-                  const bounds = doc?.selection?.bounds;
-                  const artboard = studio?.createArtboard(artboardName, bounds ? { x: bounds.x, y: bounds.y, width: bounds.w, height: bounds.h } : undefined);
-                  if (artboard) notify(`Created ${artboard.name}${bounds ? " from selection" : ""}`);
-                }} aria-label={`Create artboard from ${doc?.selection ? "selection" : "canvas"}`} title={`Create from ${doc?.selection ? "selection" : "canvas"}`}>＋</button>
-              </div>
-              {!!doc?.artboards?.length && (
-                <div style={{ display: "grid", gap: 4, padding: "0 10px 9px" }}>
-                  {doc.artboards.map((artboard) => (
-                    <div key={artboard.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 4, alignItems: "center" }}>
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10 }} title={artboard.name}>{artboard.name} · {artboard.width}×{artboard.height}</span>
-                      <button onClick={async () => {
-                        if (!studio) return;
-                        try {
-                          const blob = await studio.exportArtboard(artboard.id);
-                          await downloadOrSave(blob, `${artboard.name.replace(/[^a-z0-9_-]+/gi, "-") || "artboard"}.png`);
-                          notify(`${artboard.name} exported`);
-                        } catch (error) {
-                          notify(error instanceof Error ? error.message : "Artboard export failed");
-                        }
-                      }} title="Export artboard as PNG">↗</button>
-                      <button onClick={() => studio?.removeArtboard(artboard.id)} title="Remove artboard">×</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
+              <StructurePanel
+                studio={studio}
+                document={doc}
+                layerCompName={layerCompName}
+                artboardName={artboardName}
+                onLayerCompNameChange={setLayerCompName}
+                onArtboardNameChange={setArtboardName}
+                onNotify={notify}
+                onExportArtboard={(artboardId, artboardNameToExport) => {
+                  if (!studio) return;
+                  void studio.exportArtboard(artboardId).then(async (blob) => {
+                    await downloadOrSave(blob, `${artboardNameToExport.replace(/[^a-z0-9_-]+/gi, "-") || "artboard"}.png`);
+                    notify(`${artboardNameToExport} exported`);
+                  }).catch((error) => notify(error instanceof Error ? error.message : "Artboard export failed"));
+                }}
+              />
             </DockPanelContent>
 
             <DockPanelContent panelId="assets">
-            <section className="glass-card mask-card" data-contextual-panel="assets">
-              <header><strong>Assets</strong><small>{(studio?.listPlugins().length ?? 0) + capturedBrushes.length}</small>{desktop && <button onClick={() => pluginInput.current?.click()} title="Install a safe declarative .luma-plugin package">＋ Plugin</button>}</header>
-              <div style={{ display: "grid", gap: 4, padding: "8px 10px" }}>
-                {studio?.listPlugins().length ? studio.listPlugins().map((plugin) => (
-                  <div key={plugin.id} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 5 }}>
-                    <span style={{ fontSize: 10, overflow: "hidden", textOverflow: "ellipsis" }}>{plugin.name ?? plugin.id}{plugin.version ? ` · ${plugin.version}` : ""}</span>
-                    <button onClick={() => uninstallPlugin(plugin.id)} title={`Unload ${plugin.name ?? plugin.id}`}>Unload</button>
-                  </div>
-                )) : <small className="inspector-empty-state">No plug-ins or saved brushes</small>}
-              </div>
-            </section>
+              <AssetsPanel
+                plugins={studio?.listPlugins() ?? []}
+                capturedBrushCount={capturedBrushes.length}
+                desktop={desktop}
+                onInstall={() => pluginInput.current?.click()}
+                onUninstall={uninstallPlugin}
+              />
             </DockPanelContent>
 
             <DockPanelContent panelId="document">
-            <section className="glass-card mask-card" data-contextual-panel="document">
-              <header><strong>Document</strong><small>{doc?.width ?? 0} × {doc?.height ?? 0}</small></header>
-              <div className="document-size-row">
-                <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
-                  <span>Width px</span>
-                  <input key={`width-${doc?.width}`} ref={resizeWidthRef} type="number" min="1" max="32768" defaultValue={doc?.width ?? 1600} style={{ width: "100%" }} />
-                </label>
-                <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
-                  <span>Height px</span>
-                  <input key={`height-${doc?.height}`} ref={resizeHeightRef} type="number" min="1" max="32768" defaultValue={doc?.height ?? 1067} style={{ width: "100%" }} />
-                </label>
-                <button onClick={() => {
-                  const width = Number(resizeWidthRef.current?.value);
-                  const height = Number(resizeHeightRef.current?.value);
-                  if (studio?.resizeDocument(width, height)) notify(`Resized to ${Math.round(width)}×${Math.round(height)}`);
-                }} aria-label="Apply document size" title="Resize document" style={{ alignSelf: "end" }}>✓</button>
-              </div>
-              <div style={{ display: "grid", gap: 7, padding: "0 10px 10px" }}>
-                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr auto", alignItems: "center", gap: 6, fontSize: 10 }}>
-                  <span>Resolution</span>
-                  <input
-                    key={`resolution-${doc?.resolution.x}`}
-                    ref={resolutionRef}
-                    type="number"
-                    min="1"
-                    max="12000"
-                    step="1"
-                    defaultValue={doc?.resolution.x ?? 72}
-                    aria-label="Document print resolution in pixels per inch"
-                  />
-                  <button onClick={() => {
-                    const ppi = Number(resolutionRef.current?.value);
-                    if (studio?.setDocumentResolution(ppi)) notify(`Resolution set to ${ppi} ppi without resampling`);
-                  }} aria-label="Apply print resolution">Set</button>
-                </label>
-                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
-                  <span>Color space</span>
-                  <select
-                    value={doc?.colorSpace ?? "srgb"}
-                    onChange={(event) => {
-                      if (!studio || !doc) return;
-                      const colorSpace = event.target.value as typeof doc.colorSpace;
-                      if (studio.setDocumentPrecision(doc.bitDepth, colorSpace)) notify(`Converted to ${colorSpace.toUpperCase()}`);
-                    }}
-                    aria-label="Document color space"
-                  >
-                    <option value="srgb">sRGB</option>
-                    <option value="display-p3">Display P3</option>
-                    <option value="linear-srgb">Linear sRGB</option>
-                  </select>
-                </label>
-                <div style={{ display: "grid", gridTemplateColumns: "74px repeat(3, 1fr)", gap: 5, alignItems: "center", fontSize: 10 }}>
-                  <span>Bit depth</span>
-                  {([8, 16, 32] as const).map((depth) => (
-                    <button
-                      key={depth}
-                      type="button"
-                      className={doc?.bitDepth === depth ? "active" : ""}
-                      onClick={() => {
-                        if (!studio || !doc) return;
-                        if (studio.setDocumentPrecision(depth, doc.colorSpace)) notify(`Converted to ${depth}-bit ${depth === 8 ? "integer" : "float"}`);
-                      }}
-                      aria-pressed={doc?.bitDepth === depth}
-                    >{depth}</button>
-                  ))}
-                </div>
-                <details className="document-diagnostics">
-                  <summary>
-                    <span>Engine details</span>
-                    <small>{engineState?.precisionTiles ?? 0} precision tiles · ≥{formatBytes(engineState?.estimatedResidentBytes ?? 0)}</small>
-                  </summary>
-                  <div className="document-diagnostics-body">
-                    <div><span>Memory floor</span><b>≥{formatBytes(engineState?.estimatedResidentBytes ?? 0)} resident</b></div>
-                    <div><span>Tile budget</span><b>{formatBytes(engineState?.residentMemoryBudget.residentBytes ?? 0)} / {formatBytes(engineState?.residentMemoryBudget.ceilingBytes ?? 0)}</b></div>
-                    <div><span>Precision</span><b>Linear · {doc?.bitDepth ?? 8}-bit</b></div>
-                    <div><span>Color</span><b>{engineState?.colorManagement.profiles ?? 0} ICC profiles</b></div>
-                    <div><span>Canvas</span><b>{engineState?.virtualCanvas.levels ?? 1} mip · {engineState?.virtualCanvas.plannedTiles ?? 0} ready</b></div>
-                    <div><span>Renderer</span><b>{Math.round((engineState?.viewportPerformance.p95Ms ?? 0) * 10) / 10} ms p95 · {Math.round((engineState?.adaptivePreview.scale ?? 1) * 100)}%</b></div>
-                    <div><span>GPU cache</span><b>{formatBytes(engineState?.gpuTextureCache.residentBytes ?? 0)} / {formatBytes(engineState?.gpuTextureCache.budgetBytes ?? 0)}</b></div>
-                    <div><span>Photoshop</span><b>{engineState?.photoshop.container.toUpperCase() ?? "PSD"} · {engineState?.photoshop.warnings ?? 0} notes</b></div>
-                    <div><span>Stability</span><b>{localDiagnostics.summary().crashes} local crash record{localDiagnostics.summary().crashes === 1 ? "" : "s"}</b></div>
-                    <button onClick={async () => {
-                      const report = localDiagnostics.exportReport({
-                        edition: desktop ? "pro" : "web",
-                        appVersion: "0.1.0",
-                        engine: engineState,
-                      });
-                      await downloadOrSave(report, `luma-diagnostics-${new Date().toISOString().slice(0, 10)}.json`);
-                      notify("Diagnostics report exported");
-                    }}>Export diagnostics</button>
-                  </div>
-                </details>
-                {photoshopReport && (
-                  <details className="advanced-blending">
-                    <summary>
-                      <span>Photoshop preflight</span>
-                      <small>{photoshopReport.canExport ? `${photoshopReport.container.toUpperCase()} ready` : "Action required"}</small>
-                    </summary>
-                    <div className="advanced-blending-body" style={{ gap: 5 }}>
-                      {photoshopReport.issues.length === 0 ? (
-                        <small>No compatibility issues detected.</small>
-                      ) : photoshopReport.issues.map((issue, index) => (
-                        <small key={`${issue.code}-${issue.layerId ?? "document"}-${index}`} style={{ lineHeight: 1.35 }}>
-                          {issue.severity === "error" ? "●" : issue.severity === "warning" ? "▲" : "ℹ"} {issue.message}
-                        </small>
-                      ))}
-                    </div>
-                  </details>
-                )}
-                <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
-                  <span>Soft proof</span>
-                  <select
-                    value={doc?.proofing.profile ?? "none"}
-                    onChange={(event) => studio?.setDocumentProofing({ profile: event.target.value as ProofProfile })}
-                    aria-label="Soft proof profile"
-                  >
-                    <option value="none">Off</option>
-                    <option value="srgb">sRGB output</option>
-                    <option value="display-p3">Display P3 output</option>
-                    <option value="cmyk-generic">CMYK · coated proof</option>
-                  </select>
-                </label>
-                {doc?.proofing.profile !== "none" && (
-                  <>
-                    <label style={{ display: "grid", gridTemplateColumns: "74px 1fr", alignItems: "center", gap: 6, fontSize: 10 }}>
-                      <span>Intent</span>
-                      <select
-                        value={doc?.proofing.intent ?? "relative-colorimetric"}
-                        onChange={(event) => studio?.setDocumentProofing({ intent: event.target.value as ProofSettings["intent"] })}
-                        aria-label="Proof rendering intent"
-                      >
-                        <option value="relative-colorimetric">Relative colorimetric</option>
-                        <option value="perceptual">Perceptual</option>
-                        <option value="absolute-colorimetric">Absolute colorimetric</option>
-                        <option value="saturation">Saturation</option>
-                      </select>
-                    </label>
-                    <div className="mask-segmented">
-                      <button
-                        type="button"
-                        className={doc?.proofing.blackPointCompensation ? "active" : ""}
-                        onClick={() => studio?.setDocumentProofing({ blackPointCompensation: !doc?.proofing.blackPointCompensation })}
-                      >Black point</button>
-                      <button
-                        type="button"
-                        className={doc?.proofing.gamutWarning ? "active" : ""}
-                        onClick={() => studio?.setDocumentProofing({ gamutWarning: !doc?.proofing.gamutWarning })}
-                      >Gamut warning</button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </section>
-
-            <section className="glass-card mask-card" data-contextual-panel="document">
-              <header><strong>Guides & snapping</strong><button onClick={() => setShowGuides((visible) => !visible)}>{showGuides ? "Hide" : "Show"}</button></header>
-              <div className="mask-actions" style={{ paddingBottom: 6 }}>
-                <button onClick={() => doc && studio?.addGuide("vertical", doc.width / 2)}>＋ Vertical</button>
-                <button onClick={() => doc && studio?.addGuide("horizontal", doc.height / 2)}>＋ Horizontal</button>
-                <button onClick={() => setSnapGuides((enabled) => !enabled)}>{snapGuides ? "✓ Snap" : "Snap off"}</button>
-                <button onClick={() => studio?.clearGuides()}>Clear</button>
-              </div>
-              {!!doc?.guides.length && (
-                <div style={{ display: "grid", gap: 4, padding: "0 10px 8px" }}>
-                  {doc.guides.map((guide) => (
-                    <button key={guide.id} onClick={() => studio?.removeGuide(guide.id)} style={{ display: "flex", justifyContent: "space-between" }} title="Remove guide">
-                      <span>{guide.orientation === "vertical" ? "V" : "H"} · {Math.round(guide.position)} px</span><span>×</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
+              <DocumentPanel
+                studio={studio}
+                document={doc}
+                engineState={engineState}
+                photoshopReport={photoshopReport}
+                showGuides={showGuides}
+                snapGuides={snapGuides}
+                localCrashCount={localDiagnostics.summary().crashes}
+                onNotify={notify}
+                onToggleGuides={() => setShowGuides((visible) => !visible)}
+                onToggleSnap={() => setSnapGuides((enabled) => !enabled)}
+                onExportDiagnostics={() => {
+                  const report = localDiagnostics.exportReport({
+                    edition: desktop ? "pro" : "web",
+                    appVersion: "0.1.0",
+                    engine: engineState,
+                  });
+                  void downloadOrSave(report, `luma-diagnostics-${new Date().toISOString().slice(0, 10)}.json`).then(() => notify("Diagnostics report exported"));
+                }}
+              />
             </DockPanelContent>
 
             <DockPanelContent panelId="selection">
@@ -4671,124 +4293,46 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </DockPanelContent>
             <DockPanelContent panelId="measure">
             {workspace === "measure" && (
-              <section className="glass-card tone-card" data-contextual-panel="measure">
-                <header><strong>Measure & sample</strong><button onClick={() => { setColorSamples([]); setMeasurement(null); }}>Clear</button></header>
-                <div style={{ display: "grid", gap: 7, padding: "8px 12px 12px", fontSize: 11 }}>
-                  {measurement ? (() => {
-                    const dx = measurement.end.x - measurement.start.x;
-                    const dy = measurement.end.y - measurement.start.y;
-                    return <><div>Length <strong>{Math.hypot(dx, dy).toFixed(1)} px</strong></div><div>Angle <strong>{(Math.atan2(dy, dx) * 180 / Math.PI).toFixed(1)}°</strong></div><div>Δx {dx.toFixed(1)} · Δy {dy.toFixed(1)}</div></>;
-                  })() : <p style={{ margin: 0, opacity: 0.7 }}>Drag with Ruler or click with a sampler.</p>}
-                  {colorSamples.map((sample, index) => <div key={`${sample.x}-${sample.y}-${index}`} style={{ display: "flex", alignItems: "center", gap: 7 }}><i style={{ width: 14, height: 14, borderRadius: 3, background: sample.color, border: "1px solid rgba(255,255,255,.35)" }} /><span>#{index + 1} · {sample.color} · {Math.round(sample.x)}, {Math.round(sample.y)}</span></div>)}
-                </div>
-              </section>
+              <MeasurePanel measurement={measurement} colorSamples={colorSamples} onClear={() => { setColorSamples([]); setMeasurement(null); }} />
             )}
 
             </DockPanelContent>
             <DockPanelContent panelId="neural">
-            <section className="glass-card neural-card neural-compact" data-contextual-panel="neural">
-              <header>
-                <strong><span>✦</span> Neural Lab</strong>
-                <small>ON-DEVICE MODEL + GPT IMAGE</small>
-              </header>
-              <div style={{ display: "grid", gap: 6, padding: "8px 10px 4px" }}>
-                <textarea
-                  value={aiPrompt}
-                  onChange={(event) => setAiPrompt(event.target.value)}
-                  aria-label="Generative edit prompt"
-                  style={{ minHeight: 58, resize: "vertical", borderRadius: 8, padding: 8, background: "rgba(255,255,255,.06)", color: "inherit", border: "1px solid rgba(255,255,255,.14)" }}
-                />
-                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", alignItems: "center", gap: 6, padding: "5px 7px", border: "1px solid rgba(126,231,255,.15)", borderRadius: 8, background: "rgba(126,231,255,.035)", fontSize: 10 }}>
-                  <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    <strong>Identity Lock</strong> · {identityReference?.name ?? "No reference"}
-                  </span>
-                  <button
-                    disabled={!activeLayer || activeLayer.kind === "group" || activeLayer.kind.startsWith("adjustment-")}
-                    onClick={() => {
-                      if (!studio || !activeLayer) return;
-                      const clearing = identityReference?.id === activeLayer.id;
-                      studio.setIdentityReference(clearing ? null : activeLayer.id);
-                      notify(clearing ? "Identity reference cleared" : `${activeLayer.name} locked as the AI reference`);
-                    }}
-                    title="The locked layer is sent as a separate identity/product reference for generative edits"
-                    style={{ padding: "4px 7px", fontSize: 9 }}
-                  >{identityReference?.id === activeLayer?.id ? "Unlock" : "Lock active"}</button>
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <select value={aiOperation} onChange={(event) => setAiOperation(event.target.value as AiProvenance["operation"])} style={{ flex: 1 }}>
-                    <option value="fill">Generative fill</option>
-                    <option value="remove">Remove</option>
-                    <option value="relight">Relight</option>
-                    <option value="harmonize">Harmonize</option>
-                    <option value="upscale">Detail synthesis · same canvas</option>
-                    <option value="expand">Context fill · same canvas</option>
-                  </select>
-                  <button onClick={runGenerativeEdit} disabled={aiRunning || !aiPrompt.trim()} style={{ flex: 1 }}>
-                    {aiRunning ? "Creating…" : "Generate layer ✦"}
-                  </button>
-                  {aiRunning && <button onClick={() => aiAbort.current?.abort()} title="Cancel all pending variations">Cancel</button>}
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
-                  <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
-                    <span>Quality</span>
-                    <select value={aiQuality} onChange={(event) => setAiQuality(event.target.value as AiEditQuality)}>
-                      <option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
-                    </select>
-                  </label>
-                  <label style={{ display: "grid", gap: 3, fontSize: 10 }}>
-                    <span>Variations</span>
-                    <select value={aiVariations} onChange={(event) => setAiVariations(Number(event.target.value))}>
-                      {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
-                    </select>
-                  </label>
-                </div>
-                <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
-                  <span>Strength</span><input type="range" min="0" max="100" value={Math.round(aiStrength * 100)} onChange={(event) => setAiStrength(Number(event.target.value) / 100)} /><output>{Math.round(aiStrength * 100)}%</output>
-                </label>
-                <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
-                  <span>Preserve</span><input type="range" min="0" max="100" value={Math.round(aiPreserve * 100)} onChange={(event) => setAiPreserve(Number(event.target.value) / 100)} /><output>{Math.round(aiPreserve * 100)}%</output>
-                </label>
-                {aiOperation === "relight" && (
-                  <label style={{ display: "grid", gridTemplateColumns: "72px 1fr 34px", gap: 5, alignItems: "center", fontSize: 10 }}>
-                    <span>Temperature</span><input type="range" min="-100" max="100" value={Math.round(aiTemperature * 100)} onChange={(event) => setAiTemperature(Number(event.target.value) / 100)} /><output>{Math.round(aiTemperature * 100)}</output>
-                  </label>
-                )}
-              </div>
-              <div className="neural-quick-grid">
-                <button onClick={runNeuralSubject} disabled={!!neural}>
-                  <i>✦</i>
-                  <span>{neural ? `${Math.round(neural.pct)}%` : "Neural subject"}</span>
-                </button>
-                <button onClick={runSubject}><i>◐</i><span>Luma mask</span></button>
-                <button onClick={() => activeLayerId && studio?.invertMask(activeLayerId)}><i>◑</i><span>Invert mask</span></button>
-                <button onClick={() => activeLayerId && studio?.clearMask(activeLayerId)}><i>◯</i><span>Reveal all</span></button>
-              </div>
-            </section>
-
+              <NeuralPanel
+                prompt={aiPrompt}
+                operation={aiOperation}
+                quality={aiQuality}
+                variations={aiVariations}
+                strength={aiStrength}
+                preserve={aiPreserve}
+                temperature={aiTemperature}
+                running={aiRunning}
+                neuralProgress={neural?.pct ?? null}
+                activeLayer={activeLayer}
+                identityReference={identityReference}
+                onPromptChange={setAiPrompt}
+                onOperationChange={setAiOperation}
+                onQualityChange={setAiQuality}
+                onVariationsChange={setAiVariations}
+                onStrengthChange={setAiStrength}
+                onPreserveChange={setAiPreserve}
+                onTemperatureChange={setAiTemperature}
+                onToggleIdentity={() => {
+                  if (!studio || !activeLayer) return;
+                  const clearing = identityReference?.id === activeLayer.id;
+                  studio.setIdentityReference(clearing ? null : activeLayer.id);
+                  notify(clearing ? "Identity reference cleared" : `${activeLayer.name} locked as the AI reference`);
+                }}
+                onGenerate={runGenerativeEdit}
+                onCancel={() => aiAbort.current?.abort()}
+                onNeuralSubject={runNeuralSubject}
+                onLumaMask={runSubject}
+                onInvertMask={() => activeLayerId && studio?.invertMask(activeLayerId)}
+                onRevealAll={() => activeLayerId && studio?.clearMask(activeLayerId)}
+              />
             </DockPanelContent>
             <DockPanelContent panelId="actions">
-            <section className="glass-card neural-card neural-compact" data-contextual-panel="actions">
-              <header>
-                <strong>Actions</strong>
-                {recordingName ? (
-                  <button onClick={stopRecording} title="Stop">◼</button>
-                ) : (
-                  <button onClick={startRecording} title="Record" aria-label="Record action">●</button>
-                )}
-              </header>
-              <div className="neural-quick-grid">
-                {studio?.actions.list().map((a, i) => (
-                  <button key={a.name + i} onClick={() => playAction(i)}>
-                    <i>▶</i><span>{a.name}<br /><small style={{ opacity: 0.6 }}>{a.steps.length} steps</small></span>
-                  </button>
-                ))}
-                {(!studio?.actions.list().length) && (
-                  <div className="inspector-empty-state" style={{ padding: "8px 4px" }}>
-                    No recorded actions
-                  </div>
-                )}
-              </div>
-            </section>
+              <ActionsPanel actions={studio?.actions.list() ?? []} recordingName={recordingName} onStart={startRecording} onStop={stopRecording} onPlay={playAction} />
             </DockPanelContent>
 
             <DockPanelContent panelId="history">

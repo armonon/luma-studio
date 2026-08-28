@@ -3,6 +3,14 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+const registeredPanels = [
+  "layers-panel.tsx",
+  "operational-panels.tsx",
+  "properties-panel.tsx",
+  "project-panels.tsx",
+  "document-panel.tsx",
+].map((file) => readFileSync(new URL(`../app/studio/panels/${file}`, import.meta.url), "utf8")).join("\n");
+const commandSurfaces = `${page}\n${registeredPanels}`;
 const focusPanel = readFileSync(new URL("../app/studio/layer-focus-panel.tsx", import.meta.url), "utf8");
 const layerEditors = readFileSync(new URL("../app/studio/layer-editors.tsx", import.meta.url), "utf8");
 const layerStack = readFileSync(new URL("../app/studio/virtual-layer-stack.tsx", import.meta.url), "utf8");
@@ -23,7 +31,7 @@ test("desktop icon-only commands expose stable assistive names", () => {
     "Redo",
     "Select all",
   ]) {
-    assert.match(page, new RegExp(`aria-label=[{\"]+[^\n>]*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(commandSurfaces, new RegExp(`aria-label=[{\"]+[^\n>]*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
   }
   assert.match(focusPanel, /aria-label=\{item\.pinned \? "Unpin from Focus" : "Pin in Focus"\}/);
   assert.match(layerEditors, /aria-label="Reset levels"/);
