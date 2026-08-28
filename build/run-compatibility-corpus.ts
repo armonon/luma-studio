@@ -13,6 +13,7 @@ import { exportPhotoshopDocument, importPsd } from "../app/engine/psd.ts";
 import { ingestRaw } from "../app/engine/raw.ts";
 import { renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
+import { classifyPhotoshopImport } from "./compatibility-corpus-policy.ts";
 
 type CorpusKind = "psd" | "psb" | "raw";
 type CorpusCase = {
@@ -199,14 +200,12 @@ async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer)
   if (entry.expected?.sourceLayers !== header.layers) throw new Error(`source has ${header.layers} layers, manifest expects ${entry.expected?.sourceLayers}`);
   const opened = await importPsd(bytes);
   assertExpectedDimensions(entry, opened);
-  const importMode = header.layers === 0
-    ? "composite-only"
-    : opened.layers.length < Math.max(1, header.layers)
-      ? "flattened-fallback"
-      : "layered";
-  if (importMode === "flattened-fallback" && !entry.expected?.allowFlattenedFallback) {
-    throw new Error(`editable import collapsed ${header.layers} source layers to ${opened.layers}`);
-  }
+  const importMode = classifyPhotoshopImport({
+    sourceLayers: header.layers,
+    openedLayers: opened.layers.length,
+    minimumLayers: entry.expected?.minimumLayers,
+    allowFlattenedFallback: entry.expected?.allowFlattenedFallback,
+  });
   const openedPreview = preview(opened);
   let referenceMeanError: number | undefined;
   if (entry.expected?.referencePng) {
