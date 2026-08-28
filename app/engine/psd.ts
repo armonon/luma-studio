@@ -60,11 +60,11 @@ import {
 import { drawLayerContentManaged } from "./precision-renderer";
 import {
   hasLayerMask,
-  layerMaskRegionCanvas,
   layerMaskSurface,
   setLayerMaskFromCanvas,
 } from "./layer-mask";
 import type { SparseAlphaSurface } from "./alpha-surface";
+import type { PixelRect } from "./tile-store";
 import { PrecisionTileSurface } from "./tile-store";
 import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 import { exceedsBrowserCanvas } from "./large-documents";
@@ -1310,6 +1310,35 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
   return doc;
 }
 
+/**
+ * A mask as Photoshop stores it: coverage in the RED channel.
+ *
+ * Luma's own alpha surfaces put coverage in the *alpha* channel with white RGB
+ * (see imageDataFromAlpha in selection.ts), which is what a canvas wants. But
+ * ag-psd writes the mask from channel 0 — `writeDataZipWithoutPrediction(imageData,
+ * [0])` in psdWriter.js — so handing it that canvas exported red = 255
+ * everywhere, i.e. every mask came back reveal-all. The import side already
+ * reads red (`data[pixel * 4]`), so red is unambiguously the intended carrier.
+ *
+ * Building the ImageData directly from the surface also keeps this off a
+ * canvas entirely, so premultiplication can never round the coverage.
+ */
+function psdMaskImageData(surface: SparseAlphaSurface, region: PixelRect): PixelData {
+  const coverage = surface.readRegion(region);
+  // A plain PixelData, not an ImageData: the engine is DOM-optional and the
+  // `ImageData` global is absent in headless hosts. ag-psd only reads
+  // data/width/height off this.
+  const data = new Uint8ClampedArray(region.width * region.height * 4);
+  for (let pixel = 0; pixel < coverage.length; pixel += 1) {
+    const offset = pixel * 4;
+    data[offset] = coverage[pixel];
+    data[offset + 1] = coverage[pixel];
+    data[offset + 2] = coverage[pixel];
+    data[offset + 3] = 255;
+  }
+  return { data, width: region.width, height: region.height };
+}
+
 function psdMask(doc: Document, layer: Layer): PsdLayer["mask"] {
   const preserved = getPhotoshopLayerMetadata(layer)?.source.mask;
   if (!hasLayerMask(layer)) return preserved ? { ...preserved } : undefined;
@@ -1318,11 +1347,10 @@ function psdMask(doc: Document, layer: Layer): PsdLayer["mask"] {
   const region = records.width && records.height
     ? records
     : { x: 0, y: 0, width: 1, height: 1 };
-  const canvas = layerMaskRegionCanvas(layer, doc.width, doc.height, region)!;
   return {
     ...preserved,
-    canvas,
-    imageData: undefined,
+    canvas: undefined,
+    imageData: psdMaskImageData(surface, region),
     top: region.y,
     left: region.x,
     bottom: region.y + region.height,
@@ -2123,16 +2151,10 @@ function flattenLayerBitmap(doc: Document, layer: Layer): { canvas: HTMLCanvasEl
   const projection = { a: 1, b: 0, c: 0, d: 1, e: -bounds.left, f: -bounds.top };
   if (layer.surface) drawLayerContentManaged(ctx, layer, projection);
   else drawLayerContent(ctx, layer, projection);
-  if (hasLayerMask(layer)) {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = "destination-in";
-    const mask = layerMaskRegionCanvas(layer, doc.width, doc.height, {
-      x: bounds.left,
-      y: bounds.top,
-      width: bounds.width,
-      height: bounds.height,
-    });
-    if (mask) ctx.drawImage(mask, 0, 0);
-  }
+  // The mask is deliberately NOT applied here. Photoshop stores a layer's
+  // pixels unmasked and the mask as a separate channel (psdMask above), so
+  // baking it into the pixels too would apply it twice — a 50% mask would
+  // reopen at 25%. This was previously masked-in only because the exported
+  // mask channel was broken and always read back as reveal-all.
   return { canvas: c, left: bounds.left, top: bounds.top };
 }
