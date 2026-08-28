@@ -520,19 +520,35 @@ export class SparseAlphaSurface {
     return [...keys].map((key) => this.grid.parseKey(key));
   }
 
-  edgeAddresses() {
+  /**
+   * The tiles within `depth` rings of the document border.
+   *
+   * A filter that reads past the edge of a `defaultAlpha > 0` surface changes
+   * every tile its kernel can reach, not just the outermost ring — feather at
+   * a large radius reaches several tiles inward. Asking for one ring when the
+   * kernel spans three leaves the ramp truncated at a tile boundary, which
+   * reads as a hard seam rather than a soft edge.
+   */
+  edgeAddresses(depth = 1) {
+    const rings = Math.max(1, Math.min(Math.ceil(depth), Math.max(this.grid.columns, this.grid.rows)));
     const result = new Map<string, TileAddress>();
-    for (let column = 0; column < this.grid.columns; column += 1) {
-      const top = this.grid.address(column, 0);
-      const bottom = this.grid.address(column, this.grid.rows - 1);
-      result.set(top.key, top);
-      result.set(bottom.key, bottom);
-    }
-    for (let row = 0; row < this.grid.rows; row += 1) {
-      const left = this.grid.address(0, row);
-      const right = this.grid.address(this.grid.columns - 1, row);
-      result.set(left.key, left);
-      result.set(right.key, right);
+    const add = (column: number, row: number) => {
+      const address = this.grid.address(column, row);
+      result.set(address.key, address);
+    };
+    for (let ring = 0; ring < rings; ring += 1) {
+      if (ring < this.grid.rows) {
+        for (let column = 0; column < this.grid.columns; column += 1) {
+          add(column, ring);
+          add(column, this.grid.rows - 1 - ring);
+        }
+      }
+      if (ring < this.grid.columns) {
+        for (let row = 0; row < this.grid.rows; row += 1) {
+          add(ring, row);
+          add(this.grid.columns - 1 - ring, row);
+        }
+      }
     }
     return [...result.values()];
   }

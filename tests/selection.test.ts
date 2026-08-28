@@ -9,8 +9,10 @@ import {
   refineSelection,
   refineSelectionAlpha,
   selectionRegionCanvas,
+  featherAlphaSurface,
 } from "../app/engine/selection.ts";
 import { testCanvas } from "./canvas-harness.ts";
+import { SparseAlphaSurface } from "../app/engine/alpha-surface.ts";
 
 function maskAlpha(mask: HTMLCanvasElement) {
   const image = mask.getContext("2d")!.getImageData(0, 0, mask.width, mask.height);
@@ -225,4 +227,29 @@ test("empty selection feathering leaves legacy storage untouched", () => {
   assert.equal(doc.selection.mask, mask);
   assert.equal(doc.selection.surface, undefined);
   assert.deepEqual(doc.selection.bounds, { x: 0, y: 0, w: 0, h: 0 });
+});
+
+test("feathering Select All ramps past the first tile instead of seaming at it", () => {
+  // A surface that is opaque by default has no records, so the blur has no
+  // record neighbourhood to gather around and the document border is the only
+  // edge in the image. featherAlphaSurface handled that with edgeAddresses(),
+  // which returned exactly one ring of tiles — but the ramp runs `support`
+  // pixels inward, several tiles at any generous radius. Every tile past the
+  // first kept its untouched default, so the soft edge stopped dead on a tile
+  // boundary and read as a hard seam.
+  const size = 1024;
+  const radius = 155;
+  const surface = new SparseAlphaSurface(size, size, { defaultAlpha: 255 });
+  assert.equal(surface.tileSize, 256, "this test needs the ramp to outrun one tile");
+
+  const feathered = featherAlphaSurface(surface, { x: 0, y: 0, w: size, h: size }, radius);
+  const at = (x: number) => feathered.sample(x, size / 2);
+
+  // Monotone all the way in, with no step at the boundary the tiles fall on.
+  for (const x of [0, 60, 120, 200, 255, 256, 300, 380]) {
+    assert.ok(at(x) <= at(x + 4), `ramp must not reverse at x=${x} (${at(x)} -> ${at(x + 4)})`);
+  }
+  assert.ok(at(255) < 255, "the ramp has not finished by the end of the first tile");
+  assert.ok(at(260) - at(252) < 6, `no cliff across the tile seam (${at(252)} -> ${at(260)})`);
+  assert.equal(at(size / 2), 255, "the interior stays fully selected");
 });

@@ -468,7 +468,14 @@ export function featherAlphaSurface(
   assertAlphaScratch((surface.tileSize + workPadding * 2) ** 2 * 8);
   const candidates = new Map<string, TileAddress>();
   for (const address of surface.addressesAroundRecords(support)) candidates.set(address.key, address);
-  if (surface.defaultAlpha > 0) for (const address of surface.edgeAddresses()) candidates.set(address.key, address);
+  // A surface that is opaque by default (Select All, say) has no records for
+  // the blur to gather around, so the document border is the only edge in the
+  // image — and the ramp runs `support` pixels inward from it, which is more
+  // than one tile at any generous radius.
+  if (surface.defaultAlpha > 0) {
+    const rings = Math.ceil(support / surface.tileSize);
+    for (const address of surface.edgeAddresses(rings)) candidates.set(address.key, address);
+  }
   const result = surface.clone();
   for (const address of candidates.values()) {
     const work = {
