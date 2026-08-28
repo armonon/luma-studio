@@ -398,9 +398,21 @@ async fn install_desktop_update(app: tauri::AppHandle, expected_version: String)
 }
 
 fn request_exit_confirmation(app: &tauri::AppHandle) {
-    if !EXIT_PROMPT_PENDING.swap(true, Ordering::SeqCst) {
-        let _ = app.emit(CLOSE_REQUEST_EVENT, ());
-    }
+    // Re-emit on every exit request rather than latching on the first.
+    //
+    // The latch assumed the first emit always reached a listener. It does not:
+    // the frontend subscribes from an effect gated on `studio`, which is null
+    // until the engine resolves, so a Cmd+Q during boot emitted into a void
+    // while both exit paths kept calling prevent_close()/prevent_exit(). With
+    // the flag stuck true nothing ever re-emitted, so every subsequent quit,
+    // window close and Dock > Quit was silently refused for the rest of the
+    // session and Force Quit was the only way out — losing exactly the unsaved
+    // work this confirmation exists to protect.
+    //
+    // Emitting again is safe: the handler either sets a React boolean that is
+    // already true or calls confirm_native_exit, both idempotent.
+    EXIT_PROMPT_PENDING.store(true, Ordering::SeqCst);
+    let _ = app.emit(CLOSE_REQUEST_EVENT, ());
 }
 
 fn route_open_file(app: &tauri::AppHandle, path: String) {
@@ -705,7 +717,7 @@ fn main() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if !ALLOW_APP_EXIT.load(Ordering::SeqCst) {
                     api.prevent_close();
-                    request_exit_confirmation(&window.app_handle());
+                    request_exit_confirmation(window.app_handle());
                 }
             }
         })
