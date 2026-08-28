@@ -217,6 +217,32 @@ test("professional smart-filter catalogue is complete and provides deterministic
 });
 
 test("lens blur uses an aperture footprint and preserves a flat field", () => {
+  // The flat-field half of this test is satisfied by doing nothing at all, so
+  // on its own it let lensBlur be a complete no-op. What distinguishes an
+  // aperture from a Gaussian is the footprint: a point spreads into a flat
+  // polygon with a hard edge, and the polygon's shape follows the blade count
+  // and rotation. Check that before checking the flat field.
+  const footprint = (blades: number, rotation: number) => {
+    const point = solidCanvas(25, 25, "black");
+    const paint = point.getContext("2d")!;
+    paint.fillStyle = "white";
+    paint.fillRect(12, 12, 1, 1);
+    lensBlur(createDocument(25, 25), createRasterLayer("point", point), 5, blades, rotation, 0);
+    const lit: string[] = [];
+    for (let y = 0; y < 25; y += 1) {
+      for (let x = 0; x < 25; x += 1) if (pixelAt(point, x, y).r > 0) lit.push(`${x},${y}`);
+    }
+    return { lit, value: (x: number, y: number) => pixelAt(point, x, y).r };
+  };
+
+  const six = footprint(6, 0);
+  assert.ok(six.lit.length > 30, `the point must spread across an aperture (lit ${six.lit.length} pixels)`);
+  assert.ok(six.lit.includes("12,12") && six.lit.includes("8,12"), "the footprint reaches the aperture radius");
+  assert.equal(six.value(8, 12), six.value(12, 12), "an aperture is a flat plateau, not a Gaussian falloff");
+  assert.equal(six.value(6, 12), 0, "and it has a hard edge");
+  assert.notDeepEqual(footprint(3, 0).lit, six.lit, "the blade count shapes the aperture");
+  assert.notDeepEqual(footprint(6, 45).lit, six.lit, "so does its rotation");
+
   const flat = solidCanvas(18, 18, "rgba(60, 100, 140, .5)");
   lensBlur(createDocument(18, 18), createRasterLayer("flat", flat), 5, 6, 0, 0.2);
   const pixel = pixelAt(flat, 9, 9);
@@ -297,15 +323,28 @@ test("surface blur protects strong edges while dust removal replaces isolated de
   context.fillStyle = "rgb(35,35,35)";
   context.fillRect(2, 2, 1, 1);
   surfaceBlur(createDocument(12, 6), createRasterLayer("surface", edge), 2, 25);
+  // Preserving the edge is what a no-op does too. The threshold is the whole
+  // point of a surface blur: variation under it gets smoothed away, variation
+  // over it is left standing.
+  assert.ok(pixelAt(edge, 2, 2).r < 26, `the sub-threshold speck is smoothed toward its surroundings (got ${pixelAt(edge, 2, 2).r} from 35)`);
   assert.ok(pixelAt(edge, 5, 3).r < 60);
   assert.ok(pixelAt(edge, 6, 3).r > 190);
 
-  const dust = solidCanvas(9, 9, "rgb(80,80,80)");
-  dust.getContext("2d")!.fillStyle = "white";
-  dust.getContext("2d")!.fillRect(4, 4, 1, 1);
-  dustAndScratches(createDocument(9, 9), createRasterLayer("dust", dust), 1, 20);
-  assert.equal(pixelAt(dust, 4, 4).r, 80);
-  assert.equal(pixelAt(dust, 3, 4).r, 80);
+  const speck = (delta: number, threshold: number) => {
+    const dust = solidCanvas(9, 9, "rgb(80,80,80)");
+    const paint = dust.getContext("2d")!;
+    paint.fillStyle = `rgb(${80 + delta},${80 + delta},${80 + delta})`;
+    paint.fillRect(4, 4, 1, 1);
+    dustAndScratches(createDocument(9, 9), createRasterLayer("dust", dust), 1, threshold);
+    return { center: pixelAt(dust, 4, 4).r, neighbour: pixelAt(dust, 3, 4).r };
+  };
+
+  const removed = speck(175, 20);
+  assert.equal(removed.center, 80, "a defect further from its neighbours than the threshold is replaced");
+  assert.equal(removed.neighbour, 80, "and the pixels around it are left alone");
+  // Without this, ignoring the threshold entirely and replacing every pixel
+  // passes the assertions above.
+  assert.equal(speck(10, 20).center, 90, "a difference under the threshold is real detail and must survive");
 });
 
 test("displace ripples the same way in document space at every zoom", () => {

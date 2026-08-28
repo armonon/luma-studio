@@ -37,18 +37,61 @@ test("alpha combinations preserve fractional coverage tilewise", () => {
   incoming.fillRect({ x: 500, y: 500, width: 500, height: 500 }, 128);
   const added = current.combined(incoming, "add");
   const intersected = current.combined(incoming, "intersect");
+  const subtracted = current.combined(incoming, "subtract");
+  const replaced = current.combined(incoming, "replace");
   assert.equal(added.sample(600, 600), 192);
   assert.equal(intersected.sample(600, 600), 64);
   assert.equal(intersected.sample(200, 200), 0);
+  // Subtract and replace were the two modes nothing exercised. Subtract erodes
+  // the overlap by the incoming coverage and leaves the rest alone; replace
+  // discards the current surface entirely, including where it had coverage and
+  // the incoming one does not.
+  assert.equal(subtracted.sample(600, 600), 64, "half coverage removed from half coverage");
+  assert.equal(subtracted.sample(200, 200), 128, "outside the incoming shape nothing is removed");
+  assert.equal(subtracted.sample(900, 900), 0, "outside the current shape there was nothing to remove");
+  assert.equal(replaced.sample(600, 600), 128);
+  assert.equal(replaced.sample(200, 200), 0, "replace does not keep the current coverage");
+  assert.equal(replaced.sample(900, 900), 128);
 });
 
 test("region IO never materializes the document and tile patches restore exactly", () => {
   const surface = new SparseAlphaSurface(50_000, 50_000);
-  const alpha = new Uint8Array(100 * 80).fill(91);
-  const patches = surface.writeRegion({ x: 49_900, y: 49_920, width: 100, height: 80 }, alpha);
-  assert.deepEqual([...surface.readRegion({ x: 49_900, y: 49_920, width: 2, height: 2 })], [91, 91, 91, 91]);
+  const width = 100;
+  const height = 80;
+  const origin = { x: 49_900, y: 49_920 };
+  // Every pixel distinct along both axes. This used to be a uniform fill of
+  // 91, which reads back as 91 no matter how writeRegion addresses it — a row
+  // or column offset in either direction was completely invisible.
+  const alpha = new Uint8Array(width * height);
+  const expected = (x: number, y: number) => ((x - origin.x) * 7 + (y - origin.y) * 31) % 251;
+  for (let row = 0; row < height; row += 1) {
+    for (let column = 0; column < width; column += 1) {
+      alpha[row * width + column] = expected(origin.x + column, origin.y + row);
+    }
+  }
+
+  const patches = surface.writeRegion({ ...origin, width, height }, alpha);
+  assert.deepEqual(
+    [...surface.readRegion({ ...origin, width, height })],
+    [...alpha],
+    "every pixel of the region round trips at its own coordinate",
+  );
+  // The corners specifically: an off-by-one in either axis moves these first.
+  for (const [x, y] of [
+    [origin.x, origin.y],
+    [origin.x + width - 1, origin.y],
+    [origin.x, origin.y + height - 1],
+    [origin.x + width - 1, origin.y + height - 1],
+  ]) {
+    assert.equal(surface.sample(x, y), expected(x, y), `corner ${x},${y}`);
+  }
+  // And nothing was written outside the region it was given.
+  assert.equal(surface.sample(origin.x - 1, origin.y + 5), 0);
+  assert.equal(surface.sample(origin.x + 5, origin.y - 1), 0);
+
   for (const patch of patches) surface.applyPatch(patch, "before");
-  assert.deepEqual([...surface.readRegion({ x: 49_900, y: 49_920, width: 2, height: 2 })], [0, 0, 0, 0]);
+  assert.deepEqual([...surface.readRegion({ ...origin, width: 2, height: 2 })], [0, 0, 0, 0]);
+  assert.equal(surface.stats().residentTiles, 0, "restoring every patch leaves no tiles behind");
 });
 
 test("alpha writes fail before crossing their explicit memory ceiling", () => {
