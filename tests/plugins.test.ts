@@ -179,3 +179,50 @@ test("declarative packages reject unsafe or malformed action payloads", () => {
     actions: [{ name: "NaN blur", steps: [{ op: "blur", radius: "lots" }] }],
   })), /finite number/);
 });
+
+test("a plugin package cannot parse into an action its own installer would refuse", () => {
+  // Two validators guarded the same data and had drifted apart. validateStep
+  // asks only that a step's numbers be finite; isSafeAction, which the action
+  // recorder enforces at install time, bounds each one. A blur of radius 1e9
+  // therefore parsed as a valid package and only blew up midway through
+  // activation, where the failure is far harder to attribute.
+  const packageJson = (steps: unknown[]) => JSON.stringify({
+    schema: "luma-plugin/1",
+    manifest: { id: "range.demo", name: "Range Demo", version: "1.0.0", apiVersion: LUMA_API_VERSION },
+    actions: [{ name: "Out of range", steps }],
+  });
+
+  assert.throws(() => parseLumaPluginPackage(packageJson([{ op: "blur", radius: 1e9 }])), /out of range/);
+  assert.throws(() => parseLumaPluginPackage(packageJson([{ op: "hue", degrees: 1e12 }])), /out of range/);
+  assert.throws(() => parseLumaPluginPackage(packageJson([{ op: "sharpen", radius: 4, amount: 500 }])), /out of range/);
+  // The same ops stay parseable at sane values.
+  assert.doesNotThrow(() => parseLumaPluginPackage(packageJson([{ op: "blur", radius: 8 }])));
+});
+
+test("a plugin that fails partway through activation leaves nothing installed", () => {
+  // activate() installs actions in a loop, and install() validates, so it can
+  // refuse one partway down the list. The earlier actions stayed installed
+  // while the teardown that would have removed them was never returned — a
+  // half-live plugin with no way to unload it.
+  const pkg = parseLumaPluginPackage(JSON.stringify({
+    schema: "luma-plugin/1",
+    manifest: { id: "partial.demo", name: "Partial", version: "1.0.0", apiVersion: LUMA_API_VERSION },
+    actions: [
+      { name: "First", steps: [{ op: "desaturate", amount: 1 }] },
+      { name: "Second", steps: [{ op: "blur", radius: 8 }] },
+    ],
+  }));
+
+  const s = studio();
+  const install = s.actions.install.bind(s.actions);
+  let installs = 0;
+  s.actions.install = ((action, sourcePluginId) => {
+    installs += 1;
+    if (installs === 2) throw new Error("simulated refusal on the second action");
+    return install(action, sourcePluginId);
+  }) as typeof s.actions.install;
+
+  assert.throws(() => createDeclarativePlugin(pkg).activate(s), /simulated refusal/);
+  assert.deepEqual(s.actions.list(), [], "the first action must not survive the failed activation");
+  s.dispose();
+});

@@ -1,4 +1,5 @@
 import { SMART_FILTER_KINDS } from "./filters";
+import { isSafeAction } from "./actions";
 import type { Action, ActionStep } from "./actions";
 import type { LumaPlugin } from "./studio";
 
@@ -97,7 +98,15 @@ export function parseLumaPluginPackage(source: string): LumaPluginPackage {
       throw new Error(`Plugin action ${actionIndex + 1} is invalid`);
     }
     action.steps.forEach((step, index) => validateStep(step, action.name as string, index));
-    return { name: action.name, steps: action.steps } as Action;
+    const parsed = { name: action.name, steps: action.steps } as Action;
+    // validateStep exists for its error messages; isSafeAction is the rule the
+    // action recorder will actually enforce at install time, and the two had
+    // drifted — validateStep asks only that a number be finite, while
+    // isSafeAction bounds each one, so a blur of radius 1e9 parsed cleanly and
+    // then threw halfway through activation. Whatever this returns must be
+    // installable, so check against the installer's own predicate here.
+    if (!isSafeAction(parsed)) throw new Error(`Plugin action ${actionIndex + 1} is out of range`);
+    return parsed;
   });
   return {
     schema: LUMA_PLUGIN_SCHEMA,
@@ -115,8 +124,19 @@ export function createDeclarativePlugin(pkg: LumaPluginPackage): LumaPlugin {
     version: pkg.manifest.version,
     apiVersion: pkg.manifest.apiVersion,
     activate(studio) {
-      for (const action of pkg.actions) studio.actions.install(action, pkg.manifest.id);
-      return () => { studio.actions.removeFromPlugin(pkg.manifest.id); };
+      const remove = () => { studio.actions.removeFromPlugin(pkg.manifest.id); };
+      try {
+        for (const action of pkg.actions) studio.actions.install(action, pkg.manifest.id);
+      } catch (error) {
+        // install() validates, so it can refuse an action partway through the
+        // list. Without this the earlier actions stayed installed and the
+        // teardown that would remove them was never returned — a half-live
+        // plugin with no way to unload it, which is exactly what the atomicity
+        // promise above rules out.
+        remove();
+        throw error;
+      }
+      return remove;
     },
   };
 }
