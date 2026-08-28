@@ -160,6 +160,37 @@ import {
   type SpaceDeckPoint,
 } from "./space-deck-model";
 import type { PhotoshopCompatibilityReport } from "@/app/engine/psd";
+import {
+  ALL_TOOL_IDS as allToolIds,
+  MODE_TOOLS as modeTools,
+  WORKSPACE_IDS as workspaceIds,
+  WORKSPACE_REGISTRY,
+  TOOL_REGISTRY,
+  type Tool,
+  type WorkspaceMode,
+} from "./tool-registry";
+import { createCommandRegistry } from "./command-registry";
+import {
+  AppShell,
+  AppWindow,
+  AppWorkspace,
+  ContextualTaskBarRegion,
+  DockRegion,
+  DocumentAreaRegion,
+  MenuBarRegion,
+  StatusBarRegion,
+  ToolRailRegion,
+} from "./app-shell";
+import DockManager, { DockPanelContent } from "./dock-manager";
+import {
+  BUILT_IN_WORKSPACES,
+  DOCK_LAYOUT_STORAGE_KEY,
+  defaultDockLayout,
+  openDockPanel,
+  sanitizeDockLayout,
+  type DockLayout,
+} from "./dock-model";
+import { STUDIO_PANEL_REGISTRY, type PanelId, type PrimaryPanelId } from "./panel-registry";
 
 declare const __LUMA_NATIVE_DESKTOP__: boolean;
 const NATIVE_DESKTOP_BUILD = typeof __LUMA_NATIVE_DESKTOP__ !== "undefined" && __LUMA_NATIVE_DESKTOP__;
@@ -180,156 +211,13 @@ const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ defau
 const ProAdjustmentEditor = lazy(() => import("./pro-adjustment-editor"));
 
 type ToneKey = keyof ToneParams;
-type WorkspaceMode = "edit" | "retouch" | "select" | "mask" | "develop" | "vector" | "transform" | "measure";
-type Tool =
-  | "move"
-  | "brush"
-  | "capture-brush"
-  | "pencil"
-  | "mixer"
-  | "erase"
-  | "gradient"
-  | "pattern"
-  | "clone"
-  | "heal"
-  | "spot-heal"
-  | "patch"
-  | "remove"
-  | "dodge"
-  | "burn"
-  | "blur-brush"
-  | "sharpen-brush"
-  | "smudge"
-  | "sponge"
-  | "liquify"
-  | "fill"
-  | "text"
-  | "paragraph-text"
-  | "vertical-text"
-  | "path-text"
-  | "type-mask"
-  | "rect"
-  | "ellipse"
-  | "triangle"
-  | "polygon"
-  | "line"
-  | "custom-shape"
-  | "frame"
-  | "pen"
-  | "path-select"
-  | "direct-select"
-  | "mask-add"
-  | "mask-remove"
-  | "sel-rect"
-  | "sel-ellipse"
-  | "sel-lasso"
-  | "sel-polygon"
-  | "sel-magnetic"
-  | "sel-quick"
-  | "sel-wand"
-  | "sel-sam"
-  | "tone"
-  | "crop"
-  | "perspective-crop"
-  | "straighten"
-  | "content-move"
-  | "perspective-warp"
-  | "radial-warp"
-  | "eyedropper"
-  | "color-sampler"
-  | "ruler";
-
-const workspaces: ReadonlyArray<readonly [WorkspaceMode, string, string]> = [
-  ["edit", "Edit", "Pixel + vector"],
-  ["retouch", "Retouch", "Repair + paint"],
-  ["select", "Select", "Marquee, lasso, wand"],
-  ["mask", "Mask", "Selection intelligence"],
-  ["develop", "Develop", "Nondestructive color"],
-  ["vector", "Type", "Text + shapes"],
-  ["transform", "Transform", "Crop + deform"],
-  ["measure", "Measure", "Color + dimensions"],
-];
-
-const modeTools: Record<WorkspaceMode, ReadonlyArray<readonly [Tool, string, string, string]>> = {
-  edit: [
-    ["move", "↖", "Move", "V"],
-    ["brush", "╱", "Brush", "B"],
-    ["capture-brush", "◉", "Capture Brush", "C"],
-    ["pencil", "✎", "Pencil", "N"],
-    ["mixer", "≈", "Mixer brush", "X"],
-    ["erase", "⌫", "Erase", "E"],
-    ["gradient", "◩", "Gradient", "G"],
-    ["pattern", "▦", "Pattern", "P"],
-    ["fill", "▣", "Fill", "F"],
-  ],
-  retouch: [
-    ["clone", "◎", "Clone stamp", "S"],
-    ["heal", "✚", "Healing brush", "J"],
-    ["spot-heal", "✣", "Spot healing", "Q"],
-    ["patch", "⬡", "Patch", "A"],
-    ["remove", "◇", "Remove", "R"],
-    ["dodge", "◌", "Dodge", "O"],
-    ["burn", "●", "Burn", "U"],
-    ["blur-brush", "◍", "Blur", "L"],
-    ["sharpen-brush", "◆", "Sharpen", "H"],
-    ["smudge", "〰", "Smudge", "M"],
-    ["sponge", "◉", "Sponge", "D"],
-    ["liquify", "≋", "Liquify", "Y"],
-  ],
-  select: [
-    ["sel-rect", "▭", "Rect marquee", "M"],
-    ["sel-ellipse", "◯", "Ellipse marquee", "N"],
-    ["sel-lasso", "◜", "Lasso", "L"],
-    ["sel-polygon", "⬠", "Polygonal lasso", "P"],
-    ["sel-magnetic", "↯", "Magnetic lasso", "G"],
-    ["sel-quick", "◒", "Quick selection", "Q"],
-    ["sel-wand", "✣", "Magic wand", "W"],
-    ["sel-sam", "✦", "SAM click-select", "K"],
-  ],
-  mask: [
-    ["mask-add", "＋", "Reveal", "B"],
-    ["mask-remove", "−", "Hide", "E"],
-  ],
-  develop: [
-    ["tone", "◐", "Tone", "T"],
-  ],
-  vector: [
-    ["text", "T", "Text", "T"],
-    ["paragraph-text", "¶", "Paragraph text", "A"],
-    ["vertical-text", "↧", "Vertical text", "V"],
-    ["path-text", "⌒", "Type on path", "Y"],
-    ["type-mask", "T⃞", "Type mask", "M"],
-    ["rect", "▭", "Rect", "R"],
-    ["ellipse", "◯", "Ellipse", "O"],
-    ["triangle", "△", "Triangle", "I"],
-    ["polygon", "⬡", "Polygon", "G"],
-    ["line", "╱", "Line", "L"],
-    ["custom-shape", "★", "Custom shape", "C"],
-    ["frame", "▣", "Frame", "F"],
-    ["pen", "✎", "Pen", "P"],
-    ["path-select", "↖", "Path selection", "S"],
-    ["direct-select", "△", "Direct selection", "D"],
-  ],
-  transform: [
-    ["crop", "⌗", "Crop", "C"],
-    ["perspective-crop", "▱", "Perspective crop", "K"],
-    ["straighten", "／", "Straighten", "S"],
-    ["content-move", "⇥", "Content-aware move", "M"],
-    ["perspective-warp", "◇", "Perspective warp", "W"],
-    ["radial-warp", "⌘", "Radial warp", "P"],
-  ],
-  measure: [
-    ["eyedropper", "⌁", "Eyedropper", "I"],
-    ["color-sampler", "⊕", "Color sampler", "S"],
-    ["ruler", "╱", "Ruler", "R"],
-  ],
-};
-
-const workspaceIds = workspaces.map(([id]) => id);
-const allToolIds = [...new Set(Object.values(modeTools).flat().map(([tool]) => tool))];
+const workspaces: ReadonlyArray<readonly [WorkspaceMode, string, string]> = WORKSPACE_REGISTRY.map(
+  ({ id, label, description }) => [id, label, description] as const,
+);
 const WORKFLOW_PREFERENCES_KEY = "luma.workflow-preferences.v1";
 const LAYER_FOCUS_PREFERENCES_KEY = "luma.layer-focus.v1";
 const INSTALLED_PLUGINS_KEY = "luma.installed-plugins.v1";
+const CUSTOM_DOCK_WORKSPACES_KEY = "luma.custom-dock-workspaces.v1";
 const initialWorkflowPreferences = defaultWorkflowPreferences<WorkspaceMode, Tool>(workspaceIds);
 
 const toneRows: Array<[ToneKey, string, number, number, number]> = [
@@ -388,7 +276,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const captureInput = useRef<HTMLInputElement>(null);
   const focusImportInput = useRef<HTMLInputElement>(null);
   const pluginInput = useRef<HTMLInputElement>(null);
-  const inspectorRef = useRef<HTMLElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
   const [startupReady, setStartupReady] = useState(false);
   const startupOpenCoordinator = useRef(new StartupOpenCoordinator());
@@ -399,6 +286,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPresentation.workspace);
   const [activeTool, setActiveTool] = useState<Tool>(initialPresentation.tool);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
+  const [dockLayout, setDockLayout] = useState<DockLayout>(() => defaultDockLayout());
+  const [dockLayoutLoaded, setDockLayoutLoaded] = useState(false);
+  const [customDockWorkspaces, setCustomDockWorkspaces] = useState<Record<string, DockLayout>>({});
+  const selectInspectorTab = useCallback((tab: "layers" | "properties" | "ai") => {
+    const panelId: PrimaryPanelId = tab === "ai" ? "neural" : tab;
+    setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
+    setInspectorTab(tab);
+  }, []);
   const [nativePanelOverride, setNativePanelOverride] = useState<ContextualPanelId | null>(null);
   const [assetsOpen, setAssetsOpen] = useState(initialPresentation.assetsOpen);
   const [dropActive, setDropActive] = useState(false);
@@ -608,6 +503,51 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   useEffect(() => {
     const hydration = window.setTimeout(() => {
       try {
+        const stored = window.localStorage.getItem(DOCK_LAYOUT_STORAGE_KEY);
+        const next = sanitizeDockLayout(stored ? JSON.parse(stored) : null, STUDIO_PANEL_REGISTRY);
+        setDockLayout(next);
+        const active = next.groups[0]?.activePanelId;
+        if (active === "layers" || active === "properties" || active === "neural") {
+          setInspectorTab(active === "neural" ? "ai" : active);
+        }
+      } catch {
+        setDockLayout(defaultDockLayout());
+      }
+      try {
+        const storedCustom = JSON.parse(window.localStorage.getItem(CUSTOM_DOCK_WORKSPACES_KEY) ?? "{}") as unknown;
+        if (storedCustom && typeof storedCustom === "object" && !Array.isArray(storedCustom)) {
+          setCustomDockWorkspaces(Object.fromEntries(Object.entries(storedCustom).flatMap(([name, value]) => {
+            if (!name.trim()) return [];
+            return [[name, sanitizeDockLayout(value, STUDIO_PANEL_REGISTRY)]];
+          })));
+        }
+      } catch { setCustomDockWorkspaces({}); }
+      setDockLayoutLoaded(true);
+    }, 0);
+    return () => window.clearTimeout(hydration);
+  }, []);
+
+  useEffect(() => {
+    if (!dockLayoutLoaded) return;
+    try {
+      window.localStorage.setItem(DOCK_LAYOUT_STORAGE_KEY, JSON.stringify(dockLayout));
+    } catch {
+      // Docking remains functional when persistence is unavailable.
+    }
+  }, [dockLayout, dockLayoutLoaded]);
+
+  useEffect(() => {
+    if (!dockLayoutLoaded) return;
+    try {
+      window.localStorage.setItem(CUSTOM_DOCK_WORKSPACES_KEY, JSON.stringify(customDockWorkspaces));
+    } catch {
+      // Custom layouts are optional; the active layout is still retained.
+    }
+  }, [customDockWorkspaces, dockLayoutLoaded]);
+
+  useEffect(() => {
+    const hydration = window.setTimeout(() => {
+      try {
         const stored = window.localStorage.getItem(LAYER_FOCUS_PREFERENCES_KEY);
         const preferences = normalizeLayerFocusPreferences(stored ? JSON.parse(stored) : null);
         setPinnedLayerIds(preferences.pinnedLayerIds);
@@ -749,7 +689,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
   const contextualPanel = resolveContextualPanel({
     override: nativePanelOverride,
-    inspector: inspectorTab,
+    inspector: "properties",
     layer: activeLayer,
     workspace,
     hasSelection: Boolean(doc?.selection),
@@ -1533,7 +1473,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setPointDraft([]);
     directAnchorRef.current = null;
     setWorkspace(next);
-    setInspectorTab("properties");
+    selectInspectorTab("properties");
     const firstVisible = modeTools[next].find(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
     setActiveTool(firstVisible?.[0] ?? modeTools[next][0][0]);
   };
@@ -1549,7 +1489,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     if (nextWorkspace !== workspace) setWorkspace(nextWorkspace);
     setActiveTool(tool);
-    setInspectorTab("properties");
+    selectInspectorTab("properties");
     if (tool === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
   };
 
@@ -2319,13 +2259,23 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const focusInspector = (tab: "layers" | "properties" | "ai") => {
-    setInspectorTab(tab);
-    if (tab === "ai") setNativePanelOverride("neural");
-    else if (tab === "properties") setNativePanelOverride(null);
-    requestAnimationFrame(() => {
-      const selector = tab === "layers" ? ".layers-card" : tab === "ai" ? ".neural-card" : ".glass-card:not(.layers-card):not(.neural-card)";
-      inspectorRef.current?.querySelector(selector)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
+    selectInspectorTab(tab);
+    if (tab === "properties") setNativePanelOverride(null);
+  };
+
+  const openStudioPanel = (panelId: PanelId) => {
+    setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
+    if (panelId === "layers" || panelId === "properties" || panelId === "neural") {
+      setInspectorTab(panelId === "neural" ? "ai" : panelId);
+    }
+  };
+
+  const applyDockWorkspace = (next: DockLayout) => {
+    setDockLayout(next);
+    const active = next.groups[0]?.activePanelId;
+    if (active === "layers" || active === "properties" || active === "neural") {
+      setInspectorTab(active === "neural" ? "ai" : active);
+    }
   };
 
   const selectLayerForEditing = (layer: Layer) => {
@@ -2333,7 +2283,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setNativePanelOverride(null);
     const nextWorkspace = workspaceForLayer(layer);
     if (nextWorkspace) setWorkspace(nextWorkspace);
-    setInspectorTab("properties");
+    selectInspectorTab("properties");
     if (layer.kind === "adjustment-tone") {
       setActiveAdjustmentId(layer.id);
       if (layer.tone) setTone({ ...layer.tone });
@@ -2402,7 +2352,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         return;
 
       case "document-properties":
-        setInspectorTab("properties");
+        selectInspectorTab("properties");
         setNativePanelOverride("document");
         return;
       case "crop-selection":
@@ -2494,20 +2444,50 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       case "zoom-actual": setView((v) => ({ ...v, zoom: 1 })); return;
       case "toggle-guides": setShowGuides((visible) => !visible); return;
 
-      case "panel-layers":
-        setInspectorTab("layers");
-        setNativePanelOverride(null);
-        return;
-      case "panel-document": setInspectorTab("properties"); setNativePanelOverride("document"); return;
-      case "panel-channels": setInspectorTab("properties"); setNativePanelOverride("channels"); return;
-      case "panel-comps": setInspectorTab("properties"); setNativePanelOverride("structure"); return;
-      case "panel-assets": setInspectorTab("properties"); setNativePanelOverride("assets"); return;
+      case "panel-layers": focusInspector("layers"); setNativePanelOverride(null); return;
+      case "panel-document": openStudioPanel("document"); setNativePanelOverride(null); return;
+      case "panel-channels": openStudioPanel("channels"); setNativePanelOverride(null); return;
+      case "panel-comps": openStudioPanel("structure"); setNativePanelOverride(null); return;
+      case "panel-assets": openStudioPanel("assets"); setNativePanelOverride(null); return;
       case "panel-neural": focusInspector("ai"); return;
-      case "panel-actions": setInspectorTab("properties"); setNativePanelOverride("actions"); return;
+      case "panel-actions": openStudioPanel("actions"); setNativePanelOverride(null); return;
       case "workspace-settings": setShowWorkspaceSettings(true); return;
     }
     const exhaustive: never = command;
     return exhaustive;
+  };
+
+  const commandRegistry = createCommandRegistry({
+    enabled: (command) => {
+      if (desktopUpdateInstalling) return false;
+      if (command === "undo") return studio?.canUndo() ?? false;
+      if (command === "redo") return studio?.canRedo() ?? false;
+      if (["save", "save-as", "export", "document-properties", "select-all", "deselect", "invert-selection", "crop-selection"].includes(command)) return Boolean(studio);
+      if (["duplicate-layer", "group-layer", "delete-layer", "convert-smart-object", "bring-forward", "send-backward", "layer-style", "copy-layer-style"].includes(command)) return Boolean(studio && activeLayerId);
+      if (command === "paste-layer-style") return Boolean(studio && activeLayerId && !activeLayer?.locked);
+      if (["filter-invert", "filter-blur", "filter-sharpen", "filter-desaturate"].includes(command)) {
+        return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap && !activeLayer.locked);
+      }
+      return true;
+    },
+    checked: (command) => {
+      if (command === "toggle-guides") return showGuides;
+      const panelId: PanelId | null = command === "panel-layers" ? "layers"
+        : command === "panel-document" ? "document"
+          : command === "panel-channels" ? "channels"
+            : command === "panel-comps" ? "structure"
+              : command === "panel-assets" ? "assets"
+                : command === "panel-neural" ? "neural"
+                  : command === "panel-actions" ? "actions"
+                    : null;
+      return panelId !== null && (
+        dockLayout.groups.some((group) => group.panelIds.includes(panelId))
+        || dockLayout.floating.some((panel) => panel.panelId === panelId)
+      );
+    },
+  });
+  const executeStudioCommand = (command: StudioCommand) => {
+    commandRegistry.execute(command, runStudioCommand);
   };
 
   const spaceDeckContext = resolveSpaceDeckContext({
@@ -2655,7 +2635,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       () => {
         setNativePanelOverride(null);
         setWorkspace("develop");
-        setInspectorTab("properties");
+        selectInspectorTab("properties");
       },
     )];
 
@@ -2846,10 +2826,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   // and re-subscribing per render meant one of those per pointer move during a
   // brush stroke — with a window between teardown and re-attach where a menu
   // click would land on nothing at all.
-  const latestCommand = useRef(runStudioCommand);
+  const latestCommand = useRef<(command: StudioCommand) => void>(runStudioCommand);
   const latestOpenPath = useRef(openDocumentPath);
   useEffect(() => {
-    latestCommand.current = runStudioCommand;
+    latestCommand.current = executeStudioCommand;
     latestOpenPath.current = openDocumentPath;
   });
 
@@ -3079,10 +3059,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const photoshopReport = uiWork.photoshopPreflight ? loadedPhotoshopReport : null;
   const canvasCursor = useMemo(() => {
     if (paintingTool || retouchTool || marqueeTool || lassoTool || wandTool || vectorDragTool || transformDragTool || pointSelectionTool || quadTool) return "crosshair";
-    if (activeTool === "pen" || activeTool === "sel-sam" || activeTool === "eyedropper" || activeTool === "color-sampler" || activeTool === "direct-select") return "crosshair";
-    if (moveTool) return "move";
-    return "default";
-  }, [paintingTool, retouchTool, marqueeTool, lassoTool, wandTool, vectorDragTool, transformDragTool, pointSelectionTool, quadTool, moveTool, activeTool]);
+    return TOOL_REGISTRY[activeTool].cursor;
+  }, [paintingTool, retouchTool, marqueeTool, lassoTool, wandTool, vectorDragTool, transformDragTool, pointSelectionTool, quadTool, activeTool]);
 
   const activeIsAdjustment = activeLayer?.kind === "adjustment-tone";
 
@@ -3293,12 +3271,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   }, [doc, activeLayer, moveTool, studio, eventToDoc, setFt]);
 
   return (
-    <main className="spatial-studio">
+    <AppShell>
       <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
       <div className="spatial-aura aura-violet" />
 
-      <section className="spatial-window">
+      <AppWindow>
+        <MenuBarRegion>
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
             desktop={desktop}
@@ -3310,20 +3289,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             exportOpen={showExportMenu}
             filtersOpen={showFilters}
             onBack={() => history.back()}
-            onOpen={requestDocumentOpen}
-            onUndo={() => studio?.undo()}
-            onRedo={() => studio?.redo()}
-            onFit={() => setView({ zoom: 1, panX: 0, panY: 0 })}
-            onSave={saveProject}
-            onFilters={() => setShowFilters((value) => !value)}
-            onBatch={() => setShowBatch(true)}
-            onHistory={() => setShowHistory(true)}
-            onSettings={() => setShowWorkspaceSettings(true)}
-            onExport={() => setShowExportMenu((value) => !value)}
+            onCommand={executeStudioCommand}
+            commandEnabled={commandRegistry.enabled}
           />
         </Suspense>
+        </MenuBarRegion>
 
-        <div className="spatial-workspace">
+        <AppWorkspace>
+          <ToolRailRegion>
           <Suspense fallback={<aside className="spatial-toolbar" aria-label="Loading tools" />}>
             <ToolDock
               groups={toolPaletteGroups}
@@ -3332,11 +3305,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               compactDesktop={desktop}
               onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
               onAiSelect={() => { activateTool("sel-sam", "select"); focusInspector("ai"); }}
-              onCommand={runStudioCommand}
+              onCommand={executeStudioCommand}
             />
           </Suspense>
+          </ToolRailRegion>
 
-          <section className="spatial-canvas-column" data-assets-open={assetsOpen}>
+          <DocumentAreaRegion data-assets-open={assetsOpen}>
+            <ContextualTaskBarRegion>
             <Suspense fallback={<div className="studio-contextbar" />}>
               <ContextToolbar
                 tool={activeTool}
@@ -3344,7 +3319,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 description={activeWorkspaceMeta[2]}
                 layerName={activeLayer?.name ?? "No active layer"}
                 layerKind={activeLayer?.kind.replaceAll("-", " ") ?? "Open an image to begin"}
-                mode={(paintingTool || retouchTool || workspace === "mask") ? "paint" : (marqueeTool || lassoTool || wandTool || pointSelectionTool) ? "selection" : workspace === "vector" && ["text", "paragraph-text", "vertical-text", "path-text", "type-mask"].includes(activeTool) ? "type" : ["crop", "perspective-crop"].includes(activeTool) ? "crop" : "general"}
+                mode={TOOL_REGISTRY[activeTool].options}
                 selectionMode={selectionMode}
                 values={{
                   color: brushColor,
@@ -3388,6 +3363,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onToggleAssets={() => setAssetsOpen((value) => !value)}
               />
             </Suspense>
+            </ContextualTaskBarRegion>
 
             <div className="spatial-document-tabs">
               {openDocuments.map((documentTab) => (
@@ -3645,14 +3621,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onCollapse={() => setAssetsOpen(false)}
               />
             </Suspense>
-          </section>
+          </DocumentAreaRegion>
 
-          <aside ref={inspectorRef} className="spatial-inspector" data-tab={inspectorTab} data-context-panel={contextualPanel}>
-            <nav className="inspector-tabs" aria-label="Inspector panels">
-              <button className={inspectorTab === "properties" ? "active" : ""} onClick={() => focusInspector("properties")} aria-pressed={inspectorTab === "properties"}>Inspector</button>
-              <button className={inspectorTab === "layers" ? "active" : ""} onClick={() => focusInspector("layers")} aria-pressed={inspectorTab === "layers"}>Layers</button>
-              <button className={inspectorTab === "ai" ? "active" : ""} onClick={() => focusInspector("ai")} aria-pressed={inspectorTab === "ai"}><span>✦</span> Neural</button>
-            </nav>
+          <DockRegion>
+          <DockManager
+            layout={dockLayout}
+            onLayoutChange={setDockLayout}
+            onActivePanelChange={(panel) => {
+              if (panel === "layers" || panel === "properties" || panel === "neural") {
+                setInspectorTab(panel === "neural" ? "ai" : panel);
+              }
+            }}
+            contextualPanel={contextualPanel}
+          >
+            <DockPanelContent panelId="layers">
             <section className="glass-card layers-card">
               <header>
                 <strong>Layers</strong>
@@ -3791,8 +3773,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               )}
             </section>
+            </DockPanelContent>
 
             {desktop && (
+              <DockPanelContent panelId="properties">
               <section className="glass-card desktop-properties-card">
                 <header>
                   <strong>{activeToolMeta?.[2] ?? "Properties"}</strong>
@@ -3807,8 +3791,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                         value={nativePanelOverride ?? ""}
                         onChange={(event) => {
                           const value = event.target.value as ContextualPanelId | "";
-                          setNativePanelOverride(value || null);
-                          setInspectorTab(value === "neural" ? "ai" : "properties");
+                          setNativePanelOverride(null);
+                          if (value) openStudioPanel(value);
+                          else selectInspectorTab("properties");
                         }}
                       >
                         <option value="">Auto</option>
@@ -3876,9 +3861,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <div className="desktop-space-hint"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></div>
                 </div>
               </section>
+              </DockPanelContent>
             )}
 
             {(NATIVE_DESKTOP_BUILD || shouldMountLegacyInspector(desktop)) && <>
+            <DockPanelContent panelId="channels">
             <section className="glass-card mask-card" data-contextual-panel="channels">
               <header><strong>Channels</strong><small title="Channel previews do not change RGB export">{(engineState?.channelView ?? "rgb").toUpperCase()}</small></header>
               <div className="mask-segmented channel-switcher">
@@ -3892,7 +3879,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 ))}
               </div>
             </section>
+            </DockPanelContent>
 
+            <DockPanelContent panelId="structure">
             <section className="glass-card mask-card" data-contextual-panel="structure">
               <header><strong>Layer comps</strong><small>{doc?.layerComps?.length ?? 0}</small></header>
               <div className="inspector-create-row">
@@ -3947,7 +3936,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               )}
             </section>
+            </DockPanelContent>
 
+            <DockPanelContent panelId="assets">
             <section className="glass-card mask-card" data-contextual-panel="assets">
               <header><strong>Assets</strong><small>{(studio?.listPlugins().length ?? 0) + capturedBrushes.length}</small>{desktop && <button onClick={() => pluginInput.current?.click()} title="Install a safe declarative .luma-plugin package">＋ Plugin</button>}</header>
               <div style={{ display: "grid", gap: 4, padding: "8px 10px" }}>
@@ -3959,7 +3950,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 )) : <small className="inspector-empty-state">No plug-ins or saved brushes</small>}
               </div>
             </section>
+            </DockPanelContent>
 
+            <DockPanelContent panelId="document">
             <section className="glass-card mask-card" data-contextual-panel="document">
               <header><strong>Document</strong><small>{doc?.width ?? 0} × {doc?.height ?? 0}</small></header>
               <div className="document-size-row">
@@ -4132,7 +4125,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               )}
             </section>
+            </DockPanelContent>
 
+            <DockPanelContent panelId="selection">
             {contextualPanel === "selection" && (
               <section className="glass-card mask-card" data-contextual-panel="selection">
                 <header><strong>Selection</strong>
@@ -4183,7 +4178,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </p>
               </section>
             )}
+            </DockPanelContent>
 
+            <DockPanelContent panelId="mask">
             {workspace === "mask" && (
               <section className="glass-card mask-card" data-contextual-panel="mask">
                 <header><strong>Mask brush</strong>
@@ -4209,7 +4206,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               </section>
             )}
+            </DockPanelContent>
 
+            <DockPanelContent panelId="raw">
             {activeLayer?.raw && rawDevelop && (
               <section className="glass-card tone-card" data-contextual-panel="raw">
                 <header>
@@ -4286,22 +4285,30 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </p>
               </section>
             )}
+            </DockPanelContent>
 
+            <DockPanelContent panelId="curves">
             {activeLayer?.kind === "adjustment-curves" && activeLayer.curves && (
               <div className="contextual-panel-host" data-contextual-panel="curves"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading curves" />}>
                 <CurvesEditor curves={activeLayer.curves} onLive={(c) => studio?.liveUpdateCurves(activeLayer.id, c)} onCommit={(c) => studio?.updateCurves(activeLayer.id, c)} onReset={() => studio?.updateCurves(activeLayer.id, cloneCurves(NEUTRAL_CURVES))} />
               </Suspense></div>
             )}
+            </DockPanelContent>
+            <DockPanelContent panelId="levels">
             {activeLayer?.kind === "adjustment-levels" && activeLayer.levels && (
               <div className="contextual-panel-host" data-contextual-panel="levels"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading levels" />}>
                 <LevelsEditor levels={activeLayer.levels} onLive={(l) => studio?.liveUpdateLevels(activeLayer.id, l)} onCommit={(l) => studio?.updateLevels(activeLayer.id, l)} onReset={() => studio?.updateLevels(activeLayer.id, { ...NEUTRAL_LEVELS })} />
               </Suspense></div>
             )}
+            </DockPanelContent>
+            <DockPanelContent panelId="hsl">
             {activeLayer?.kind === "adjustment-hsl" && activeLayer.hsl && (
               <div className="contextual-panel-host" data-contextual-panel="hsl"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading HSL" />}>
                 <HslEditor hsl={activeLayer.hsl} onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)} onCommit={(h) => studio?.updateHsl(activeLayer.id, h)} onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })} />
               </Suspense></div>
             )}
+            </DockPanelContent>
+            <DockPanelContent panelId="pro-adjustment">
             {activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
               <div className="contextual-panel-host" data-contextual-panel="pro-adjustment"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
                 <ProAdjustmentEditor
@@ -4312,6 +4319,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 />
               </Suspense></div>
             )}
+            </DockPanelContent>
+            <DockPanelContent panelId="tone">
             {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && activeLayer?.kind !== "adjustment-pro" && (
               <section className="glass-card tone-card" data-contextual-panel="tone">
                 <header>
@@ -4347,7 +4356,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </div>
               </section>
             )}
+            </DockPanelContent>
 
+            <DockPanelContent panelId="paint">
             {(workspace === "edit" || workspace === "retouch") && (
               <section className="glass-card tone-card" data-contextual-panel="paint">
                 <header>
@@ -4519,6 +4530,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
+            </DockPanelContent>
+            <DockPanelContent panelId="vector">
             {workspace === "vector" && (
               <section className="glass-card tone-card" data-contextual-panel="vector">
                 <header>
@@ -4621,6 +4634,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
+            </DockPanelContent>
+            <DockPanelContent panelId="transform">
             {workspace === "transform" && (
               <section className="glass-card tone-card" data-contextual-panel="transform">
                 <header><strong>Transform & geometry</strong><small>PRECISION</small></header>
@@ -4653,6 +4668,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
+            </DockPanelContent>
+            <DockPanelContent panelId="measure">
             {workspace === "measure" && (
               <section className="glass-card tone-card" data-contextual-panel="measure">
                 <header><strong>Measure & sample</strong><button onClick={() => { setColorSamples([]); setMeasurement(null); }}>Clear</button></header>
@@ -4667,6 +4684,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </section>
             )}
 
+            </DockPanelContent>
+            <DockPanelContent panelId="neural">
             <section className="glass-card neural-card neural-compact" data-contextual-panel="neural">
               <header>
                 <strong><span>✦</span> Neural Lab</strong>
@@ -4746,6 +4765,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </section>
 
+            </DockPanelContent>
+            <DockPanelContent panelId="actions">
             <section className="glass-card neural-card neural-compact" data-contextual-panel="actions">
               <header>
                 <strong>Actions</strong>
@@ -4768,7 +4789,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 )}
               </div>
             </section>
+            </DockPanelContent>
 
+            <DockPanelContent panelId="history">
             <div className="spatial-view-dock">
               <button onClick={() => studio?.undo()} title="Undo" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
               <button onClick={() => studio?.redo()} title="Redo" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
@@ -4782,10 +4805,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 ◴{historyState?.branchPoints ? <sup>{historyState.branchPoints + 1}</sup> : null}
               </button>
             </div>
+            </DockPanelContent>
             </>}
-          </aside>
-        </div>
+          </DockManager>
+          </DockRegion>
+        </AppWorkspace>
         {desktop && (
+          <StatusBarRegion>
           <Suspense fallback={null}>
             <DesktopStatusbar
               dimensions={doc ? `${doc.width.toLocaleString()} × ${doc.height.toLocaleString()} px` : "No document open"}
@@ -4798,8 +4824,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               zoom={Math.round(view.zoom * 100)}
             />
           </Suspense>
+          </StatusBarRegion>
         )}
-      </section>
+      </AppWindow>
 
       {showExportMenu && (
         <Suspense fallback={null}>
@@ -4837,6 +4864,32 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               <button onClick={() => setShowWorkspaceSettings(false)} aria-label="Close workspace settings">×</button>
             </div>
             <p>Reorder workspace tabs, keep only the tools you use, and assign a conflict-free single-key shortcut.</p>
+            <section className="workspace-layout-settings" aria-label="Panel layouts">
+              <div className="workspace-layout-heading">
+                <span><strong>Panel layouts</strong><small>Dock positions, tabs, sizes, and collapsed state</small></span>
+                <button type="button" onClick={() => {
+                  const name = window.prompt("Workspace name")?.trim();
+                  if (!name) return;
+                  const saved = { ...dockLayout, workspace: name };
+                  setCustomDockWorkspaces((current) => ({ ...current, [name]: saved }));
+                  setDockLayout(saved);
+                }}>＋ Save current</button>
+              </div>
+              <div className="workspace-layout-grid">
+                {BUILT_IN_WORKSPACES.map((name) => (
+                  <button key={name} type="button" className={dockLayout.workspace === name ? "active" : ""} onClick={() => applyDockWorkspace(defaultDockLayout(name))}>
+                    <strong>{name}</strong><small>Built-in</small>
+                  </button>
+                ))}
+                {Object.entries(customDockWorkspaces).map(([name, layout]) => (
+                  <div key={name} className={dockLayout.workspace === name ? "active" : ""}>
+                    <button type="button" onClick={() => applyDockWorkspace(layout)}><strong>{name}</strong><small>Custom</small></button>
+                    <button type="button" aria-label={`Delete ${name} workspace`} onClick={() => setCustomDockWorkspaces((current) => Object.fromEntries(Object.entries(current).filter(([candidate]) => candidate !== name)))}>×</button>
+                  </div>
+                ))}
+              </div>
+              <button type="button" onClick={() => applyDockWorkspace(defaultDockLayout())}>Reset default panel layout</button>
+            </section>
             <div style={{ display: "grid", gridTemplateColumns: "1fr", alignItems: "stretch", gap: 6, padding: "8px 12px", height: "auto" }}>
               <strong style={{ fontSize: 11 }}>Workspace order</strong>
               {orderedWorkspaces.map(([id, label], index) => (
@@ -5248,6 +5301,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         </div>
       )}
       {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
-    </main>
+    </AppShell>
   );
 }

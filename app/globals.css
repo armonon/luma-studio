@@ -9646,6 +9646,221 @@ html[data-luma-platform="desktop"] .studio-project-title strong::after {
   white-space: nowrap;
 }
 
+/* Professional shell infrastructure -------------------------------------------------
+ * Kept at the end of the cascade so the dock model, rather than historical
+ * fixed-column rules, owns panel placement and sizing. */
+.spatial-workspace[data-dock-location="right"] {
+  grid-template-columns: 58px minmax(0, 1fr) auto;
+}
+
+.spatial-workspace[data-dock-location="left"] {
+  grid-template-columns: 58px auto minmax(0, 1fr);
+}
+
+.spatial-workspace[data-dock-location="left"] > .spatial-toolbar { grid-column: 1; }
+.spatial-workspace[data-dock-location="left"] > .dock-manager { grid-column: 2; grid-row: 1; }
+.spatial-workspace[data-dock-location="left"] > .spatial-canvas-column { grid-column: 3; grid-row: 1; }
+
+.spatial-workspace[data-dock-location="bottom"] {
+  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.spatial-workspace[data-dock-location="bottom"] > .spatial-toolbar { grid-column: 1; grid-row: 1 / 3; }
+.spatial-workspace[data-dock-location="bottom"] > .spatial-canvas-column { grid-column: 2; grid-row: 1; }
+.spatial-workspace[data-dock-location="bottom"] > .dock-manager {
+  grid-column: 2;
+  grid-row: 2;
+  width: auto !important;
+  min-height: 160px;
+}
+
+.spatial-workspace[data-dock-location="floating"] {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.spatial-workspace[data-dock-location="floating"] > .dock-manager {
+  position: fixed;
+  z-index: 120;
+  top: 94px;
+  right: 22px;
+  bottom: 44px;
+  min-width: 260px;
+  border: 1px solid rgba(122, 130, 145, 0.45);
+  border-radius: 9px;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.34);
+}
+
+.dock-manager {
+  position: relative;
+  gap: 0;
+  min-width: 0;
+}
+
+.dock-tabbar {
+  z-index: 5;
+  display: flex;
+  min-height: 32px;
+  flex: 0 0 32px;
+  align-items: stretch;
+  border-bottom: 1px solid rgba(127, 136, 151, 0.2);
+  background: rgba(23, 25, 30, 0.96);
+}
+
+.dock-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dock-tabs::-webkit-scrollbar { display: none; }
+
+.dock-tabs > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  border-right: 1px solid rgba(127, 136, 151, 0.15);
+  color: #9ba1ac;
+}
+
+.dock-tabs > div.active {
+  background: #171a1f;
+  color: #eef1f6;
+  box-shadow: inset 0 -2px #2688f4;
+}
+
+.dock-tabs button,
+.dock-collapse {
+  height: 31px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dock-tabs [role="tab"] {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px 0 9px;
+}
+
+.dock-tabs [role="tab"] strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  font-weight: 590;
+}
+
+.dock-tab-close {
+  width: 22px;
+  padding: 0 5px 1px 1px !important;
+  opacity: 0;
+}
+
+.dock-tabs > div:hover .dock-tab-close,
+.dock-tab-close:focus-visible { opacity: 0.72; }
+
+.dock-collapse {
+  width: 28px;
+  border-left: 1px solid rgba(127, 136, 151, 0.15);
+  font-size: 16px;
+}
+
+.dock-manager:has(.dock-collapse[aria-expanded="false"]) {
+  width: 34px !important;
+  min-width: 34px;
+}
+
+.dock-manager:has(.dock-collapse[aria-expanded="false"]) .dock-tabs {
+  display: none;
+}
+
+.dock-resizer {
+  position: absolute;
+  z-index: 10;
+  touch-action: none;
+}
+
+.dock-resizer-right { top: 0; bottom: 0; left: -4px; width: 8px; cursor: ew-resize; }
+.dock-resizer-left { top: 0; right: -4px; bottom: 0; width: 8px; cursor: ew-resize; }
+.dock-resizer-bottom { top: -4px; right: 0; left: 0; height: 8px; cursor: ns-resize; }
+.dock-resizer-floating { display: none; }
+
+.dock-drop-targets {
+  position: absolute;
+  z-index: 50;
+  inset: 42px 8px 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  place-content: center;
+  gap: 8px;
+  padding: 16px;
+  border: 1px dashed rgba(58, 150, 255, 0.8);
+  border-radius: 7px;
+  background: rgba(11, 18, 28, 0.82);
+  backdrop-filter: blur(10px);
+}
+
+.dock-drop-targets button {
+  min-height: 42px;
+  border: 1px solid rgba(76, 159, 255, 0.48);
+  border-radius: 5px;
+  background: rgba(35, 133, 244, 0.14);
+  color: #dcecff;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.dock-drop-targets button:hover,
+.dock-drop-targets button:focus-visible {
+  background: rgba(35, 133, 244, 0.38);
+  outline: 2px solid #2688f4;
+  outline-offset: 1px;
+}
+
+.dock-collapsed-rail {
+  display: grid;
+  width: 34px;
+  min-height: 0;
+  place-items: center;
+  border-left: 1px solid rgba(127, 136, 151, 0.2);
+  background: #111318;
+  color: #8c929d;
+}
+
+.dock-collapsed-rail span {
+  writing-mode: vertical-rl;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+html[data-luma-platform="desktop"] .dock-tabbar {
+  display: flex !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-dock-managed][data-dock-active="layers"] > :not(.dock-tabbar):not(.layers-card):not(.dock-resizer):not(.dock-drop-targets),
+html[data-luma-platform="desktop"] .spatial-inspector[data-dock-managed][data-dock-active="properties"] > .layers-card,
+html[data-luma-platform="desktop"] .spatial-inspector[data-dock-managed][data-dock-active="neural"] > :not(.dock-tabbar):not([data-contextual-panel="neural"]):not(.dock-resizer):not(.dock-drop-targets) {
+  display: none !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-dock-managed][data-dock-active="properties"] > .desktop-properties-card {
+  display: block !important;
+}
+
+html[data-luma-platform="desktop"] .spatial-inspector[data-dock-managed][data-dock-active="neural"] > [data-contextual-panel="neural"] {
+  display: block !important;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
 html[data-luma-platform="desktop"] .desktop-statusbar {
   display: flex;
 }
@@ -12829,4 +13044,329 @@ html[data-luma-platform="desktop"] .space-deck kbd {
 html[data-luma-platform="desktop"] :is(button, select, input, [role="button"], [role="option"]):focus-visible {
   outline: 2px solid #4ba7ff;
   outline-offset: 2px;
+}
+
+/* Dock placement is runtime state, so it must win over fixed responsive
+   workspace templates declared by older visual layers above. */
+html[data-luma-platform="desktop"] .spatial-workspace[data-dock-location="right"] {
+  grid-template-columns: 50px minmax(0, 1fr) auto;
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace[data-dock-location="left"] {
+  grid-template-columns: 50px auto minmax(0, 1fr);
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace[data-dock-location="bottom"] {
+  grid-template-columns: 50px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace[data-dock-location="floating"] {
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+
+.workspace-layout-settings {
+  display: grid;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 10px;
+  border: 1px solid rgba(127, 136, 151, 0.22);
+  border-radius: 8px;
+  background: rgba(127, 136, 151, 0.06);
+}
+
+.workspace-layout-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-layout-heading > span {
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-layout-heading small,
+.workspace-layout-grid small {
+  opacity: 0.62;
+  font-size: 9px;
+}
+
+.workspace-layout-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.workspace-layout-grid > button,
+.workspace-layout-grid > div {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  align-items: stretch;
+  border: 1px solid rgba(127, 136, 151, 0.2);
+  border-radius: 6px;
+  background: rgba(127, 136, 151, 0.05);
+}
+
+.workspace-layout-grid > button,
+.workspace-layout-grid > div > button:first-child {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  align-content: center;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.workspace-layout-grid > .active,
+.workspace-layout-grid > button.active {
+  border-color: #2688f4;
+  background: rgba(38, 136, 244, 0.12);
+}
+
+/* Normalized multi-group dock ------------------------------------------------------ */
+html[data-luma-platform="desktop"] .spatial-workspace,
+.spatial-workspace {
+  grid-template-columns: 58px auto minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+html[data-luma-platform="desktop"] .spatial-workspace {
+  grid-template-columns: 50px auto minmax(0, 1fr) auto;
+}
+
+.spatial-workspace > .spatial-toolbar {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+
+.spatial-workspace > .spatial-canvas-column {
+  grid-column: 3;
+  grid-row: 1;
+}
+
+.dock-system { display: contents; }
+
+.dock-stack {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-color: rgba(127, 136, 151, 0.2);
+  background: #101217;
+}
+
+.dock-stack-left,
+.dock-stack-right {
+  width: var(--dock-stack-size, 300px);
+  flex-direction: column;
+}
+
+.dock-stack-left { grid-column: 2; grid-row: 1; border-right: 1px solid rgba(127, 136, 151, 0.2); }
+.dock-stack-right { grid-column: 4; grid-row: 1; border-left: 1px solid rgba(127, 136, 151, 0.2); }
+
+.dock-stack-bottom {
+  grid-column: 2 / 5;
+  grid-row: 2;
+  height: var(--dock-stack-size, 260px);
+  flex-direction: row;
+  border-top: 1px solid rgba(127, 136, 151, 0.2);
+}
+
+.dock-group.spatial-inspector {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: var(--dock-weight, 1) 1 0;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: #101217;
+}
+
+.dock-group-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.dock-group-menu-trigger {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.dock-group-menu-trigger:hover,
+.dock-group-menu-trigger:focus-visible,
+.dock-group-menu[data-open="true"] > .dock-group-menu-trigger { color: var(--text); background: rgba(255, 255, 255, 0.06); outline: none; }
+
+.dock-group-menu > div {
+  position: fixed;
+  z-index: 160;
+  width: 210px;
+  margin: 4px 0 0 -180px;
+  padding: 4px;
+  border: 1px solid rgba(127, 136, 151, 0.28);
+  border-radius: 6px;
+  background: #1a1d23;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+}
+
+.dock-group-menu button {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.dock-group-menu button:hover,
+.dock-group-menu button:focus-visible { background: rgba(76, 136, 255, 0.18); outline: none; }
+
+.dock-group[data-collapsed="true"] {
+  min-height: 32px;
+  flex: 0 0 32px;
+}
+
+.dock-stack-bottom .dock-group[data-collapsed="true"] {
+  width: 34px;
+  min-width: 34px;
+  height: 100%;
+  flex-basis: 34px;
+}
+
+.dock-group .dock-tabbar {
+  display: flex !important;
+  width: 100%;
+}
+
+.dock-panel-body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+
+html[data-luma-platform="desktop"] .dock-panel-body > .glass-card,
+html[data-luma-platform="desktop"] .dock-panel-body > [data-contextual-panel],
+html[data-luma-platform="desktop"] .dock-panel-body > .contextual-panel-host,
+.dock-panel-body > .glass-card,
+.dock-panel-body > [data-contextual-panel],
+.dock-panel-body > .contextual-panel-host {
+  display: block !important;
+  width: 100%;
+  flex: none;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(127, 136, 151, 0.18);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+html[data-luma-platform="desktop"] .dock-panel-body > .layers-card,
+.dock-panel-body > .layers-card {
+  display: flex !important;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  background: transparent;
+}
+
+.dock-panel-body > .desktop-properties-card { max-height: none !important; }
+.dock-panel-body > .contextual-panel-host > .glass-card { border: 0; border-radius: 0; box-shadow: none; }
+
+.dock-panel-empty {
+  display: grid;
+  min-height: 120px;
+  place-content: center;
+  gap: 4px;
+  padding: 18px;
+  color: #858c98;
+  text-align: center;
+}
+
+.dock-panel-empty strong { color: #c7ccd4; font-size: 11px; }
+.dock-panel-empty span { font-size: 9px; }
+
+.dock-split-resizer {
+  z-index: 8;
+  flex: 0 0 5px;
+  background: transparent;
+  touch-action: none;
+}
+
+.dock-split-resizer-left,
+.dock-split-resizer-right { width: 100%; height: 5px; cursor: ns-resize; }
+.dock-split-resizer-bottom { width: 5px; height: 100%; cursor: ew-resize; }
+.dock-split-resizer:hover { background: rgba(38, 136, 244, 0.6); }
+
+.dock-floating-panel {
+  position: fixed;
+  z-index: 130;
+  display: flex;
+  min-width: 220px;
+  min-height: 160px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(127, 136, 151, 0.4);
+  border-radius: 7px;
+  background: #101217;
+  color: #dfe2e7;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.45);
+}
+
+.dock-floating-panel > header {
+  display: flex;
+  height: 32px;
+  flex: 0 0 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 5px 0 9px;
+  border-bottom: 1px solid rgba(127, 136, 151, 0.22);
+  cursor: move;
+}
+
+.dock-floating-panel > header strong { min-width: 0; flex: 1; font-size: 10px; }
+.dock-floating-panel > header button { height: 23px; border: 0; border-radius: 3px; background: rgba(255,255,255,.06); color: inherit; font-size: 9px; }
+
+.dock-floating-resizer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 15px;
+  height: 15px;
+  cursor: nwse-resize;
+}
+
+.dock-system[data-dragging="true"] .dock-drop-targets {
+  position: fixed;
+  z-index: 200;
+  inset: 50% auto auto 50%;
+  display: grid;
+  width: min(460px, calc(100vw - 40px));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  transform: translate(-50%, -50%);
 }

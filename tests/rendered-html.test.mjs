@@ -55,8 +55,8 @@ test("renders the unified interactive studio route", async () => {
   assert.match(html, /Neural Lab/);
   assert.match(html, /Layers/);
   assert.match(html, /Saved locally/);
-  assert.match(html, /Inspector panels/);
-  assert.match(html, />Inspector</);
+  assert.match(html, /right docked panels/);
+  assert.match(html, /Properties panel options/);
   assert.match(html, /Layer Focus/);
   assert.match(html, />FOCUS</);
   assert.match(html, />Focus</);

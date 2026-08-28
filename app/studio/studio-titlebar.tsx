@@ -2,6 +2,7 @@
 
 import { useRef } from "react";
 import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2 } from "lucide-react";
+import type { StudioCommand } from "../desktop/menu-model";
 
 export default function StudioTitlebar({
   desktop,
@@ -13,16 +14,8 @@ export default function StudioTitlebar({
   exportOpen,
   filtersOpen,
   onBack,
-  onOpen,
-  onUndo,
-  onRedo,
-  onFit,
-  onSave,
-  onFilters,
-  onBatch,
-  onHistory,
-  onSettings,
-  onExport,
+  onCommand,
+  commandEnabled,
 }: {
   desktop: boolean;
   projectName: string;
@@ -33,16 +26,8 @@ export default function StudioTitlebar({
   exportOpen: boolean;
   filtersOpen: boolean;
   onBack: () => void;
-  onOpen: () => void;
-  onUndo: () => void;
-  onRedo: () => void;
-  onFit: () => void;
-  onSave: () => void;
-  onFilters: () => void;
-  onBatch: () => void;
-  onHistory: () => void;
-  onSettings: () => void;
-  onExport: () => void;
+  onCommand: (command: StudioCommand) => void;
+  commandEnabled: (command: StudioCommand) => boolean;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const run = (action: () => void) => {
@@ -64,24 +49,24 @@ export default function StudioTitlebar({
       </div>
 
       <div className="spatial-share-actions">
-        <button className="studio-icon-button" onClick={onUndo} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo}><Undo2 /></button>
-        <button className="studio-icon-button" onClick={onRedo} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!canRedo}><Redo2 /></button>
+        <button className="studio-icon-button" onClick={() => onCommand("undo")} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo || !commandEnabled("undo")}><Undo2 /></button>
+        <button className="studio-icon-button" onClick={() => onCommand("redo")} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!canRedo || !commandEnabled("redo")}><Redo2 /></button>
         <span className="studio-action-divider" />
-        <button className="studio-header-button studio-fit-button" onClick={onFit}>Fit</button>
+        <button className="studio-header-button studio-fit-button" onClick={() => onCommand("zoom-fit")} disabled={!commandEnabled("zoom-fit")}>Fit</button>
         <span className="studio-zoom-readout">{zoom}%</span>
         <details ref={menuRef} className="studio-app-menu">
           <summary aria-label="More application actions"><Ellipsis /></summary>
           <div>
-            <button onClick={() => run(onOpen)}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
-            <button onClick={() => run(onSave)}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
+            <button onClick={() => run(() => onCommand("open"))} disabled={!commandEnabled("open")}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
+            <button onClick={() => run(() => onCommand("save"))} disabled={!commandEnabled("save")}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
             <hr />
-            <button className={filtersOpen ? "active" : ""} onClick={() => run(onFilters)}><span>Filters</span></button>
-            <button onClick={() => run(onBatch)}><span>Batch processing</span></button>
-            <button onClick={() => run(onHistory)}><span>Version history</span></button>
-            <button onClick={() => run(onSettings)}><span>Workspaces & shortcuts</span></button>
+            <button className={filtersOpen ? "active" : ""} onClick={() => run(() => onCommand("filter-gallery"))} disabled={!commandEnabled("filter-gallery")}><span>Filters</span></button>
+            <button onClick={() => run(() => onCommand("batch"))} disabled={!commandEnabled("batch")}><span>Batch processing</span></button>
+            <button onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><span>Version history</span></button>
+            <button onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Workspaces & shortcuts</span></button>
           </div>
         </details>
-        <button className={`spatial-export ${exportOpen ? "active" : ""}`} onClick={onExport} aria-haspopup="dialog" aria-expanded={exportOpen}>
+        <button className={`spatial-export ${exportOpen ? "active" : ""}`} onClick={() => onCommand("export")} aria-haspopup="dialog" aria-expanded={exportOpen} disabled={!commandEnabled("export")}>
           Export <ChevronDown />
         </button>
       </div>

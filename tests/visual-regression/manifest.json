@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "references": [
+    {
+      "file": "reference/studio-layers-1920x1080.jpg",
+      "width": 1920,
+      "height": 1080,
+      "state": "single document, layers panel, radial warp selected"
+    },
+    {
+      "file": "reference/studio-properties-1440x900.jpg",
+      "width": 1440,
+      "height": 900,
+      "state": "single document, properties panel, transform context"
+    },
+    {
+      "file": "reference/studio-neural-1280x800.jpg",
+      "width": 1280,
+      "height": 800,
+      "state": "single document, Neural Lab panel"
+    }
+  ],
+  "requiredFutureStates": [
+    "empty document",
+    "multiple documents",
+    "floating panel",
+    "collapsed panel rail",
+    "brush selected",
+    "text selected",
+    "transform active"
+  ]
+}
