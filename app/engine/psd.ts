@@ -1884,6 +1884,18 @@ export function photoshopCompatibilityReport(
       message: `Bloom, Relief and Long Shadow have no Photoshop layer style equivalent, so they are not written to the file (${luminanceLayers.length} layer${luminanceLayers.length === 1 ? "" : "s"}). Rasterize those layers to keep the look.`,
     });
   }
+  // A "color lookup" descriptor names a LUT; it does not carry one. Photoshop
+  // resolves the name against its own library, where "Luma <preset>" does not
+  // exist, so the layer arrives inert. Intensity is folded into layer opacity
+  // as the closest available approximation.
+  const lookupLayers = doc.layers.filter((layer) => layer.proAdjustment?.kind === "color-lookup");
+  if (lookupLayers.length) {
+    issues.push({
+      code: "COLOR_LOOKUP_NOT_EXPORTED",
+      severity: "warning",
+      message: `Color Lookup is written as a named 3D LUT reference, and Photoshop has no LUT by that name, so ${lookupLayers.length} layer${lookupLayers.length === 1 ? " arrives" : "s arrive"} with no effect. The flattened composite keeps the exact Luma rendering; rasterize those layers to keep the look in a layered file.`,
+    });
+  }
   const relightLayers = doc.layers.filter((layer) => layer.proAdjustment?.kind === "relight-field");
   if (relightLayers.length) {
     issues.push({

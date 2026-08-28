@@ -18,11 +18,17 @@ function browserStorage(): StorageLike | null {
   try { return typeof localStorage === "undefined" ? null : localStorage; } catch { return null; }
 }
 
-/** Remove absolute user paths and query strings before anything is persisted. */
+/**
+ * Remove absolute user paths and query strings before anything is persisted.
+ *
+ * The home-directory rule has to cover backslashes as well as forward ones:
+ * the desktop build ships for Windows, where a stack trace carries
+ * `C:\Users\<name>\…` and the POSIX-only pattern left the username in place.
+ */
 export function sanitizeDiagnosticValue(value: unknown, limit: number) {
   return String(value ?? "Unknown error")
     .replace(/file:\/\/[^\s)]+/g, "[local-file]")
-    .replace(/\/(Users|home)\/[^/\s]+\//g, "/$1/[user]/")
+    .replace(/([/\\])(Users|home)\1[^/\\\s]+\1/g, "$1$2$1[user]$1")
     .replace(/https?:\/\/([^/?#\s]+)[^\s)]*/g, "https://$1/[path]")
     .slice(0, limit);
 }

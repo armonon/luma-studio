@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { LocalDiagnostics } from "../app/engine/diagnostics.ts";
+import { LocalDiagnostics, sanitizeDiagnosticValue } from "../app/engine/diagnostics.ts";
 
 function memoryStorage() {
   const values = new Map<string, string>();
@@ -34,4 +34,17 @@ test("blocked storage degrades to an in-memory crash ring", () => {
   });
   assert.doesNotThrow(() => diagnostics.record("rejection", "offline"));
   assert.equal(diagnostics.summary().events, 1);
+});
+
+test("diagnostics redact a Windows home directory as well as a POSIX one", () => {
+  // The desktop build ships for Windows, where a stack frame reads
+  // C:\Users\<name>\… — and the redaction pattern matched forward slashes
+  // only, so the username rode along into every persisted crash report.
+  assert.equal(
+    sanitizeDiagnosticValue("at C:\\Users\\armon\\Documents\\design.psd", 200),
+    "at C:\\Users\\[user]\\Documents\\design.psd",
+  );
+  assert.equal(sanitizeDiagnosticValue("at /Users/armon/secret/a.psd", 200), "at /Users/[user]/secret/a.psd");
+  assert.equal(sanitizeDiagnosticValue("at /home/armon/work/a.psd", 200), "at /home/[user]/work/a.psd");
+  assert.equal(sanitizeDiagnosticValue("at D:\\home\\armon\\x.psd", 200), "at D:\\home\\[user]\\x.psd");
 });

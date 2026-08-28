@@ -874,3 +874,21 @@ test("unhandled RGB ICC resources are retained byte-for-byte", async () => {
   const roundTripped = exportPsd(imported);
   assert.deepEqual([...extractPhotoshopImageResources(roundTripped).find((resource) => resource.id === 1039)!.data], [...icc.data]);
 });
+
+test("color lookup is reported as unexportable rather than dropped in silence", () => {
+  // A Photoshop "color lookup" descriptor names a LUT, it does not carry one.
+  // We write "Luma <preset>", which resolves against nothing in Photoshop's
+  // library, so the layer lands inert — the same silent loss the pattern,
+  // backdrop and relight warnings above exist to prevent.
+  const doc = createDocument(16, 16);
+  const layer = createRasterLayer("Graded", newCanvas(16, 16));
+  layer.proAdjustment = { kind: "color-lookup", preset: "cinematic", intensity: 0.65 };
+  doc.layers = [layer];
+
+  const issue = photoshopCompatibilityReport(doc).issues
+    .find((candidate) => candidate.code === "COLOR_LOOKUP_NOT_EXPORTED");
+  assert.ok(issue, "a LUT reference Photoshop cannot resolve must not go unmentioned");
+  assert.equal(issue.severity, "warning");
+  assert.ok(photoshopCompatibilityReport(doc).canExport, "the rest of the document still exports");
+});
+
