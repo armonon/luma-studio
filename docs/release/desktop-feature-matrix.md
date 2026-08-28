@@ -1,6 +1,7 @@
 # Luma Studio desktop feature matrix
 
 Audit date: 2026-08-25  
+Latest verification: 2026-08-28 — see `rc-hardening-report-2026-08-28.md`
 Baseline: `main` at `3abd794`, plus the fixes documented below  
 Currency: see [Changes since the audit](#changes-since-the-audit) — `main` has moved on  
 Target: native desktop production build (`vite.desktop.config.ts` / Tauri)
