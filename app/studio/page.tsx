@@ -407,6 +407,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const [pendingCloseDocumentId, setPendingCloseDocumentId] = useState<string | null>(null);
   const [pendingNativeClose, setPendingNativeClose] = useState(false);
+  const unsavedDialogRef = useRef<HTMLElement>(null);
   const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
@@ -637,6 +638,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           // complete version history.
           for (const entry of ordered) {
             project = await s.importProject(entry.blob, { restoreHistory: false });
+            s.restoreDocumentSessionState(s.activeDocumentState().id, {
+              nativePath: entry.nativePath,
+              dirty: entry.dirty,
+            });
           }
           if (!project) throw new Error("Recovery workspace was empty");
           setActiveLayerId(project.doc.layers[0]?.id ?? null);
@@ -1947,6 +1952,50 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       else void confirmNativeClose();
     });
   }, [studio, desktop]);
+
+  useEffect(() => {
+    if (!pendingCloseDocumentId && !pendingNativeClose) return;
+    const dialog = unsavedDialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableButtons = () => Array.from(
+      dialog?.querySelectorAll<HTMLButtonElement>("button:not([disabled])") ?? [],
+    );
+    focusableButtons()[0]?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (pendingNativeClose) {
+          setPendingNativeClose(false);
+          void cancelNativeClose();
+        } else {
+          setPendingCloseDocumentId(null);
+        }
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const buttons = focusableButtons();
+      if (!buttons.length) return;
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (!dialog?.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      previousFocus?.focus();
+    };
+  }, [pendingCloseDocumentId, pendingNativeClose]);
 
   const saveAllAndCloseNative = async () => {
     if (!studio) return;
@@ -4745,7 +4794,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         if (!pending) return null;
         return (
           <div className="spatial-modal" role="presentation">
-            <section className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-document-title">
+            <section ref={unsavedDialogRef} className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-document-title">
               <header><strong id="unsaved-document-title">Save changes to “{pending.name}”?</strong></header>
               <p>Your edits are not in the project file yet. Recovery is not a substitute for saving.</p>
               <footer>
@@ -4759,7 +4808,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       })()}
       {pendingNativeClose && studio && (
         <div className="spatial-modal" role="presentation">
-          <section className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-quit-title">
+          <section ref={unsavedDialogRef} className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-quit-title">
             <header><strong id="unsaved-quit-title">Save before quitting Luma Studio?</strong></header>
             <p>{studio.dirtyDocuments().length} open document{studio.dirtyDocuments().length === 1 ? " has" : "s have"} unsaved changes. Quitting without saving permanently discards those edits.</p>
             <footer>

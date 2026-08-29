@@ -11,6 +11,9 @@ const config = JSON.parse(
 };
 
 const mainWindow = config.app.windows[0];
+const mainCapability = JSON.parse(
+  readFileSync(new URL("../src-tauri/capabilities/main.json", import.meta.url), "utf8"),
+) as { windows?: string[]; permissions?: string[] };
 
 test("native drag-drop interception stays disabled", () => {
   // Tauri v2 defaults dragDropEnabled to true. When true the native window
@@ -36,6 +39,17 @@ test("the desktop window can still show the full inspector", () => {
 test("the desktop build points at a static frontend", () => {
   // Without frontendDist a packaged build has nothing to serve.
   assert.equal(config.build.frontendDist, "../dist-desktop");
+});
+
+test("the main webview can receive native shell events", () => {
+  // Custom invokes are available without a core capability, which let Save As
+  // work while every Rust -> webview event silently failed. Native menus,
+  // Finder opens, and dirty-window close protection all depend on this grant.
+  assert.ok(mainCapability.windows?.includes("main"));
+  assert.ok(
+    mainCapability.permissions?.includes("core:event:default"),
+    "menu, open-file, and close-request listeners require core:event permissions",
+  );
 });
 
 test("the CSP allows the origin the desktop app actually calls", () => {

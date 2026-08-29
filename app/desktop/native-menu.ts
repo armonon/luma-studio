@@ -81,9 +81,12 @@ function subscribe(
       unlisten = stop;
       onReady?.(() => !cancelled);
     }
-  }).catch(() => {
-    // A menu that cannot subscribe is a menu that does nothing; the studio's
-    // own keyboard shortcuts still work, so this must not take the app down.
+  }).catch((error) => {
+    // A listener that cannot subscribe must not take the editor down, but it
+    // also cannot be silent: native menus, Finder opens, and close protection
+    // all travel through this bridge. A missing Tauri event capability once
+    // left the window impossible to close without Force Quit.
+    console.error(`Native event subscription failed for ${event}`, error);
   });
 
   return () => {

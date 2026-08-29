@@ -53,3 +53,24 @@ The following require user-owned files, credentials, infrastructure, or independ
 5. Install and exercise the notarized DMG on two independently identified Macs without the development environment.
 
 Until those are complete, `npm run release:status` must remain below RC2 even though the local application and safety gates are green.
+
+## Installed desktop validation follow-up
+
+The packaged application was exercised directly from `/Applications/Luma Studio.app`, including native Save/Save As, undo/redo, native Layer and Window commands, dirty-window close interception, and recovery behavior. This exposed three native-only data-safety defects that browser and engine tests did not reveal:
+
+- The Tauri webview lacked the core event capability, so native menus, Finder-open events, and close-request protection could silently fail while custom file-save invokes still worked. The main window now explicitly receives `core:event:default`, subscription failure is observable, and the configuration is covered by a regression test.
+- Unsaved-work dialogs did not own focus, trap Tab, or accept Escape. Both document-close and app-quit dialogs now autofocus their safe Cancel action, contain keyboard focus, dismiss safely, and restore prior focus.
+- Recovery checkpoints discarded the remembered native project path and dirty bit. Recovery metadata now retains both locally, while portable `.luma` archives remain free of machine-specific paths. A recovered unsaved edit therefore routes Command-S to its original file and still participates in close/quit protection.
+
+Final local evidence after these corrections:
+
+- application suite: 686/686 passed;
+- native Rust suite: 5/5 passed;
+- full ESLint and TypeScript checks passed;
+- bundle budget passed at 1,079,686 raw bytes / 297,931 gzip bytes / 279,670 Brotli bytes for the initial web closure;
+- installed native bundle: 12.75 MiB, strict ad-hoc signature valid, no developer paths, required file associations present;
+- real private Photoshop corpus: 8/8 passed;
+- extended destructive and memory-pressure campaign: 129/129 passed;
+- installed version `0.6.0-rc.0` launched successfully from `/Applications`.
+
+This closes the locally actionable RC0 desktop regressions found by the campaign. The five external blocker groups above remain unchanged and are still reported as failures rather than simulated evidence.

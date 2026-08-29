@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Allow the main editor webview to receive native menu, open-file, and close-request events.",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}

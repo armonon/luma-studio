@@ -66,3 +66,12 @@ test("native editing controls keep a legible RC type floor and keyboard focus", 
   assert.match(rule, /\.spatial-layer \.layer-name strong[\s\S]*font-size: 11px;/);
   assert.match(rule, /:focus-visible\s*\{[\s\S]*outline: 2px solid #4ba7ff;/);
 });
+
+test("unsaved-work dialogs own focus, trap Tab, and let Escape cancel safely", () => {
+  assert.match(page, /const unsavedDialogRef = useRef<HTMLElement>/);
+  assert.match(page, /focusableButtons\(\)\[0\]\?\.focus\(\)/);
+  assert.match(page, /if \(event\.key === "Escape"\)[\s\S]*cancelNativeClose\(\)/);
+  assert.match(page, /if \(event\.key !== "Tab"\) return;/);
+  assert.match(page, /dialog\?\.contains\(document\.activeElement\)/);
+  assert.equal((page.match(/ref=\{unsavedDialogRef\}/g) ?? []).length, 2);
+});

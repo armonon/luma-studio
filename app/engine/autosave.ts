@@ -87,6 +87,10 @@ export type RecoveryWorkspaceDocument = {
   id: string;
   name: string;
   active: boolean;
+  /** Stored only in the local recovery index, never inside the portable project archive. */
+  nativePath?: string;
+  /** Restored so crash-recovered edits still participate in close/quit protection. */
+  dirty: boolean;
   blob: Blob;
   updatedAt: number;
 };
@@ -104,6 +108,10 @@ export function normalizeRecoveryWorkspace(value: unknown): RecoveryWorkspaceDoc
       id: candidate.id,
       name: candidate.name || "Untitled",
       active: candidate.active === true,
+      nativePath: typeof candidate.nativePath === "string" && candidate.nativePath.length <= 4096
+        ? candidate.nativePath
+        : undefined,
+      dirty: candidate.dirty === true,
       blob: candidate.blob,
       updatedAt: typeof candidate.updatedAt === "number" && Number.isFinite(candidate.updatedAt) ? candidate.updatedAt : 0,
     }];
@@ -171,7 +179,7 @@ export async function readRecoveryWorkspace(): Promise<RecoveryWorkspaceDocument
     // Fall through to the legacy single-document recovery file.
   }
   const legacy = await readRecovery();
-  return legacy ? [{ id: "legacy", name: "Recovered project", active: true, blob: legacy, updatedAt: 0 }] : [];
+  return legacy ? [{ id: "legacy", name: "Recovered project", active: true, dirty: true, blob: legacy, updatedAt: 0 }] : [];
 }
 
 export async function readRecovery(): Promise<Blob | null> {

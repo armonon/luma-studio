@@ -1,1 +1,1 @@
-{}
+{"main-window":{"identifier":"main-window","description":"Allow the main editor webview to receive native menu, open-file, and close-request events.","local":true,"windows":["main"],"permissions":["core:event:default"]}}

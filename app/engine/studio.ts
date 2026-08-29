@@ -1199,6 +1199,21 @@ export class Studio {
     return true;
   }
 
+  /**
+   * Restores local-only session metadata after a crash checkpoint is decoded.
+   * The native path deliberately lives beside the recovery blob instead of in
+   * the portable .luma archive, so sharing a project never leaks its source
+   * machine's filesystem layout.
+   */
+  restoreDocumentSessionState(id: string, state: { nativePath?: string; dirty?: boolean }) {
+    const session = this.sessions.find((candidate) => candidate.id === id);
+    if (!session) return false;
+    session.nativePath = state.nativePath;
+    session.transientDirty = state.dirty === true;
+    this.emit();
+    return true;
+  }
+
   switchDocument(id: string) {
     if (id === this.activeSessionId) return;
     const next = this.sessions.find((session) => session.id === id);
@@ -4726,6 +4741,8 @@ export class Studio {
       id: session.id,
       name: session.name,
       active: session.id === this.activeSessionId,
+      nativePath: session.nativePath,
+      dirty: session.transientDirty || session.history.current !== session.savedHistoryNodeId,
       updatedAt: Date.now(),
       blob: await encodeLumaProject(session.doc, this.actions.list(), session.name, undefined, { mode: "recovery" }),
     };
@@ -4745,6 +4762,8 @@ export class Studio {
         id: session.id,
         name: session.name,
         active: session.id === this.activeSessionId,
+        nativePath: session.nativePath,
+        dirty: session.transientDirty || session.history.current !== session.savedHistoryNodeId,
         updatedAt,
         // Crash recovery is a current-state checkpoint, not a second project
         // archive. Persisting the complete undo graph here multiplied precision

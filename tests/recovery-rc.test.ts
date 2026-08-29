@@ -13,6 +13,8 @@ test("crash recovery checkpoints every open document and restores the active tab
   firstLayer.maskSurface.fillRect({ x: 10, y: 12, width: 8, height: 6 }, 0);
   firstLayer.bitmap = undefined;
   const firstId = studio.activeDocumentState().id;
+  studio.markDocumentSaved(firstId, "/projects/first-work.luma");
+  studio.setLayerProp(firstLayer.id, "opacity", 0.75, "Unsaved opacity");
 
   studio.resetDocument(80, 60);
   studio.addBlankRaster("Second work").bitmap = undefined;
@@ -21,6 +23,9 @@ test("crash recovery checkpoints every open document and restores the active tab
   assert.equal(checkpoints.length, 2);
   assert.equal(checkpoints.filter((entry) => entry.active).length, 1);
   assert.equal(checkpoints.find((entry) => entry.active)?.id, secondId);
+  const firstCheckpoint = checkpoints.find((entry) => entry.id === firstId);
+  assert.equal(firstCheckpoint?.nativePath, "/projects/first-work.luma");
+  assert.equal(firstCheckpoint?.dirty, true);
 
   const decoded = await Promise.all(checkpoints.map(async (entry) =>
     decodeLumaProject(await entry.blob.arrayBuffer(), { restoreHistory: false })));
@@ -30,6 +35,23 @@ test("crash recovery checkpoints every open document and restores the active tab
   assert.equal(first.doc.layers[0].maskSurface?.sample(12, 14), 0);
 
   studio.dispose();
+});
+
+test("recovered session metadata retains Save routing and dirty close protection", async () => {
+  const source = new Studio(40, 30, testCanvas(1, 1));
+  const sourceId = source.activeDocumentState().id;
+  source.markDocumentSaved(sourceId, "/projects/remembered.luma");
+  source.addBlankRaster("Unsaved recovered edit").bitmap = undefined;
+  const checkpoint = await source.exportRecoveryDocument();
+
+  const restored = new Studio(1, 1, testCanvas(1, 1));
+  await restored.importProject(checkpoint.blob, { restoreHistory: false });
+  restored.restoreDocumentSessionState(restored.activeDocumentState().id, checkpoint);
+
+  assert.equal(restored.activeDocumentState().nativePath, "/projects/remembered.luma");
+  assert.equal(restored.activeDocumentState().dirty, true);
+  source.dispose();
+  restored.dispose();
 });
 
 test("routine recovery exports only the active document", async () => {
