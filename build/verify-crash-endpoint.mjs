@@ -1,4 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import { releaseSourceId } from "./release-source-id.mjs";
+
+const sourceSha256 = releaseSourceId();
 
 const endpoint = process.env.LUMA_CRASH_ENDPOINT;
 if (!endpoint || new URL(endpoint).protocol !== "https:") {
@@ -29,12 +32,13 @@ if (response.status !== 202 || result?.accepted !== true || typeof result?.recei
 }
 await mkdir("artifacts", { recursive: true });
 await writeFile("artifacts/crash-reporting-report.json", `${JSON.stringify({
+  sourceSha256,
   generatedAt: new Date().toISOString(),
   release,
   remoteCrashReceived: true,
   receiptId: result.receiptId,
-  sensitiveDataScrubbed: true,
+  sensitiveDataScrubbed: false,
   symbolsResolved: false,
-  note: "The endpoint accepted a scrubbed synthetic crash. Symbolication must be confirmed in the collector before RC2.",
+  note: "The endpoint accepted a synthetic crash. Stored-payload scrubbing and symbolication must be independently confirmed in the collector before RC2.",
 }, null, 2)}\n`);
 console.log(`Crash endpoint accepted receipt ${result.receiptId}; symbolication remains unverified.`);

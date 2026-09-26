@@ -7,6 +7,7 @@ export default defineConfig({
   base: "./",
   publicDir: "../public",
   plugins: [react()],
+  worker: { format: "es" },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL(".", import.meta.url)),

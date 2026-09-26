@@ -22,7 +22,12 @@ const gatekeeper = commandOutput("spctl", ["--assess", "--type", "execute", "--v
 const stapler = commandOutput("xcrun", ["stapler", "validate", appPath]);
 const executable = join(appPath, "Contents/MacOS", info.CFBundleExecutable);
 const executableSha256 = createHash("sha256").update(await readFile(executable)).digest("hex");
+const build = JSON.parse(await readFile("artifacts/native-build-report.json", "utf8"));
+if (build.appPath !== appPath || build.executableSha256 !== executableSha256 || !/^[a-f0-9]{64}$/.test(build.sourceSha256 ?? "")) {
+  throw new Error("Native bundle does not match its source-bound build receipt; rebuild with npm run pro:build");
+}
 const report = {
+  sourceSha256: build.sourceSha256,
   generatedAt: new Date().toISOString(),
   status: "Accepted",
   bundleId: info.CFBundleIdentifier,

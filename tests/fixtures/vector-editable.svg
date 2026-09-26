@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+  <title>Editable vector validation fixture</title>
+  <g transform="translate(40 30)">
+    <path id="Compound-ring" fill="#7755ee" fill-rule="evenodd" d="M100 100L450 100L450 400L100 400Z M180 180L180 320L370 320L370 180Z"/>
+    <circle id="Accent" cx="540" cy="240" r="90" fill="#ff8866"/>
+    <path id="Curve" d="M100 470C250 360 430 580 650 450" fill="none" stroke="#2266dd" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

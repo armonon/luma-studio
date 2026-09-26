@@ -8,12 +8,31 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use luma_core::{composite_layer, BlendMode, LayerOptions, Surface};
+mod fonts;
+mod font_face;
+mod clipboard;
+mod print_color;
+mod update_ticket;
+mod update_download;
+mod termination;
+mod atomic_save;
+use atomic_save::atomic_write;
+
+#[tauri::command]
+async fn list_font_families() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(fonts::families).await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn read_installed_font(postscript_name: String) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || font_face::exact_face(&postscript_name))
+        .await.map_err(|error| error.to_string())?.map(tauri::ipc::Response::new)
+}
 use tauri::ipc::{InvokeBody, Request, Response};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_updater::UpdaterExt;
-use tauri::menu::{Menu, MenuBuilder, MenuItem, SubmenuBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItem, MenuItemKind, SubmenuBuilder};
 use tauri::{Emitter, Manager};
-use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Mirrors MENU_COMMAND_EVENT in app/desktop/menu-model.ts.
@@ -24,6 +43,41 @@ const OPEN_FILE_EVENT: &str = "luma://open-file";
 const CLOSE_REQUEST_EVENT: &str = "luma://close-requested";
 static ALLOW_APP_EXIT: AtomicBool = AtomicBool::new(false);
 static EXIT_PROMPT_PENDING: AtomicBool = AtomicBool::new(false);
+static MENU_STATES: std::sync::Mutex<Option<std::collections::HashMap<String, bool>>> = std::sync::Mutex::new(None);
+static UPDATE_RUNNING: AtomicBool = AtomicBool::new(false);
+static VERIFIED_UPDATE: std::sync::Mutex<update_ticket::UpdateTicket<(tauri_plugin_updater::Update, Vec<u8>)>> = std::sync::Mutex::new(update_ticket::UpdateTicket::new());
+
+struct UpdateLease;
+impl UpdateLease {
+    fn acquire() -> Result<Self, String> {
+        UPDATE_RUNNING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map(|_| Self).map_err(|_| "An update operation is already running".into())
+    }
+}
+impl Drop for UpdateLease { fn drop(&mut self) { UPDATE_RUNNING.store(false, Ordering::SeqCst); } }
+
+fn apply_menu_states(items: Vec<MenuItemKind<tauri::Wry>>, states: &std::collections::HashMap<String, bool>) -> tauri::Result<()> {
+    for item in items {
+        match item {
+            MenuItemKind::Submenu(menu) => apply_menu_states(menu.items()?, states)?,
+            MenuItemKind::MenuItem(item) => {
+                if let Some(enabled) = states.get(item.id().0.as_str()) { item.set_enabled(*enabled)?; }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_menu_command_states(app: tauri::AppHandle, states: std::collections::HashMap<String, bool>) -> Result<(), String> {
+    if states.len() > 256 || states.keys().any(|key| key.len() > 80) { return Err("Invalid menu state payload".into()); }
+    *MENU_STATES.lock().map_err(|_| "menu state lock poisoned")? = Some(states.clone());
+    if let Some(menu) = app.menu() {
+        apply_menu_states(menu.items().map_err(|error| error.to_string())?, &states).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
 
 #[derive(Default)]
 struct OpenFileBridge {
@@ -254,39 +308,11 @@ fn develop_native_raw(request: Request<'_>) -> Result<Response, String> {
     }
 }
 
-fn atomic_write(path: &std::path::Path, data: &[u8]) -> Result<(), String> {
-    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("Untitled.luma");
-    let counter = SAVE_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp = parent.join(format!(".{file_name}.luma-tmp-{}-{counter}", std::process::id()));
-    let result = (|| -> Result<(), String> {
-        let mut file = std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temp)
-            .map_err(|error| format!("Unable to create temporary save: {error}"))?;
-        if let Ok(metadata) = std::fs::metadata(path) {
-            file.set_permissions(metadata.permissions())
-                .map_err(|error| format!("Unable to preserve save permissions: {error}"))?;
-        }
-        file.write_all(data).map_err(|error| format!("Unable to write temporary save: {error}"))?;
-        file.sync_all().map_err(|error| format!("Unable to sync temporary save: {error}"))?;
-        drop(file);
-        std::fs::rename(&temp, path).map_err(|error| format!("Unable to replace save atomically: {error}"))?;
-        if let Ok(directory) = std::fs::File::open(parent) {
-            let _ = directory.sync_all();
-        }
-        Ok(())
-    })();
-    if result.is_err() { let _ = std::fs::remove_file(&temp); }
-    result
-}
-
 #[tauri::command]
 async fn open_native_file(app: tauri::AppHandle) -> Result<Response, String> {
     let selected = app.dialog().file()
-        .add_filter("Luma, images, Photoshop, and RAW", &[
-            "luma", "psd", "psb", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
+        .add_filter("Luma, SVG, images, Photoshop, and RAW", &[
+            "luma", "svg", "pdf", "lumaformtext", "lumaformmesh", "psd", "psb", "png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff",
             "dng", "cr2", "cr3", "nef", "nrw", "arw", "orf", "raf", "rw2", "pef",
         ])
         .blocking_pick_file();
@@ -305,8 +331,9 @@ async fn open_native_file(app: tauri::AppHandle) -> Result<Response, String> {
 /// about the size limit or the wire shape.
 fn read_framed_file(path: &std::path::Path) -> Result<Response, String> {
     let metadata = std::fs::metadata(path).map_err(|error| format!("Unable to inspect file: {error}"))?;
-    if metadata.len() > MAX_NATIVE_FILE_BYTES as u64 {
-        return Err(format!("File exceeds the {} MB desktop limit", MAX_NATIVE_FILE_BYTES / 1024 / 1024));
+    let limit = native_input_byte_limit(path);
+    if metadata.len() > limit as u64 {
+        return Err(format!("File exceeds the {} MB desktop limit for this format", limit / 1024 / 1024));
     }
     use std::io::Read;
     let framed_path = path.to_string_lossy();
@@ -322,6 +349,16 @@ fn read_framed_file(path: &std::path::Path) -> Result<Response, String> {
         .and_then(|mut file| file.read_exact(&mut response[start..]))
         .map_err(|error| format!("Unable to read file: {error}"))?;
     Ok(Response::new(response))
+}
+
+fn native_input_byte_limit(path: &std::path::Path) -> usize {
+    match path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase().as_str() {
+        "svg" => 2 * 1024 * 1024,
+        "pdf" => 8 * 1024 * 1024,
+        "lumaformtext" => 4 * 1024 * 1024,
+        "lumaformmesh" => 8 * 1024 * 1024,
+        _ => MAX_NATIVE_FILE_BYTES,
+    }
 }
 
 /// Read a document the OS asked us to open, by absolute path.
@@ -364,7 +401,7 @@ fn cancel_native_exit() {
 /// then installation checks the endpoint again and refuses a changed version.
 #[tauri::command]
 async fn check_desktop_update(app: tauri::AppHandle) -> Result<Option<serde_json::Value>, String> {
-    let updater = app.updater().map_err(|error| format!("Update service unavailable: {error}"))?;
+    let updater = app.updater_builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|error| format!("Update service unavailable: {error}"))?;
     let update = updater.check().await.map_err(|error| format!("Unable to check for updates: {error}"))?;
     Ok(update.map(|candidate| serde_json::json!({
         "currentVersion": candidate.current_version,
@@ -374,11 +411,12 @@ async fn check_desktop_update(app: tauri::AppHandle) -> Result<Option<serde_json
     })))
 }
 
-/// Download, signature-check, install, and relaunch one exact advertised build.
-/// Signature verification is performed inside the Tauri updater before install.
+/// Download and signature-check only. No executable is replaced here.
 #[tauri::command]
-async fn install_desktop_update(app: tauri::AppHandle, expected_version: String) -> Result<(), String> {
-    let updater = app.updater().map_err(|error| format!("Update service unavailable: {error}"))?;
+async fn prepare_desktop_update(app: tauri::AppHandle, expected_version: String) -> Result<String, String> {
+    let _lease = UpdateLease::acquire()?;
+    VERIFIED_UPDATE.lock().map_err(|_| "update ticket lock poisoned")?.clear();
+    let updater = app.updater_builder().timeout(std::time::Duration::from_secs(30)).build().map_err(|error| format!("Update service unavailable: {error}"))?;
     let update = updater
         .check()
         .await
@@ -390,10 +428,25 @@ async fn install_desktop_update(app: tauri::AppHandle, expected_version: String)
             update.version
         ));
     }
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|error| format!("The signed update could not be installed: {error}"))?;
+    let public_key = app.config().plugins.0.get("updater").and_then(|config| config.get("pubkey")).and_then(|key| key.as_str())
+        .ok_or("Updater public key is not configured")?;
+    let bytes = update_download::download(&update, public_key).await?;
+    Ok(VERIFIED_UPDATE.lock().map_err(|_| "update ticket lock poisoned")?.stage((update, bytes)))
+}
+
+#[tauri::command]
+fn discard_desktop_update(token: String) -> Result<(), String> {
+    VERIFIED_UPDATE.lock().map_err(|_| "update ticket lock poisoned")?.discard(&token);
+    Ok(())
+}
+
+/// Consume the exact verified bytes, with no second network wait after the
+/// frontend has checkpointed and revalidated all documents. Failure never exits.
+#[tauri::command]
+fn install_desktop_update(app: tauri::AppHandle, token: String) -> Result<(), String> {
+    let _lease = UpdateLease::acquire()?;
+    let (update, bytes) = VERIFIED_UPDATE.lock().map_err(|_| "update ticket lock poisoned")?.take(&token)?;
+    update.install(bytes).map_err(|error| format!("The signed update could not be installed: {error}"))?;
     app.restart();
 }
 
@@ -543,8 +596,9 @@ fn core_info() -> serde_json::Value {
 /// Photoshop has it; an item Luma cannot perform is absent rather than present
 /// and inert.
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let states = MENU_STATES.lock().ok().and_then(|states| states.clone()).unwrap_or_default();
     let item = |id: &str, label: &str, accelerator: Option<&str>| {
-        MenuItem::with_id(app, id, label, true, accelerator)
+        MenuItem::with_id(app, id, label, states.get(id).copied().unwrap_or(false), accelerator)
     };
 
     let app_menu = SubmenuBuilder::new(app, "Luma Studio")
@@ -588,15 +642,17 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let recent_submenu = recent_menu.build()?;
 
     let file = SubmenuBuilder::new(app, "File")
+        .item(&item("new-document", "New…", Some("CmdOrCtrl+N"))?)
         .item(&item("open", "Open…", Some("CmdOrCtrl+O"))?)
         .item(&recent_submenu)
         .item(&item("save", "Save", Some("CmdOrCtrl+S"))?)
         .item(&item("save-as", "Save As…", Some("CmdOrCtrl+Shift+S"))?)
         .separator()
-        .item(&item("export", "Export…", Some("CmdOrCtrl+E"))?)
+        .item(&item("export", "Export…", Some("CmdOrCtrl+Shift+E"))?)
+        .item(&item("export-print", "CMYK Print PDF…", None)?)
         .item(&item("batch", "Batch Process…", None)?)
         .separator()
-        .close_window()
+        .item(&item("close-document", "Close Document", Some("CmdOrCtrl+W"))?)
         .build()?;
 
     let edit = SubmenuBuilder::new(app, "Edit")
@@ -604,12 +660,21 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?)
         .separator()
         // The text roles are what make copy and paste work inside the studio's
-        // own inputs; they never reach the engine.
+        // own inputs; canvas clipboard events route to pixel commands instead.
         .cut()
         .copy()
         .paste()
         .separator()
+        .item(&item("copy-pixels", "Copy Selected Pixels", None)?)
+        .item(&item("copy-merged", "Copy Merged", Some("CmdOrCtrl+Shift+C"))?)
+        .item(&item("cut-pixels", "Cut Selected Pixels", None)?)
+        .item(&item("paste-pixels", "Paste Pixels as Layer", None)?)
+        .item(&item("paste-in-place", "Paste in Place", Some("CmdOrCtrl+Shift+V"))?)
+        .item(&item("delete-pixels", "Delete Selected Pixels", None)?)
+        .item(&item("selection-to-layer", "Layer via Copy", Some("CmdOrCtrl+Alt+J"))?)
+        .separator()
         .item(&item("copy-layer-style", "Copy Layer Style", None)?)
+        .item(&item("define-custom-shape", "Define Custom Shape", None)?)
         .item(&item("paste-layer-style", "Paste Layer Style", None)?)
         .separator()
         .item(&item("history", "Version History…", None)?)
@@ -624,14 +689,23 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let layer = SubmenuBuilder::new(app, "Layer")
         .item(&item("new-layer", "New Layer", Some("CmdOrCtrl+Shift+N"))?)
         .item(&item("duplicate-layer", "Duplicate Layer", Some("CmdOrCtrl+J"))?)
-        .item(&item("group-layer", "Group Layer", Some("CmdOrCtrl+G"))?)
+        .item(&item("group-layer", "Group Selected Layers", Some("CmdOrCtrl+G"))?)
+        .item(&item("ungroup-layers", "Ungroup Selected Layers", Some("CmdOrCtrl+Shift+G"))?)
+        .item(&item("merge-layers", "Merge Selected Layers", Some("CmdOrCtrl+E"))?)
+        .item(&item("rename-layer", "Rename Layer…", None)?)
+        .item(&item("toggle-layer-lock", "Lock / Unlock Selected Layers", None)?)
+        .item(&item("toggle-layer-visibility", "Show / Hide Selected Layers", None)?)
         .item(&item("delete-layer", "Delete Layer", None)?)
         .item(&item("convert-smart-object", "Convert to Smart Object", None)?)
+        .item(&item("replace-smart-content", "Replace Raster Contents…", None)?)
+        .item(&item("edit-smart-content", "Edit Smart Contents…", None)?)
+        .item(&item("apply-smart-content", "Apply Contents to Parent", None)?)
         .separator()
         .item(&item("bring-forward", "Bring Forward", Some("CmdOrCtrl+]"))?)
         .item(&item("send-backward", "Send Backward", Some("CmdOrCtrl+["))?)
         .separator()
         .item(&item("layer-style", "Layer Style…", None)?)
+        .item(&item("recolor", "Recolor…", Some("CmdOrCtrl+Alt+R"))?)
         .separator()
         .item(&item("curves", "New Curves Adjustment", None)?)
         .item(&item("levels", "New Levels Adjustment", None)?)
@@ -644,6 +718,14 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("invert-selection", "Inverse", Some("CmdOrCtrl+Shift+I"))?)
         .separator()
         .item(&item("select-subject", "Subject", None)?)
+        .item(&item("select-channel", "Load Composite Channel", Some("CmdOrCtrl+Alt+2"))?)
+        .item(&item("channel-save", "Save Selection as Alpha Channel", Some("CmdOrCtrl+Shift+Alt+2"))?)
+        .item(&item("channel-load", "Load Saved Alpha Channel", None)?)
+        .item(&item("channel-update", "Replace Alpha with Selection", None)?)
+        .item(&item("channel-rename", "Rename Alpha Channel", None)?)
+        .item(&item("channel-invert", "Invert Alpha Channel", None)?)
+        .item(&item("channel-calculate", "Calculate Alpha Channels", None)?)
+        .item(&item("channel-delete", "Delete Alpha Channel", None)?)
         .build()?;
 
     let filter = SubmenuBuilder::new(app, "Filter")
@@ -663,6 +745,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("zoom-actual", "Actual Size", Some("CmdOrCtrl+1"))?)
         .separator()
         .item(&item("toggle-guides", "Show Guides", None)?)
+        .item(&item("toggle-rulers", "Show Rulers", Some("CmdOrCtrl+R"))?)
         .separator()
         .fullscreen()
         .minimize()
@@ -670,9 +753,18 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     let window = SubmenuBuilder::new(app, "Window")
         .item(&item("panel-layers", "Layers", None)?)
+        .item(&item("panel-properties", "Properties", None)?)
+        .item(&item("panel-selection", "Selection", None)?)
+        .item(&item("panel-mask", "Masks", None)?)
+        .item(&item("panel-raw", "RAW Develop", None)?)
+        .item(&item("panel-paint", "Brushes", None)?)
+        .item(&item("panel-vector", "Type & Vector", None)?)
+        .item(&item("panel-transform", "Transform", None)?)
+        .item(&item("panel-measure", "Measure", None)?)
         .item(&item("panel-document", "Document & Color", None)?)
         .item(&item("panel-channels", "Channels", None)?)
         .item(&item("panel-comps", "Layer Comps & Artboards", None)?)
+        .item(&item("panel-campaign", "Campaign", Some("CmdOrCtrl+Alt+K"))?)
         .item(&item("panel-assets", "Plugins & Assets", None)?)
         .item(&item("panel-neural", "Neural Lab", None)?)
         .item(&item("panel-actions", "Actions", None)?)
@@ -692,6 +784,12 @@ fn main() {
         // Restores window size, position and maximised state between launches.
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
+            print_color::convert_print_cmyk,
+            clipboard::native_clipboard_info,
+            clipboard::write_native_clipboard,
+            clipboard::read_native_clipboard,
+            list_font_families,
+            read_installed_font,
             core_info,
             composite_native_tile,
             develop_native_raw,
@@ -701,14 +799,18 @@ fn main() {
             save_native_path,
             open_ai_sign_in,
             set_recent_files,
+            set_menu_command_states,
             read_native_path,
             take_pending_open_files,
             confirm_native_exit,
             cancel_native_exit,
             check_desktop_update,
+            prepare_desktop_update,
+            discard_desktop_update,
             install_desktop_update,
         ])
         .setup(|app| {
+            termination::install(app.handle()).map_err(std::io::Error::other)?;
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             Ok(())
@@ -762,6 +864,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_input_limit_is_applied_before_native_buffer_allocation() {
+        assert_eq!(native_input_byte_limit(std::path::Path::new("drawing.SVG")), 2 * 1024 * 1024);
+        assert_eq!(native_input_byte_limit(std::path::Path::new("drawing.PDF")), 8 * 1024 * 1024);
+        assert_eq!(native_input_byte_limit(std::path::Path::new("return.LUMAFORMTEXT")), 4 * 1024 * 1024);
+        assert_eq!(native_input_byte_limit(std::path::Path::new("drawing.psd")), MAX_NATIVE_FILE_BYTES);
+        let path = std::env::temp_dir().join(format!("luma-oversized-svg-{}.svg", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(2 * 1024 * 1024 + 1).unwrap();
+        let result = read_framed_file(&path);
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+        assert!(matches!(result, Err(message) if message.contains("2 MB")));
+    }
 
     fn push_f32(bytes: &mut Vec<u8>, value: f32) { bytes.extend_from_slice(&value.to_le_bytes()); }
 

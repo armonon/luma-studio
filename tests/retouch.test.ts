@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { planStroke, type BrushParams } from "../app/engine/brush.ts";
-import { replayRetouch } from "../app/engine/retouch.ts";
+import { replayRetouch, planRepairOffsets } from "../app/engine/retouch.ts";
 
 const params: BrushParams = {
   size: 6,
@@ -124,4 +124,25 @@ test("spot healing and remove synthesize from surrounding samples", () => {
   const center = (6 * 12 + 6) * 4;
   assert.ok(spot.data[center] < 0.3);
   assert.ok(remove.data[center] < 0.3);
+});
+
+test("repair retains texture and is invariant across tile partitions", () => {
+  const brush = { ...params, size: 8 };
+  const dabs = planStroke([{ x: 8, y: 6, p: 1 }], brush);
+  const sample = (x: number, y: number) => {
+    const value = ((Math.floor(x) + Math.floor(y)) % 2 + 2) % 2 ? .8 : .2;
+    return [value, value, value, 1] as const;
+  };
+  const offsets = planRepairOffsets(dabs, sample);
+  assert.ok(offsets[0]);
+  const whole = floatSurface(16, 12, .5);
+  replayRetouch(whole, { mode: "remove", params: brush, dabs, sample, repairOffsets: offsets });
+  assert.notEqual(whole.data[(6 * 16 + 7) * 4], whole.data[(6 * 16 + 8) * 4]);
+  for (const originX of [0, 8]) {
+    const tile = { ...floatSurface(8, 12, .5), originX };
+    replayRetouch(tile, { mode: "remove", params: brush, dabs, sample, repairOffsets: offsets });
+    for (let y = 0; y < 12; y++) for (let x = 0; x < 8; x++) for (let c = 0; c < 4; c++) {
+      assert.equal(tile.data[(y * 8 + x) * 4 + c], whole.data[(y * 16 + x + originX) * 4 + c]);
+    }
+  }
 });

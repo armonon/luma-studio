@@ -38,6 +38,18 @@ export type DirtyTile = {
   data?: Uint8Array;
 };
 
+/** Immutable, persisted compressed source. Only edits occupy the resident store. */
+export interface ImmutableTileSource {
+  readonly grid: TileGrid;
+  readonly format: PixelFormat;
+  readonly fingerprint: string;
+  readonly source: { kind: "photoshop-rgb8"; bytes: Uint8Array<ArrayBuffer>; layerIndex: number };
+  keys(): IterableIterator<string>;
+  has(key: string): boolean;
+  read(key: string): Uint8Array;
+  display(key: string): PixelBuffer;
+}
+
 const BYTES_PER_PIXEL: Record<PixelFormat, number> = {
   rgba8: 4,
   rgba16f: 8,
@@ -101,7 +113,7 @@ export class TileGrid {
   }
 
   parseKey(key: string) {
-    const match = /^(\d+):(\d+)$/.exec(key);
+    const match = /^(0|[1-9]\d*):(0|[1-9]\d*)$/.exec(key);
     if (!match) throw new Error(`Invalid tile key: ${key}`);
     return this.address(Number(match[1]), Number(match[2]));
   }
@@ -158,6 +170,22 @@ export class SparseTileStore {
   private residentBytes = 0;
   private residentMemoryAccount: ResidentMemoryAccount | null = null;
   private residentMemoryBudget: ResidentMemoryBudget | null = null;
+  private base: ImmutableTileSource | null = null;
+  private readonly hiddenBaseTiles = new Set<string>();
+
+  attachSource(source: ImmutableTileSource, deleted: readonly string[] = []) {
+    if (this.base || this.tiles.size) throw new Error("Attach tile source before writing edits");
+    if (source.grid.width !== this.grid.width || source.grid.height !== this.grid.height || source.grid.tileSize !== this.grid.tileSize || source.format !== this.format) throw new Error("Tile source geometry or format mismatch");
+    for (const key of deleted) this.grid.parseKey(key);
+    this.base = source;
+    for (const key of deleted) this.hiddenBaseTiles.add(key);
+  }
+  sourceState() { return this.base ? { base: this.base, deleted: [...this.hiddenBaseTiles] } : null; }
+  editKeys() { return this.tiles.keys(); }
+  *editEntries() { for (const [key, data] of this.tiles) yield { key, data: data.slice() }; }
+  sourceDisplay(key: string) {
+    return this.base && !this.tiles.has(key) && !this.hiddenBaseTiles.has(key) && this.base.has(key) ? this.base.display(key) : null;
+  }
 
   constructor(grid: TileGrid, format: PixelFormat = "rgba8", memoryCeiling = DEFAULT_SURFACE_MEMORY_CEILING) {
     this.grid = grid;
@@ -165,10 +193,10 @@ export class SparseTileStore {
     this.memoryCeiling = memoryCeiling;
   }
 
-  has(key: string) { return this.tiles.has(key); }
+  has(key: string) { return this.tiles.has(key) || Boolean(this.base && !this.hiddenBaseTiles.has(key) && this.base.has(key)); }
 
   bindMemoryBudget(budget: ResidentMemoryBudget, label = "pixel surface") {
-    if (this.residentMemoryBudget === budget && this.residentMemoryAccount) return;
+    if (this.residentMemoryBudget === budget && this.residentMemoryAccount?.active()) return;
     this.residentMemoryAccount?.release();
     this.residentMemoryBudget = budget;
     this.residentMemoryAccount = budget.register(this, label, this.residentBytes);
@@ -182,7 +210,7 @@ export class SparseTileStore {
 
   read(key: string) {
     this.grid.parseKey(key);
-    const data = this.tiles.get(key);
+    const data = this[BORROWED_TILE](key);
     return data ? data.slice() : null;
   }
 
@@ -213,6 +241,7 @@ export class SparseTileStore {
       if (!this.tiles.has(address.key)) additional += this.grid.byteLength(address, this.format);
     }
     this.assertResidentBytes(this.residentBytes + additional);
+    this.residentMemoryAccount?.assertCapacity(this.residentBytes + additional);
   }
 
   assertResidentBytes(bytes: number) {
@@ -226,9 +255,11 @@ export class SparseTileStore {
   delete(key: string) {
     this.grid.parseKey(key);
     const existing = this.tiles.get(key);
-    if (!existing || !this.tiles.delete(key)) return false;
-    const nextBytes = this.residentBytes - existing.byteLength;
+    if (!existing && !this.has(key)) return false;
+    const nextBytes = this.residentBytes - (existing?.byteLength ?? 0);
     this.residentMemoryAccount?.resize(nextBytes);
+    this.tiles.delete(key);
+    if (this.base?.has(key)) this.hiddenBaseTiles.add(key);
     this.residentBytes = nextBytes;
     this.revision += 1;
     this.dirty.set(key, this.revision);
@@ -252,10 +283,41 @@ export class SparseTileStore {
     return result;
   }
 
+  /** Immutable copy-on-write snapshot. Copies only one tile when read; acknowledge
+   * only after durable commit, preserving edits made while IO was in flight. */
+  checkpointSnapshot(replace = false) {
+    if (this.base) throw new Error("Source-backed surfaces require a source-aware project checkpoint");
+    const revision = this.revision;
+    const changes = [...(replace ? this.tileRevisions : this.dirty)].map(([key, tileRevision]) => ({
+      key, revision: tileRevision, data: this.tiles.get(key),
+    }));
+    return {
+      revision,
+      size: changes.length,
+      keys: [...this.tiles.keys()],
+      *tiles(): Generator<DirtyTile> {
+        for (const entry of changes) yield { key: entry.key, revision: entry.revision, deleted: !entry.data, data: entry.data?.slice() };
+      },
+      acknowledge: () => {
+        for (const entry of changes) if (this.dirty.get(entry.key) === entry.revision) this.dirty.delete(entry.key);
+      },
+    };
+  }
+
   entries() {
-    return [...this.tiles.entries()]
-      .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
-      .map(([key, data]) => ({ key, data: data.slice() }));
+    if (this.base) {
+      this.assertResidentBytes(this.grid.estimatedBytes(this.format));
+      const shared = this.residentMemoryBudget?.stats();
+      if (shared && shared.residentBytes + this.grid.estimatedBytes(this.format) > shared.ceilingBytes) throw new TileMemoryLimitError("Materializing this source exceeds the shared memory ceiling");
+    }
+    return [...this.keys()].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .map(key => ({ key, data: this[BORROWED_TILE](key)!.slice() }));
+  }
+
+  /** Read-only identities for render traversal; never clone pixel payloads. */
+  *keys(): IterableIterator<string> {
+    if (this.base) for (const key of this.base.keys()) if (!this.hiddenBaseTiles.has(key) || this.tiles.has(key)) yield key;
+    for (const key of this.tiles.keys()) if (!this.base?.has(key)) yield key;
   }
 
   revisionFor(key: string) {
@@ -264,10 +326,11 @@ export class SparseTileStore {
   }
 
   clear() {
-    const keys = [...this.tiles.keys()];
+    const keys = [...this.keys()];
     if (!keys.length) return;
     this.residentMemoryAccount?.resize(0);
     this.tiles.clear();
+    if (this.base) for (const key of this.base.keys()) this.hiddenBaseTiles.add(key);
     this.residentBytes = 0;
     for (const key of keys) {
       this.revision += 1;
@@ -281,6 +344,7 @@ export class SparseTileStore {
       format: this.format,
       tileSize: this.grid.tileSize,
       residentTiles: this.tiles.size,
+      sourceBacked: Boolean(this.base),
       totalTiles: this.grid.totalTiles,
       residentBytes: this.residentBytes,
       memoryCeiling: this.memoryCeiling,
@@ -290,19 +354,35 @@ export class SparseTileStore {
   }
 
   [BORROWED_TILE](key: string) {
-    return this.tiles.get(key) ?? null;
+    return this.tiles.get(key) ?? (this.base && !this.hiddenBaseTiles.has(key) && this.base.has(key) ? this.base.read(key) : null);
   }
 
-  [BORROWED_ENTRIES]() {
-    return this.tiles.entries();
+  *[BORROWED_ENTRIES](): IterableIterator<[string, Uint8Array]> {
+    for (const key of this.keys()) yield [key, this[BORROWED_TILE](key)!];
   }
 
   [COMMIT_OWNED_TILE](key: string, data: Uint8Array) {
+    // Restoring an untouched source tile (undo/rollback) must not allocate a
+    // resident override or fail admission after the original edit was deleted.
+    if (this.base?.has(key)) {
+      const original = this.base.read(key);
+      let equal = original.length === data.length;
+      for (let i = 0; equal && i < data.length; i++) equal = original[i] === data[i];
+      if (equal) {
+        const nextBytes = this.residentBytes - (this.tiles.get(key)?.byteLength ?? 0);
+        this.residentMemoryAccount?.resize(nextBytes);
+        this.tiles.delete(key); this.hiddenBaseTiles.delete(key); this.residentBytes = nextBytes;
+        this.revision++;
+        this.dirty.set(key, this.revision); this.tileRevisions.set(key, this.revision);
+        return;
+      }
+    }
     const previous = this.tiles.get(key);
     const nextBytes = this.residentBytes + data.byteLength - (previous?.byteLength ?? 0);
     this.assertResidentBytes(nextBytes);
     this.residentMemoryAccount?.resize(nextBytes);
     this.tiles.set(key, data);
+    this.hiddenBaseTiles.delete(key);
     this.residentBytes = nextBytes;
     this.revision += 1;
     this.dirty.set(key, this.revision);
@@ -448,8 +528,10 @@ export class PrecisionTileSurface {
       this.grid.tileSize,
       this.store.memoryCeiling,
     );
-    for (const [key, data] of this.store[BORROWED_ENTRIES]()) {
-      clone.store[COMMIT_OWNED_TILE](key, data.slice());
+    const source = this.store.sourceState();
+    if (source) clone.store.attachSource(source.base, source.deleted);
+    for (const { key, data } of this.store.editEntries()) {
+      clone.store[COMMIT_OWNED_TILE](key, data);
     }
     clone.store.drainDirty();
     return clone;
@@ -563,6 +645,7 @@ export class PrecisionTileSurface {
   }
 
   toRgba8(): PixelBuffer {
+    if (this.store.sourceState()) this.store.assertResidentBytes(this.grid.width * this.grid.height * 4);
     const data = new Uint8ClampedArray(this.grid.width * this.grid.height * 4);
     for (const [key, bytes] of this.store[BORROWED_ENTRIES]()) {
       const address = this.grid.parseKey(key);
@@ -587,6 +670,8 @@ export class PrecisionTileSurface {
   }
 
   tileToRgba8(key: string): PixelBuffer {
+    const direct = this.store.sourceDisplay(key);
+    if (direct) return direct;
     const address = this.grid.parseKey(key);
     const data = new Uint8ClampedArray(address.width * address.height * 4);
     const bytes = this.store[BORROWED_TILE](key);
@@ -671,6 +756,7 @@ export class PrecisionTileSurface {
       colorSpace,
       this.grid.tileSize,
     );
+    if (this.store.sourceState()) converted.store.assertResidentBytes(this.grid.estimatedBytes(format));
     for (const [key, bytes] of this.store[BORROWED_ENTRIES]()) {
       const address = this.grid.parseKey(key);
       const target = new Uint8Array(converted.grid.byteLength(address, format));

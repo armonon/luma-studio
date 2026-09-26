@@ -5,7 +5,41 @@ import {
   documentPointToViewport,
   sameDisplayViewport,
   viewportPointToDocument,
+  viewportFitScale,
+  zoomViewToScale,
 } from "../app/engine/viewport";
+
+test("Actual Size is 100% pixel scale, not fit, and preserves the viewing anchor", () => {
+  for (const size of [1000, 10000, 25000, 50000, 1000000]) {
+    const fit = viewportFitScale(size, size, 1000, 800);
+    const before = { zoom: 1, panX: 70, panY: -40 };
+    const after = zoomViewToScale(before, fit, 1, 120, -80);
+    const a = calculateDisplayViewport(size, size, 1000, 800, before, 2);
+    const b = calculateDisplayViewport(size, size, 1000, 800, after, 2);
+    assert.equal(b.cssScale, 1);
+    const p = viewportPointToDocument(a, 1000, 800, 620, 320);
+    const q = viewportPointToDocument(b, 1000, 800, 620, 320);
+    assert.ok(Math.abs(p.x - q.x) < 1e-6 && Math.abs(p.y - q.y) < 1e-6);
+    assert.ok(b.outputWidth * b.outputHeight <= 12000000);
+  }
+});
+
+test("viewport allocations honor strict budgets even below quarter DPR and at extreme aspect ratios", () => {
+  for (const [w, h] of [[100000, 100000], [1000000, 1], [1, 1000000], [9999, 7777]]) {
+    for (const maxPixels of [1, 17, 100000, 12000000]) {
+      const view = calculateDisplayViewport(50000, 50000, w, h, { zoom: 1, panX: 0, panY: 0 }, 3, { maxPixels, maxDimension: 4096 });
+      assert.ok(view.outputWidth * view.outputHeight <= maxPixels, `${w}×${h}, ${maxPixels} pixels`);
+      assert.ok(view.outputWidth <= 4096 && view.outputHeight <= 4096);
+    }
+  }
+});
+
+test("invalid zoom input preserves the view and zoom limits are actual-scale limits", () => {
+  const view = { zoom: 1, panX: 12, panY: 18 };
+  assert.equal(zoomViewToScale(view, 0.01, NaN), view);
+  assert.equal(zoomViewToScale(view, 0, 1), view);
+  assert.equal(zoomViewToScale(view, 0.01, 1000).zoom, 3200);
+});
 
 test("fit viewport preserves document aspect ratio and centers the pasteboard", () => {
   const viewport = calculateDisplayViewport(

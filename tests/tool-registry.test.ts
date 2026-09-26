@@ -25,6 +25,7 @@ test("tool surfaces derive labels, shortcuts, cursors, options and dispatch meta
       assert.equal(definition.label, label);
       assert.equal(definition.shortcut, shortcut);
       assert.ok(definition.cursor);
+      assert.ok(definition.cursorVisual);
       assert.ok(definition.options);
       assert.ok(definition.pointer);
       assert.ok(definition.overlay);
@@ -34,4 +35,8 @@ test("tool surfaces derive labels, shortcuts, cursors, options and dispatch meta
   assert.equal(TOOL_REGISTRY["sel-wand"].pointer, "selection");
   assert.equal(TOOL_REGISTRY.text.options, "type");
   assert.equal(TOOL_REGISTRY.move.cursor, "move");
+  assert.equal(TOOL_REGISTRY.brush.cursorVisual, "brush");
+  assert.equal(TOOL_REGISTRY["sel-quick"].cursorVisual, "brush");
+  assert.equal(TOOL_REGISTRY.text.cursorVisual, "type");
+  assert.equal(TOOL_REGISTRY.eyedropper.cursorVisual, "sample");
 });

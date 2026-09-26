@@ -60,6 +60,7 @@ const entries: ReadonlyArray<readonly [PanelId, string, string, PanelDock]> = [
   ["document", "Document & Color", "file-image", "right"],
   ["channels", "Channels", "channels", "right"],
   ["structure", "Layer Comps & Artboards", "layout", "right"],
+  ["campaign", "Campaign", "palette", "right"],
   ["assets", "Plugins & Assets", "package", "right"],
   ["selection", "Selection", "scan", "right"],
   ["mask", "Masks", "circle-dashed", "right"],

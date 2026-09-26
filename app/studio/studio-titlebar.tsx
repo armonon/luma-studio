@@ -1,13 +1,16 @@
 "use client";
+import { saveStatusLabel } from "./save-status";
 
 import { useRef } from "react";
-import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2 } from "lucide-react";
+import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft } from "lucide-react";
 import type { StudioCommand } from "../desktop/menu-model";
 
 export default function StudioTitlebar({
   desktop,
   projectName,
   saveState,
+  dirty,
+  projectSaving,
   zoom,
   canUndo,
   canRedo,
@@ -20,6 +23,8 @@ export default function StudioTitlebar({
   desktop: boolean;
   projectName: string;
   saveState: "saved" | "unsaved" | "saving" | "error";
+  dirty: boolean;
+  projectSaving: boolean;
   zoom: number;
   canUndo: boolean;
   canRedo: boolean;
@@ -45,10 +50,12 @@ export default function StudioTitlebar({
 
       <div className="studio-project-title">
         <strong>{projectName}</strong>
-        <span aria-live="polite">{saveState === "saving" ? "Saving…" : saveState === "error" ? "Save needs attention" : saveState === "unsaved" ? "Unsaved changes" : "Saved locally"}</span>
+        <span aria-live="polite">{saveStatusLabel(saveState, dirty, projectSaving)}</span>
       </div>
 
       <div className="spatial-share-actions">
+        <button className="studio-header-button studio-workspace-button" onClick={() => onCommand("workspace-settings")} title="Workspaces & shortcuts" aria-label="Workspaces & shortcuts" disabled={!commandEnabled("workspace-settings")}><PanelsTopLeft size={15} /><span>Workspace</span></button>
+        <span className="studio-action-divider" />
         <button className="studio-icon-button" onClick={() => onCommand("undo")} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo || !commandEnabled("undo")}><Undo2 /></button>
         <button className="studio-icon-button" onClick={() => onCommand("redo")} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!canRedo || !commandEnabled("redo")}><Redo2 /></button>
         <span className="studio-action-divider" />
@@ -57,6 +64,7 @@ export default function StudioTitlebar({
         <details ref={menuRef} className="studio-app-menu">
           <summary aria-label="More application actions"><Ellipsis /></summary>
           <div>
+            <button onClick={() => run(() => onCommand("new-document"))} disabled={!commandEnabled("new-document")}><span>New document…</span><kbd>⌘N</kbd></button>
             <button onClick={() => run(() => onCommand("open"))} disabled={!commandEnabled("open")}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
             <button onClick={() => run(() => onCommand("save"))} disabled={!commandEnabled("save")}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
             <hr />

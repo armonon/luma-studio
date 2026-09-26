@@ -3,6 +3,12 @@ import { SparseAlphaSurface } from "./alpha-surface";
 import type { RawDevelopSettings } from "./raw-develop";
 import type { AiEditQuality, AiOperationControls, AiSelectionGuide } from "./ai-edit";
 import { cloneProAdjustment, type ProAdjustmentParams } from "./pro-adjustments";
+import { canvasFontForRun, resolvedTextStyleAt } from "./text-model";
+import { pathContours, traceContours, vectorPaints, type VectorPaint, type PathContour, type BooleanSource, type OffsetSource } from "./vector-path";
+import { resolvedTextSpatial, textSpatialAffine } from "./text-3d";
+import { requestTextFonts } from "./text-font-resources";
+import { nativeImportedFontCapHeight } from "./native-font-resources";
+import { bidiLineOrder, physicalTextAlignment } from "./text-bidi";
 
 export type BlendMode =
   | "source-over"
@@ -148,16 +154,17 @@ export const NEUTRAL_TONE: ToneParams = {
   vibrance: 0,
 };
 
-// Affine transform: layer pixels drawn with:
-//   ctx.setTransform(cos*sx, sin*sx, -sin*sy, cos*sy, tx, ty)
+// Affine transform: translation × rotation × horizontal shear × scale.
 // where (tx,ty) is the on-canvas offset for the layer's origin (top-left),
-// and rotation happens around the layer's center. We keep a compact rep.
+// Interactive rotations explicitly preserve the visual center.
 export type Transform = {
   tx: number;
   ty: number;
   sx: number;
   sy: number;
   rotation: number; // radians
+  /** Horizontal shear in local coordinates. Omitted in older projects. */
+  skewX?: number;
 };
 
 export const IDENTITY_TRANSFORM: Transform = {
@@ -166,6 +173,7 @@ export const IDENTITY_TRANSFORM: Transform = {
   sx: 1,
   sy: 1,
   rotation: 0,
+  skewX: 0,
 };
 
 export type AffineTransform = {
@@ -183,8 +191,8 @@ export function affineForLayerTransform(transform: Transform): AffineTransform {
   return {
     a: cosine * transform.sx,
     b: sine * transform.sx,
-    c: -sine * transform.sy,
-    d: cosine * transform.sy,
+    c: (cosine * (transform.skewX ?? 0) - sine) * transform.sy,
+    d: (sine * (transform.skewX ?? 0) + cosine) * transform.sy,
     e: transform.tx,
     f: transform.ty,
   };
@@ -305,6 +313,14 @@ export type PathStyle = {
   fill: string;
   stroke: string;
   strokeWidth: number;
+  contours?: PathContour[];
+  fillRule?: "nonzero" | "evenodd";
+  /** Frozen editable operands, not references to layers that can disappear. */
+  booleanSource?: BooleanSource;
+  appearance?: VectorPaint[];
+  /** Self-contained vector instances share geometry/appearance, not transforms. */
+  symbolId?: string;
+  offsetSource?: OffsetSource;
 };
 
 export type PathArcSample = { x: number; y: number; distance: number };
@@ -369,6 +385,326 @@ function drawJustified(
   ctx.textAlign = align;
 }
 
+type TextGrapheme = { segment: string; index: number; end: number };
+
+function textGraphemes(text: string, start = 0, end = text.length): TextGrapheme[] {
+  const slice = text.slice(start, end);
+  if (typeof Intl.Segmenter === "function") {
+    return [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(slice)].map((entry, index, all) => ({
+      segment: entry.segment,
+      index: start + entry.index,
+      end: index + 1 < all.length ? start + all[index + 1].index : end,
+    }));
+  }
+  let cursor = start;
+  return Array.from(slice).map((segment) => {
+    const item = { segment, index: cursor, end: cursor + segment.length };
+    cursor = item.end;
+    return item;
+  });
+}
+
+function configureTextRun(ctx: CanvasRenderingContext2D, style: TextStyle, offset: number) {
+  const run = resolvedTextStyleAt(style, offset);
+  ctx.font = canvasFontForRun(run);
+  ctx.fillStyle = run.color;
+  if ("fontKerning" in ctx) ctx.fontKerning = run.features.kern === false ? "none" : "normal";
+  if ("fontVariantCaps" in ctx) ctx.fontVariantCaps = run.features.smcp ? "small-caps" : "normal";
+  return run;
+}
+
+/** Photoshop box origins are frame tops; Luma's existing text y is a baseline. */
+export function paragraphCapHeight(ctx: CanvasRenderingContext2D, style: TextStyle) {
+  const run = configureTextRun(ctx, style, 0);
+  ctx.textBaseline = "alphabetic";
+  const exact = nativeImportedFontCapHeight(run.fontFamily);
+  if (exact !== undefined) return exact * run.fontSize;
+  const cap = ctx.measureText("H").actualBoundingBoxAscent;
+  return Number.isFinite(cap) && cap > 0 ? cap : run.fontSize * .7;
+}
+
+/** Shape contiguous style/direction runs, not isolated graphemes. */
+function canvasStyledRuns(style: TextStyle, start: number, end: number, splitWords = false) {
+  const { levels, order } = bidiLineOrder(style, start, end);
+  const rank = new Map(order.map((logical, visual) => [logical, visual]));
+  const runs: Array<TextGrapheme & { key: string; level: number; rank: number }> = [];
+  for (const item of textGraphemes(style.text, start, end)) {
+    const level = levels[item.index - start] ?? 0;
+    // Paint must not break shaping context (e.g. Arabic joining or fi ligatures).
+    // Font/metric changes still delimit shaping runs; color and decoration do not.
+    const resolved = resolvedTextStyleAt(style, item.index);
+    const key = JSON.stringify({ ...resolved, color: null, decoration: null });
+    const previous = runs.at(-1);
+    const visual = rank.get(item.index - start) ?? 0;
+    if (previous && previous.end === item.index && previous.key === key && previous.level === level &&
+        (!splitWords || (!/\s/u.test(previous.segment) && !/\s/u.test(item.segment)))) {
+      previous.segment += item.segment;
+      previous.end = item.end;
+      previous.rank = Math.min(previous.rank, visual);
+    } else runs.push({ ...item, key, level, rank: visual });
+  }
+  return runs.sort((a, b) => a.rank - b.rank);
+}
+
+function measureStyledRange(ctx: CanvasRenderingContext2D, style: TextStyle, start: number, end: number) {
+  if (start >= end) return 0;
+  if (!style.runs?.length) {
+    const run = configureTextRun(ctx, style, start);
+    const track = "letterSpacing" in ctx ? (run.tracking / 1000) * run.fontSize : 0;
+    applyTracking(ctx, track);
+    const width = (ctx.measureText(style.text.slice(start, end)).width - track) * run.fontStretch / 100;
+    applyTracking(ctx, 0);
+    return width;
+  }
+  let width = 0, trailing = 0;
+  const runs = canvasStyledRuns(style, start, end);
+  runs.forEach((item) => {
+    const run = configureTextRun(ctx, style, item.index);
+    applyTracking(ctx, (run.tracking / 1000) * run.fontSize);
+    width += ctx.measureText(item.segment).width * run.fontStretch / 100;
+    trailing = "letterSpacing" in ctx ? (run.tracking / 1000) * run.fontSize * run.fontStretch / 100 : 0;
+  });
+  applyTracking(ctx, 0);
+  // Keep inter-run advances, but not the last glyph's synthetic trailing gap.
+  // Otherwise structured/width-scaled type drifts from the fast-path anchor.
+  return width - trailing;
+}
+
+function drawStyledGlyph(
+  ctx: CanvasRenderingContext2D,
+  style: TextStyle,
+  grapheme: TextGrapheme,
+  x: number,
+  y: number,
+) {
+  const run = configureTextRun(ctx, style, grapheme.index);
+  const baseline = y - run.baselineShift;
+  const fills = style.appearance?.fills.filter((fill) => fill.enabled) ?? [];
+  const strokes = style.appearance?.strokes.filter((stroke) => stroke.enabled && stroke.width > 0) ?? [];
+  const stretch = run.fontStretch / 100;
+  ctx.save();
+  // Keep the layout anchor/baseline fixed. Only this run's glyph geometry and
+  // decoration stretch; paragraph frames, line height and layer transforms do not.
+  if (stretch !== 1) { ctx.translate(x, 0); ctx.scale(stretch, 1); ctx.translate(-x, 0); }
+  for (const stroke of strokes) {
+    ctx.globalAlpha = Math.max(0, Math.min(1, stroke.opacity));
+    ctx.strokeStyle = stroke.color;
+    ctx.lineWidth = stroke.width;
+    ctx.strokeText(grapheme.segment, x, baseline);
+  }
+  if (fills.length) {
+    for (const fill of fills) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, fill.opacity));
+      ctx.fillStyle = fill.color;
+      ctx.fillText(grapheme.segment, x, baseline);
+    }
+  } else if (!style.appearance) {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = run.color;
+    ctx.fillText(grapheme.segment, x, baseline);
+  }
+  ctx.globalAlpha = 1;
+  if (run.decoration !== "none") {
+    const metrics = ctx.measureText(grapheme.segment);
+    const decorationY = run.decoration === "underline" ? baseline + Math.max(1, run.fontSize * 0.08) : baseline - run.fontSize * 0.3;
+    ctx.strokeStyle = run.color;
+    ctx.lineWidth = Math.max(1, run.fontSize / 16);
+    ctx.beginPath();
+    ctx.moveTo(x, decorationY);
+    ctx.lineTo(x + metrics.width, decorationY);
+    ctx.stroke();
+  }
+  ctx.restore();
+  return { width: ctx.measureText(grapheme.segment).width * stretch, run };
+}
+
+function drawStyledLine(
+  ctx: CanvasRenderingContext2D,
+  style: TextStyle,
+  start: number,
+  end: number,
+  anchorX: number,
+  y: number,
+  justifyWidth?: number,
+) {
+  applyTracking(ctx, 0);
+  const { base } = bidiLineOrder(style, start, end);
+  ctx.direction = base % 2 ? "rtl" : "ltr";
+  const alignment = physicalTextAlignment(style.align, base);
+  const graphemes = textGraphemes(style.text, start, end).filter((item) => item.segment !== "\n");
+  const natural = measureStyledRange(ctx, style, start, end);
+  const spaces = graphemes.filter((item) => /^\s+$/u.test(item.segment)).length;
+  const justifyExtra = justifyWidth && justifyWidth > natural && spaces ? (justifyWidth - natural) / spaces : 0;
+  let cursor = justifyWidth ? anchorX
+    : alignment === "center" ? anchorX - natural / 2
+      : alignment === "right" ? anchorX - natural
+        : anchorX;
+  // Decoration/appearance is paint, not a reason to split a shaped run into
+  // independent letters. Keep joining, ligatures and bidi in the native shaper.
+  if (!style.runs?.length && !justifyExtra) {
+    const run = configureTextRun(ctx, style, start);
+    applyTracking(ctx, (run.tracking / 1000) * run.fontSize);
+    drawStyledGlyph(ctx, style, { segment: style.text.slice(start, end), index: start, end }, cursor, y);
+    applyTracking(ctx, 0);
+    return;
+  }
+  const direction = ctx.direction;
+  for (const run of canvasStyledRuns(style, start, end, Boolean(justifyExtra))) {
+    const paint = configureTextRun(ctx, style, run.index);
+    applyTracking(ctx, (paint.tracking / 1000) * paint.fontSize);
+    ctx.direction = run.level % 2 ? "rtl" : "ltr";
+    cursor += drawShapedPaintRun(ctx, style, run, cursor, y);
+    if (justifyExtra && /^\s+$/u.test(run.segment)) cursor += justifyExtra;
+  }
+  ctx.direction = direction;
+  applyTracking(ctx, 0);
+}
+
+/** Paint color spans using the SAME shaped string, never independently shaped
+ * substrings. Canvas does not expose cluster carets: paint boundaries within a
+ * ligature are approximate, but the glyph geometry and line advance stay intact.
+ */
+function drawShapedPaintRun(
+  ctx: CanvasRenderingContext2D, style: TextStyle,
+  run: TextGrapheme & { level: number }, x: number, y: number,
+) {
+  const spans: Array<TextGrapheme & { key: string }> = [];
+  for (const item of textGraphemes(style.text, run.index, run.end)) {
+    const paint = resolvedTextStyleAt(style, item.index);
+    const key = JSON.stringify([paint.color, paint.decoration]);
+    const last = spans.at(-1);
+    if (last?.key === key) { last.segment += item.segment; last.end = item.end; }
+    else spans.push({ ...item, key });
+  }
+  if (spans.length < 2) return drawStyledGlyph(ctx, style, run, x, y).width;
+  const width = ctx.measureText(run.segment).width * resolvedTextStyleAt(style, run.index).fontStretch / 100;
+  const advances = spans.map(span => ctx.measureText(span.segment).width);
+  const total = advances.reduce((sum, advance) => sum + advance, 0);
+  let consumed = 0;
+  spans.forEach((span, index) => {
+    const from = total ? consumed / total * width : 0;
+    consumed += advances[index];
+    const to = index === spans.length - 1 ? width : total ? consumed / total * width : width;
+    const left = run.level % 2 ? width - to : from;
+    const right = run.level % 2 ? width - from : to;
+    // Preserve outer glyph overhangs. Interior boundaries partition the shared
+    // shaped run; no extra image-sized scratch canvas is needed.
+    const clipLeft = left === 0 ? x - 1e6 : x + left;
+    const clipRight = right === width ? x + width + 1e6 : x + right;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(clipLeft, y - 1e6, clipRight - clipLeft, 2e6); ctx.clip();
+    drawStyledGlyph(ctx, style, { ...run, index: span.index }, x, y);
+    ctx.restore();
+  });
+  return width;
+}
+
+function structuredParagraphLines(ctx: CanvasRenderingContext2D, style: TextStyle) {
+  const lines: Array<{ start: number; end: number; paragraph: number; last: boolean; style: TextStyle; anchor: number; width?: number; height: number; before: number; after: number }> = [];
+  const inkEnd = (start: number, end: number) => {
+    // Trailing breakable whitespace does not consume the line's measure or
+    // move its centre/right alignment anchor. Keep NBSPs and interior spaces.
+    while (end > start && (style.text[end - 1] === " " || style.text[end - 1] === "\t")) end--;
+    return end;
+  };
+  let paragraphStart = 0;
+  style.text.split("\n").forEach((paragraph, paragraphIndex) => {
+    const paragraphEnd = paragraphStart + paragraph.length;
+    const overrides=style.paragraphs?.find(p=>p.start<=paragraphStart&&p.end>=paragraphEnd)?.style;
+    const lineStyle=overrides?{...style,direction:overrides.direction??style.direction,align:overrides.align==="justify"?"left" as const:overrides.align??style.align,justify:overrides.align?overrides.align==="justify":style.justify,lineHeight:overrides.lineHeight??style.lineHeight}:style;
+    const base=resolvedTextStyleAt(style,paragraphStart),direction=bidiLineOrder(lineStyle,paragraphStart,paragraphEnd).base;
+    const startIndent=overrides?.startIndent??0,endIndent=overrides?.endIndent??0,firstIndent=overrides?.firstLineIndent??0;
+    let first=true;
+    const available=()=>style.boxWidth===undefined?undefined:Math.max(1,style.boxWidth-startIndent-endIndent-(first?firstIndent:0));
+    const push=(start:number,end:number,last:boolean)=>{
+      end = inkEnd(start, end);
+      const width=available(),alignment=physicalTextAlignment(lineStyle.align,direction);
+      const offset=startIndent+(first?firstIndent:0),leftInset=direction%2?endIndent:offset,rightInset=direction%2?offset:endIndent;
+      // The legacy x coordinate is an alignment anchor, not a frame's left.
+      const anchor=style.x+(alignment==="center"?(leftInset-rightInset)/2:alignment==="right"?-rightInset:leftInset);
+      const largest=Math.max(base.fontSize,...(style.runs??[]).filter(r=>r.start<end&&r.end>start).map(r=>r.style.fontSize??base.fontSize));
+      lines.push({start,end,paragraph:paragraphIndex,last,style:lineStyle,anchor,width,height:largest*lineStyle.lineHeight,before:first?(overrides?.spaceBefore??0):0,after:last?(overrides?.spaceAfter??base.fontSize*(style.paragraphSpacing??0)):0});first=false;
+    };
+    if (style.layout !== "paragraph" || !style.boxWidth || paragraph.length === 0) {
+      push(paragraphStart,paragraphEnd,true);
+      paragraphStart = paragraphEnd + 1;
+      return;
+    }
+    // Unicode word boundaries permit CJK/Thai wrapping without cutting a
+    // grapheme or independently shaping the letters of a joining script.
+    const tokens:Array<{start:number;end:number}>=[];
+    const words=typeof Intl.Segmenter==="function"?[...new Intl.Segmenter(undefined,{granularity:"word"}).segment(paragraph)].map(p=>({index:p.index,segment:p.segment})):[...paragraph.matchAll(/\S+\s*/gu)].map(m=>({index:m.index!,segment:m[0]}));
+    for(const word of words){const last=tokens.at(-1);if(/^\s+$/u.test(word.segment)&&last)last.end=paragraphStart+word.index+word.segment.length;else tokens.push({start:paragraphStart+word.index,end:paragraphStart+word.index+word.segment.length});}
+    let lineStart = paragraphStart;
+    let lineEnd = paragraphStart;
+    for (const token of tokens) {
+      const candidate = measureStyledRange(ctx, lineStyle, lineStart, inkEnd(lineStart, token.end));
+      if (lineEnd > lineStart && candidate > available()!) {
+        push(lineStart,lineEnd,false);
+        lineStart = token.start;
+      }
+      lineEnd = token.end;
+    }
+    push(lineStart,Math.max(lineStart,lineEnd),true);
+    paragraphStart = paragraphEnd + 1;
+  });
+  return lines;
+}
+
+function drawStructuredText(ctx: CanvasRenderingContext2D, style: TextStyle) {
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  if ("direction" in ctx) ctx.direction = style.direction === "rtl" ? "rtl" : "ltr";
+  const base = resolvedTextStyleAt(style, 0);
+  const lineHeight = base.fontSize * style.lineHeight;
+  if (style.layout === "vertical") {
+    let row = 0;
+    let column = 0;
+    for (const grapheme of textGraphemes(style.text)) {
+      if (grapheme.segment === "\n") { column += 1; row = 0; continue; }
+      const run = resolvedTextStyleAt(style, grapheme.index);
+      drawStyledGlyph(ctx, style, grapheme, style.x - column * lineHeight, style.y + row * (lineHeight + (run.tracking / 1000) * run.fontSize));
+      row += 1;
+    }
+    return;
+  }
+  if (style.layout === "path" && style.path?.anchors.length) {
+    const table = pathArcTable(style.path);
+    let distance = nearestPathDistance(table, style.x, style.y);
+    for (const grapheme of textGraphemes(style.text)) {
+      if (grapheme.segment === "\n") continue;
+      const run = configureTextRun(ctx, style, grapheme.index);
+      const advance = ctx.measureText(grapheme.segment).width * run.fontStretch / 100;
+      const sample = samplePathDistance(table, distance + advance / 2, style.path.closed);
+      if (!sample) break;
+      ctx.save();
+      ctx.translate(sample.x, sample.y);
+      ctx.rotate(sample.angle);
+      drawStyledGlyph(ctx, style, grapheme, -advance / 2, 0);
+      ctx.restore();
+      distance += advance + (run.tracking / 1000) * run.fontSize * run.fontStretch / 100;
+    }
+    return;
+  }
+  const lines = structuredParagraphLines(ctx, style);
+  let baseline=style.y;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    baseline+=line.before;
+    if(index>0&&style.boxHeight&&baseline-style.y+line.height>style.boxHeight)break;
+    drawStyledLine(
+      ctx,
+      line.style,
+      line.start,
+      line.end,
+      line.anchor,
+      baseline,
+      style.layout === "paragraph" && line.style.justify && !line.last ? line.width : undefined,
+    );
+    baseline+=line.height+line.after;
+  }
+}
+
 export function rasterizeVectorMask(
   path: PathStyle,
   width: number,
@@ -384,7 +720,7 @@ export function rasterizeVectorMask(
 
   const canvas = newCanvas(width, height);
   const ctx = canvas.getContext("2d")!;
-  if (path.anchors.length < 2) {
+  if (pathContours(path).every(contour => contour.anchors.length < 2)) {
     // An unusable path must not blank the layer, so an empty mask reveals all.
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, height);
@@ -393,21 +729,8 @@ export function rasterizeVectorMask(
   }
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.moveTo(path.anchors[0].x, path.anchors[0].y);
-  for (let i = 0; i < path.anchors.length - 1; i += 1) {
-    const a = path.anchors[i];
-    const b = path.anchors[i + 1];
-    ctx.bezierCurveTo(a.x + a.hOut.dx, a.y + a.hOut.dy, b.x + b.hIn.dx, b.y + b.hIn.dy, b.x, b.y);
-  }
-  const first = path.anchors[0];
-  const last = path.anchors[path.anchors.length - 1];
-  ctx.bezierCurveTo(
-    last.x + last.hOut.dx, last.y + last.hOut.dy,
-    first.x + first.hIn.dx, first.y + first.hIn.dy,
-    first.x, first.y,
-  );
-  ctx.closePath();
-  ctx.fill();
+  traceContours(ctx, pathContours(path), true);
+  ctx.fill(path.fillRule ?? "nonzero");
   vectorMaskCache.set(path, { canvas, width, height });
   return canvas;
 }
@@ -515,6 +838,11 @@ export function samplePathDistance(table: ReadonlyArray<PathArcSample>, distance
 }
 
 export type TextStyle = {
+  /**
+   * Version 2 adds structured typography while preserving the legacy fields
+   * below for old .luma files, PSD interchange and inexpensive rendering.
+   */
+  schemaVersion?: 2;
   text: string;
   font: string; // "600 128px Inter, system-ui, sans-serif"
   color: string;
@@ -525,6 +853,8 @@ export type TextStyle = {
   layout?: "point" | "paragraph" | "vertical" | "path";
   boxWidth?: number;
   boxHeight?: number;
+  /** Imported paragraph frames anchor y at their top, not the first baseline. */
+  frameOrigin?: "top";
   /** Letter spacing in thousandths of an em, which is Photoshop's unit. */
   tracking?: number;
   /** Extra space after each paragraph, as a multiple of the font size. */
@@ -533,6 +863,124 @@ export type TextStyle = {
   justify?: boolean;
   /** Frozen path geometry for type-on-path so the text layer stays portable. */
   path?: PathStyle;
+  /** Default structured character style. Run styles override these values. */
+  defaultStyle?: TextRunStyle;
+  /** Non-overlapping UTF-16 ranges. Omitted values inherit defaultStyle/font. */
+  runs?: TextRun[];
+  /** Paragraph-level ranges; newlines remain in the shared story string. */
+  paragraphs?: TextParagraphRange[];
+  direction?: TextDirection;
+  writingMode?: TextWritingMode;
+  language?: string;
+  /** Nondestructive text-only appearance, independent from layer effects. */
+  appearance?: TextAppearance;
+  /** Lightweight spatial preview plus an optional live link to Form Studio. */
+  spatial?: TextSpatialStyle;
+  /** Stable exchange identity; never grants automatic synchronization or overwrite authority. */
+  formOrigin?: { assetId: string; layerId: string };
+};
+
+export type SpatialTransform = {
+  /** Degrees, matching creative-tool inspectors rather than the renderer's radians. */
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  /** 0 is orthographic; 100 is the strongest supported interactive preview. */
+  perspective: number;
+};
+
+export type SpatialMaterial = {
+  frontColor: string;
+  sideColor: string;
+  roughness: number;
+  metalness: number;
+};
+
+export type FormStudioTextLink = {
+  application: "form-studio";
+  projectId: string;
+  revisionId?: string;
+  objectId: string;
+  uri?: string;
+  autoUpdate: boolean;
+  lastSyncedAt?: number;
+};
+
+export type SpatialLayerStyle = {
+  schemaVersion: 1;
+  enabled: boolean;
+  transform: SpatialTransform;
+  extrusion: { depth: number; bevel: number };
+  material: SpatialMaterial;
+  link?: FormStudioTextLink;
+};
+
+/** Compatibility name retained for v2 text documents and the text bridge. */
+export type TextSpatialStyle = SpatialLayerStyle;
+
+export type TextDirection = "auto" | "ltr" | "rtl";
+export type TextWritingMode = "horizontal-tb" | "vertical-rl" | "vertical-lr";
+export type TextDecoration = "none" | "underline" | "line-through";
+
+export type TextRunStyle = {
+  fontFamily?: string;
+  fontSize?: number;
+  fontWeight?: number;
+  fontStyle?: "normal" | "italic" | "oblique";
+  fontStretch?: number;
+  color?: string;
+  tracking?: number;
+  baselineShift?: number;
+  decoration?: TextDecoration;
+  /** Registered and custom OpenType variable axes, e.g. wght/wdth/opsz. */
+  axes?: Record<string, number>;
+  /** OpenType feature tags, e.g. liga/smcp/onum. */
+  features?: Record<string, boolean>;
+};
+
+export type TextRun = {
+  start: number;
+  end: number;
+  style: TextRunStyle;
+};
+
+export type TextParagraphStyle = {
+  align?: "left" | "center" | "right" | "justify";
+  direction?: TextDirection;
+  lineHeight?: number;
+  spaceBefore?: number;
+  spaceAfter?: number;
+  firstLineIndent?: number;
+  startIndent?: number;
+  endIndent?: number;
+  hyphenate?: boolean;
+};
+
+export type TextParagraphRange = {
+  start: number;
+  end: number;
+  style: TextParagraphStyle;
+};
+
+export type TextAppearanceFill = {
+  id: string;
+  kind: "solid";
+  color: string;
+  opacity: number;
+  enabled: boolean;
+};
+
+export type TextAppearanceStroke = {
+  id: string;
+  color: string;
+  width: number;
+  opacity: number;
+  enabled: boolean;
+};
+
+export type TextAppearance = {
+  fills: TextAppearanceFill[];
+  strokes: TextAppearanceStroke[];
 };
 
 export type ShapeKind = "rect" | "ellipse";
@@ -595,6 +1043,7 @@ export type AiProvenance = {
     identityReferenceLayerId?: string;
     /** Document rectangle represented by the bounded AI input/output raster. */
     workRegion?: { x: number; y: number; width: number; height: number; outputWidth: number; outputHeight: number };
+    geometryCopy?: { mode: "upscale" | "expand"; factor: number; width: number; height: number };
   };
 };
 
@@ -1018,6 +1467,9 @@ export function bevelOffset(effect: LayerEffect, light: GlobalLight = DEFAULT_GL
 }
 
 export type Layer = {
+  /** Editable, source-backed 3D smart object. Bitmap is its committed render. */
+  lettering3d?: import("./lettering-asset").LetteringAsset;
+  mesh3d?: import("./form-mesh-asset").FormMeshAsset;
   id: string;
   name: string;
   kind: LayerKind;
@@ -1030,6 +1482,8 @@ export type Layer = {
   blendStack?: BlendPass[];
   blendIf?: BlendIf;
   transform: Transform;
+  /** Spatial presentation shared by raster, vector, text and smart objects. */
+  spatial?: SpatialLayerStyle;
   parentId?: string;
   locked?: boolean;
   /** Marks the single layer used as a persistent AI identity/product reference. */
@@ -1039,6 +1493,8 @@ export type Layer = {
   ai?: AiProvenance;
   source?: SourceProvenance;
   raw?: RawLayerSource;
+  /** Immutable embedded .luma contents for native Smart Objects (not a PSB payload). */
+  smartSource?: Uint8Array;
   /** Stable source-layer slot used to restore preservation metadata from an embedded PSD/PSB. */
   photoshop?: { sourceIndex: number };
   effects?: LayerEffect[];
@@ -1248,6 +1704,10 @@ export type LayerComp = {
 };
 
 export type Document = {
+  campaign?: import("./campaign").Campaign;
+  designSnapshots?: import("./design-snapshots").DesignSnapshot[];
+  /** Saved selection planes; never implicitly discarded by image export. */
+  alphaChannels?: Array<{ id: string; name: string; surface: SparseAlphaSurface }>;
   width: number;
   height: number;
   colorSpace: "srgb" | "display-p3" | "linear-srgb";
@@ -1403,7 +1863,9 @@ export function findClippingBase(doc: Document, layer: Layer) {
   for (let i = index + 1; i < doc.layers.length; i++) {
     const candidate = doc.layers[i];
     if (candidate.parentId !== layer.parentId) continue;
-    if (candidate.kind !== "group") return candidate;
+    // A clipping stack shares the first non-clipped base. Using the adjacent
+    // clipped member makes upper members inherit the wrong silhouette.
+    if (candidate.kind !== "group" && !candidate.clipping) return candidate;
   }
   return null;
 }
@@ -1684,39 +2146,87 @@ export function drawLayerContent(
   projection?: { a: number; b: number; c: number; d: number; e: number; f: number },
 ) {
   const { transform: t } = layer;
-  const cos = Math.cos(t.rotation);
-  const sin = Math.sin(t.rotation);
+  const affine = affineForLayerTransform(t);
   ctx.save();
   // Rotate around the transformed origin
-  const a = cos * t.sx;
-  const b = sin * t.sx;
-  const c = -sin * t.sy;
-  const d = cos * t.sy;
+  const { a: layerA, b: layerB, c: layerC, d: layerD } = affine;
+  const spatial = resolvedTextSpatial(layer.spatial ?? layer.text?.spatial);
+  const spatialOrigin = layer.text ? { x: layer.text.x, y: layer.text.y }
+    : layer.shape ? { x: layer.shape.x + layer.shape.w / 2, y: layer.shape.y + layer.shape.h / 2 }
+      : layer.bitmap ? { x: layer.bitmap.width / 2, y: layer.bitmap.height / 2 }
+        : { x: 0, y: 0 };
+  const spatialAffine = spatial
+    ? textSpatialAffine(spatial, spatialOrigin.x, spatialOrigin.y)
+    : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  const a = layerA * spatialAffine.a + layerC * spatialAffine.b;
+  const b = layerB * spatialAffine.a + layerD * spatialAffine.b;
+  const c = layerA * spatialAffine.c + layerC * spatialAffine.d;
+  const d = layerB * spatialAffine.c + layerD * spatialAffine.d;
+  const tx = t.tx + layerA * spatialAffine.e + layerC * spatialAffine.f;
+  const ty = t.ty + layerB * spatialAffine.e + layerD * spatialAffine.f;
   if (projection) {
     ctx.setTransform(
       projection.a * a + projection.c * b,
       projection.b * a + projection.d * b,
       projection.a * c + projection.c * d,
       projection.b * c + projection.d * d,
-      projection.a * t.tx + projection.c * t.ty + projection.e,
-      projection.b * t.tx + projection.d * t.ty + projection.f,
+      projection.a * tx + projection.c * ty + projection.e,
+      projection.b * tx + projection.d * ty + projection.f,
     );
   } else {
-    ctx.setTransform(a, b, c, d, t.tx, t.ty);
+    ctx.setTransform(a, b, c, d, tx, ty);
+  }
+  if (spatial) {
+    const yaw = spatial.transform.rotationY * Math.PI / 180;
+    const pitch = spatial.transform.rotationX * Math.PI / 180;
+    const depth = Math.max(0, spatial.extrusion.depth);
+    ctx.shadowColor = spatial.material.sideColor;
+    ctx.shadowOffsetX = Math.sin(yaw + 0.45) * depth;
+    ctx.shadowOffsetY = Math.sin(pitch + 0.7) * depth;
+    ctx.shadowBlur = Math.max(0, spatial.extrusion.bevel);
   }
   if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.bitmap) {
     ctx.drawImage(layer.bitmap, 0, 0);
   } else if (layer.kind === "text" && layer.text) {
-    const s = layer.text;
-    ctx.font = s.font;
+    requestTextFonts(layer.text, layer);
+    // Material color affects the preview without rewriting editable run colors.
+    let s = spatial ? {
+      ...layer.text,
+      color: spatial.material.frontColor,
+      defaultStyle: { ...layer.text.defaultStyle, color: spatial.material.frontColor },
+      runs: layer.text.runs?.map(run => ({ ...run, style: { ...run.style, color: spatial.material.frontColor } })),
+      appearance: layer.text.appearance ? { ...layer.text.appearance, fills: layer.text.appearance.fills.map(fill => ({ ...fill, color: spatial.material.frontColor })) } : undefined,
+    } : layer.text;
+    if (s.layout === "paragraph" && s.frameOrigin === "top") s = { ...s, y: s.y + paragraphCapHeight(ctx, s) };
+    const structuredDefault = resolvedTextStyleAt(s, 0);
+    const needsStructuredRuns = Boolean(
+      s.runs?.length
+      || s.paragraphs?.length
+      || s.appearance
+      || structuredDefault.baselineShift
+      || structuredDefault.decoration !== "none"
+      || structuredDefault.fontStretch !== 100
+      || ((!s.layout || s.layout === "point" || s.layout === "paragraph") &&
+        (s.direction === "rtl" || /[^\u0000-\u058f]/u.test(s.text))),
+    );
+    if (needsStructuredRuns && typeof ctx.measureText === "function") {
+      drawStructuredText(ctx, s);
+      ctx.restore();
+      return;
+    }
+    // Keep the native one-run path fast and fully shaped. Most text layers
+    // never need per-range drawing, so they retain browser kerning, ligatures,
+    // complex-script shaping and one fillText call per line.
+    configureTextRun(ctx, s, 0);
     ctx.textAlign = s.align;
     ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = s.color;
-    const fontSize = extractFontSize(s.font);
+    if ("direction" in ctx) ctx.direction = s.direction === "rtl" ? "rtl" : "ltr";
+    ctx.fillStyle = structuredDefault.color;
+    const fontSize = structuredDefault.fontSize;
     const lh = fontSize * s.lineHeight;
     // Photoshop measures tracking in thousandths of an em, so it holds its
     // proportion when the point size changes.
-    const track = ((s.tracking ?? 0) / 1000) * fontSize;
+    const track = (structuredDefault.tracking / 1000) * fontSize;
     applyTracking(ctx, track);
     // Canvas adds the spacing after the last glyph too, which drags centred
     // and right-aligned text off its anchor by half a step and a full step
@@ -1807,38 +2317,24 @@ export function drawLayerContent(
     applyTracking(ctx, 0);
   } else if (layer.kind === "path" && layer.path) {
     const p = layer.path;
-    if (p.anchors.length >= 2) {
-      ctx.beginPath();
-      ctx.moveTo(p.anchors[0].x, p.anchors[0].y);
-      for (let i = 0; i < p.anchors.length - 1; i++) {
-        const a = p.anchors[i];
-        const b = p.anchors[i + 1];
-        ctx.bezierCurveTo(
-          a.x + a.hOut.dx, a.y + a.hOut.dy,
-          b.x + b.hIn.dx, b.y + b.hIn.dy,
-          b.x, b.y,
-        );
-      }
-      if (p.closed) {
-        const a = p.anchors[p.anchors.length - 1];
-        const b = p.anchors[0];
-        ctx.bezierCurveTo(
-          a.x + a.hOut.dx, a.y + a.hOut.dy,
-          b.x + b.hIn.dx, b.y + b.hIn.dy,
-          b.x, b.y,
-        );
-        ctx.closePath();
-      }
-      if (p.fill && p.fill !== "none" && p.closed) {
-        ctx.fillStyle = p.fill;
-        ctx.fill();
-      }
-      if (p.stroke && p.strokeWidth > 0) {
-        ctx.strokeStyle = p.stroke;
-        ctx.lineWidth = p.strokeWidth;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        ctx.stroke();
+    if (pathContours(p).some(contour => contour.anchors.length >= 2)) {
+      for (const paint of vectorPaints(p)) {
+        if (!paint.enabled || paint.opacity === 0 || !paint.color || ["none", "transparent"].includes(paint.color)) continue;
+        ctx.save();
+        ctx.globalAlpha *= paint.opacity;
+        ctx.beginPath();
+        traceContours(ctx, pathContours(p).filter(c => paint.kind !== "fill" || c.closed));
+        if (paint.kind === "fill") {
+          ctx.fillStyle = paint.color;
+          ctx.fill(p.fillRule ?? "nonzero");
+        } else if (paint.width > 0) {
+          ctx.strokeStyle = paint.color;
+          ctx.lineWidth = paint.width;
+          ctx.lineJoin = "round";
+          ctx.lineCap = "round";
+          ctx.stroke();
+        }
+        ctx.restore();
       }
     }
   } else if (layer.kind === "shape" && layer.shape) {
@@ -1889,24 +2385,19 @@ function roundedRect(
 
 // Return the four corners of a layer in doc space, in this order:
 // [top-left, top-right, bottom-right, bottom-left]. Assumes the layer's
-// intrinsic pixel box is (0,0)..(docW,docH) before transform.
+// intrinsic box starts at the supplied local origin (zero for raster layers).
 export function layerCorners(
   layer: Layer,
   docW: number,
   docH: number,
+  originX = 0,
+  originY = 0,
 ): Array<[number, number]> {
   const t = layer.transform;
-  const cos = Math.cos(t.rotation);
-  const sin = Math.sin(t.rotation);
+  const matrix = affineForLayerTransform(t);
   const map = (x: number, y: number): [number, number] => [
-    cos * t.sx * x - sin * t.sy * y + t.tx,
-    sin * t.sx * x + cos * t.sy * y + t.ty,
+    matrix.a * x + matrix.c * y + matrix.e,
+    matrix.b * x + matrix.d * y + matrix.f,
   ];
-  return [map(0, 0), map(docW, 0), map(docW, docH), map(0, docH)];
-}
-
-function extractFontSize(font: string): number {
-  // Best-effort: look for a "Npx" token.
-  const m = font.match(/(\d+(?:\.\d+)?)px/);
-  return m ? Number(m[1]) : 32;
+  return [map(originX, originY), map(originX + docW, originY), map(originX + docW, originY + docH), map(originX, originY + docH)];
 }

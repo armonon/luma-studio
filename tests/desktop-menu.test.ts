@@ -35,6 +35,17 @@ import type { StudioCommand } from "../app/desktop/menu-model.ts";
 const rust = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const studioPage = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
 
+test("Cocoa termination is intercepted before Tao's non-cancellable termination notification", () => {
+  const guard = readFileSync(new URL("../src-tauri/src/termination.rs", import.meta.url), "utf8");
+  assert.match(rust, /termination::install\(app.handle\(\)\)/);
+  assert.match(guard, /sel!\(applicationShouldTerminate:\)/);
+  assert.match(guard, /request_exit_confirmation\(app\)/);
+  assert.match(guard, /ALLOW_APP_EXIT.load/);
+  assert.match(guard, /0 \/\/ NSTerminateCancel/);
+  assert.match(studioPage, /if \(!startupReadyRef.current\) \{ void cancelNativeClose\(\)/);
+  assert.match(studioPage, /if \(!startupReadyRef.current \|\| projectSavingRef.current \|\| nativeOpeningRef.current\) return/);
+});
+
 /** Every `item("id", "Label", accelerator)` the Rust menu builder declares. */
 function rustMenuItems() {
   const body = /fn build_menu\(([\s\S]*?)\n}\n/.exec(rust);
@@ -192,7 +203,7 @@ test("accelerators are cross-platform, not hard-coded to one modifier", () => {
 
 test("native accelerators do not also activate single-letter tools", () => {
   const modifierGuard = studioPage.indexOf("if (e.metaKey || e.ctrlKey || e.altKey) return;");
-  const toolLookup = studioPage.indexOf("const t = modeTools[workspace]", modifierGuard);
+  const toolLookup = studioPage.indexOf("const t = resolveToolKey(", modifierGuard);
   assert.ok(modifierGuard >= 0 && toolLookup > modifierGuard, "modifier guard must precede tool lookup");
   assert.match(
     studioPage,
@@ -211,14 +222,14 @@ test("native update installation cannot bypass unsaved-document protection", () 
   const updateFlow = studioPage.indexOf("runDesktopUpdateFlow", initialDirtyGuard);
   const consentDirtyGuard = studioPage.indexOf("studio?.dirtyDocuments().length", updateFlow);
   const confirmation = studioPage.indexOf("window.confirm", consentDirtyGuard);
-  const recoveryCheckpoint = studioPage.indexOf("writeRecoveryWorkspace(await studio.exportRecoveryWorkspace())", confirmation);
-  const installLock = studioPage.indexOf("setDesktopUpdateInstalling(true)", recoveryCheckpoint);
+  const recoveryCheckpoint = studioPage.indexOf("studio.checkpointForRestart(writeRecoveryWorkspace)", confirmation);
+  const installLock = studioPage.indexOf("desktopUpdateInstallingRef.current = locked", updateFlow);
   assert.ok(command >= 0 && initialDirtyGuard > command && updateFlow > initialDirtyGuard,
     "the update flow must refuse to start while any document is dirty");
   assert.ok(consentDirtyGuard > updateFlow && confirmation > consentDirtyGuard,
     "documents must be checked again after the network request and before install consent");
-  assert.ok(recoveryCheckpoint > confirmation && installLock > recoveryCheckpoint,
-    "the workspace must be checkpointed and editing locked before the updater starts downloading");
+  assert.ok(recoveryCheckpoint > confirmation && installLock > updateFlow && installLock < confirmation,
+    "update phases must lock editing and the engine must revalidate the workspace checkpoint");
 });
 
 // --- the event bridge -------------------------------------------------------

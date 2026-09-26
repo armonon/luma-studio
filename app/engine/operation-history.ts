@@ -27,6 +27,8 @@ export type OperationNodeView = {
   isOnCurrentPath: boolean;
 };
 
+type HistorySummary = { currentId: string; rootId: string; operations: number; branchPoints: number; currentDepth: number; bytes: number; byteBudget: number; overBudget: boolean };
+
 export type HistoryTransition<T> = {
   undo: OperationNode<T>[];
   redo: OperationNode<T>[];
@@ -76,6 +78,7 @@ export class OperationHistory<T> {
   private currentId: string;
   private sequence = 0;
   private totalBytes = 0;
+  private summaryCache: HistorySummary | null = null;
 
   constructor(options: OperationHistoryOptions<T> = {}) {
     this.maxNodes = Math.max(1, Math.floor(options.maxNodes ?? 500));
@@ -161,6 +164,9 @@ export class OperationHistory<T> {
   canRedo() { return this.currentNode().childIds.length > 0; }
 
   commit(label: string, value: T): OperationNode<T> {
+    // User-supplied accounting can fail. Evaluate before touching topology.
+    const bytes = this.sizeOf ? Math.max(0, Math.floor(this.sizeOf(value))) : 0;
+    this.summaryCache = null;
     const parent = this.currentNode();
     const node: OperationNode<T> = {
       id: this.uniqueId(),
@@ -175,7 +181,6 @@ export class OperationHistory<T> {
     parent.childIds.push(node.id);
     this.preferredChildren.set(parent.id, node.id);
     this.currentId = node.id;
-    const bytes = this.sizeOf ? Math.max(0, Math.floor(this.sizeOf(value))) : 0;
     this.nodeBytes.set(node.id, bytes);
     this.totalBytes += bytes;
     this.trim();
@@ -188,6 +193,7 @@ export class OperationHistory<T> {
   undo(): OperationNode<T> | null {
     const node = this.currentNode();
     if (node.id === this.rootId || !node.parentId) return null;
+    this.summaryCache = null;
     this.preferredChildren.set(node.parentId, node.id);
     this.currentId = node.parentId;
     return node;
@@ -202,6 +208,7 @@ export class OperationHistory<T> {
       : current.childIds[current.childIds.length - 1];
     const next = this.nodes.get(nextId);
     if (!next) return null;
+    this.summaryCache = null;
     this.preferredChildren.set(current.id, next.id);
     this.currentId = next.id;
     return next;
@@ -223,6 +230,7 @@ export class OperationHistory<T> {
   checkout(targetId: string): HistoryTransition<T> {
     this.requireNode(targetId);
     if (targetId === this.currentId) return { undo: [], redo: [] };
+    this.summaryCache = null;
 
     const currentPath = this.lineageIds(this.currentId);
     const targetPath = this.lineageIds(targetId);
@@ -261,11 +269,12 @@ export class OperationHistory<T> {
   }
 
   summary() {
+    if (this.summaryCache) return { ...this.summaryCache };
     let branchPoints = 0;
     for (const node of this.nodes.values()) {
       if (node.childIds.length > 1) branchPoints += 1;
     }
-    return {
+    this.summaryCache = {
       currentId: this.currentId,
       rootId: this.rootId,
       operations: this.size,
@@ -275,6 +284,7 @@ export class OperationHistory<T> {
       byteBudget: this.maxBytes,
       overBudget: this.overBudget(),
     };
+    return { ...this.summaryCache };
   }
 
   snapshot(): OperationHistorySnapshot<T> {

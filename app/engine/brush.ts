@@ -2,6 +2,8 @@ export type BrushPoint = {
   x: number;
   y: number;
   p: number;
+  /** Monotonic pointer timestamp in milliseconds, used only by live smoothing. */
+  time?: number;
   /** Pointer tilt in degrees, normally -90..90. */
   tiltX?: number;
   tiltY?: number;
@@ -106,6 +108,54 @@ export type FloatRgbaSurface = {
   originX?: number;
   originY?: number;
 };
+
+/** Per-tile stroke coverage; retained only for the active stroke, never history. */
+export type BrushCoverageCache = {
+  coverage?: Float32Array;
+  alpha?: Float32Array;
+  premultiplied?: Float32Array;
+};
+
+/** Bound both the event's work list and its sparse tile fan-out before painting. */
+export function brushTileBatches(dabs: readonly BrushDab[], grid: {
+  tilesIntersecting(rect: { x: number; y: number; width: number; height: number }): Array<{ key: string }>;
+}) {
+  const batches = new Map<string, BrushDab[]>();
+  let references = 0;
+  for (const dab of dabs) {
+    const radius = dab.size / 2 + 2;
+    for (const tile of grid.tilesIntersecting({ x: dab.x - radius, y: dab.y - radius, width: radius * 2, height: radius * 2 })) {
+      if (++references > 131_072) throw new Error("Brush sample exceeds its tile-work limit; reduce brush size or symmetry");
+      const batch = batches.get(tile.key);
+      if (batch) batch.push(dab); else batches.set(tile.key, [dab]);
+    }
+  }
+  return batches;
+}
+
+export function validBrushPoint(point: BrushPoint) {
+  return Number.isFinite(point.x) && Number.isFinite(point.y) && Number.isFinite(point.p);
+}
+
+/** Mouse/touch have no usable force; pen zero must remain zero, not half pressure. */
+export function brushPointerPressure(pointer: { pointerType?: string; pressure?: number }) {
+  if (pointer.pointerType === "mouse" || pointer.pointerType === "touch") return 1;
+  return Number.isFinite(pointer.pressure) ? Math.max(0, Math.min(1, pointer.pressure!)) : 1;
+}
+
+export function smoothBrushPoint(previous: BrushPoint, point: BrushPoint, amount = 0): BrushPoint {
+  const smoothing = Math.max(0, Math.min(0.95, Number.isFinite(amount) ? amount : 0));
+  if (!smoothing) return point;
+  const elapsed = point.time !== undefined && previous.time !== undefined && point.time > previous.time
+    ? Math.min(100, point.time - previous.time) : 1000 / 60;
+  const response = 1 - Math.pow(smoothing * 0.9, elapsed / (1000 / 60));
+  return { ...point,
+    x: previous.x + (point.x - previous.x) * response,
+    y: previous.y + (point.y - previous.y) * response,
+    // Pressure stays independent: spatial stabilization must not erase pen dynamics.
+    azimuth: interpolateAngle(previous.azimuth, point.azimuth, response),
+  };
+}
 
 const TAU = Math.PI * 2;
 
@@ -260,6 +310,7 @@ export class BrushStrokePlanner {
   constructor(readonly params: BrushParams) {}
 
   start(point: BrushPoint, includeInitial = true) {
+    if (!validBrushPoint(point)) throw new Error("Invalid brush coordinates or pressure");
     this.previous = { ...point };
     if (!includeInitial) {
       const preview = baseDab(point, this.params, this.dabIndex);
@@ -272,6 +323,7 @@ export class BrushStrokePlanner {
   }
 
   add(point: BrushPoint) {
+    if (!validBrushPoint(point)) throw new Error("Invalid brush coordinates or pressure");
     if (!this.previous) return this.start(point);
     const from = this.previous;
     const dx = point.x - from.x;
@@ -291,6 +343,7 @@ export class BrushStrokePlanner {
           azimuth: interpolateAngle(from.azimuth, point.azimuth, t),
         };
         const emitted = this.makeDabs(interpolated);
+        if (dabs.length + emitted.length > 16_384) throw new Error("Brush sample exceeds the 16,384-dab limit; reduce symmetry or increase spacing");
         dabs.push(...emitted);
         cursor += this.spacingFor(emitted[0]);
       }
@@ -410,13 +463,16 @@ function imageStrokeSource(
   stroke: Stroke,
   paintColor: readonly [number, number, number],
   working: boolean,
+  planned?: readonly BrushDab[],
+  cache?: BrushCoverageCache,
 ) {
   const params = { ...stroke.params, seed: stroke.seed ?? stroke.params.seed ?? 0 };
   const tip = params.imageTip;
   if (!validImageTip(tip)) return null;
-  const dabs = planStroke(stroke.points, params);
-  const alpha = new Float32Array(surface.width * surface.height);
-  const premultiplied = new Float32Array(surface.width * surface.height * 3);
+  const dabs = planned ?? planStroke(stroke.points, params);
+  const alpha = cache?.alpha ?? new Float32Array(surface.width * surface.height);
+  const premultiplied = cache?.premultiplied ?? new Float32Array(surface.width * surface.height * 3);
+  if (cache) { cache.alpha = alpha; cache.premultiplied = premultiplied; }
   const buildUp = params.buildUp !== false;
   const originX = finite(surface.originX ?? 0, 0);
   const originY = finite(surface.originY ?? 0, 0);
@@ -504,10 +560,13 @@ function blendChannel(mode: BrushBlendMode, destination: number, source: number)
 function strokeCoverage(
   surface: Pick<RgbaSurface, "width" | "height" | "originX" | "originY">,
   stroke: Stroke,
+  planned?: readonly BrushDab[],
+  cache?: BrushCoverageCache,
 ) {
   const params = { ...stroke.params, seed: stroke.seed ?? stroke.params.seed ?? 0 };
-  const dabs = planStroke(stroke.points, params);
-  const coverage = new Float32Array(surface.width * surface.height);
+  const dabs = planned ?? planStroke(stroke.points, params);
+  const coverage = cache?.coverage ?? new Float32Array(surface.width * surface.height);
+  if (cache) cache.coverage = coverage;
   const buildUp = params.buildUp !== false;
   const originX = finite(surface.originX ?? 0, 0);
   const originY = finite(surface.originY ?? 0, 0);
@@ -568,7 +627,7 @@ export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
       for (let channel = 0; channel < 3; channel += 1) {
         const destination = surface.data[offset + channel] / 255;
         const source = premultiplied[colorOffset + channel] / Math.max(alpha[pixel], 1e-9);
-        const blended = blendChannel(blendMode, destination, source);
+        const blended = source * (1 - destinationAlpha) + destinationAlpha * blendChannel(blendMode, destination, source);
         const output = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
         surface.data[offset + channel] = Math.round(clamp(output / Math.max(outputAlpha, 1e-9)) * 255);
       }
@@ -596,7 +655,7 @@ export function replayStroke(surface: RgbaSurface, stroke: Stroke) {
     for (let channel = 0; channel < 3; channel += 1) {
       const destination = surface.data[offset + channel] / 255;
       const source = color[channel] / 255;
-      const blended = blendChannel(blendMode, destination, source);
+      const blended = source * (1 - destinationAlpha) + destinationAlpha * blendChannel(blendMode, destination, source);
       const premultiplied = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
       surface.data[offset + channel] = Math.round(clamp(premultiplied / Math.max(outputAlpha, 1e-9)) * 255);
     }
@@ -615,12 +674,13 @@ export function replayStrokeFloat(
   surface: FloatRgbaSurface,
   stroke: Stroke,
   workingColor: readonly [number, number, number] = parseBrushColor(stroke.params.color).map((value) => value / 255) as [number, number, number],
+  incremental?: { dabs: readonly BrushDab[]; cache: BrushCoverageCache },
 ) {
   if (surface.data.length !== surface.width * surface.height * 4) {
     throw new Error("Float RGBA surface payload does not match its dimensions");
   }
   const imageSource = validImageTip(stroke.params.imageTip)
-    ? imageStrokeSource(surface, stroke, workingColor, true)
+    ? imageStrokeSource(surface, stroke, workingColor, true, incremental?.dabs, incremental?.cache)
     : null;
   if (imageSource) {
     const { params, dabs, alpha, premultiplied } = imageSource;
@@ -642,7 +702,7 @@ export function replayStrokeFloat(
       for (let channel = 0; channel < 3; channel += 1) {
         const destination = surface.data[offset + channel];
         const source = premultiplied[colorOffset + channel] / Math.max(alpha[pixel], 1e-9);
-        const blended = blendChannel(blendMode, destination, source);
+        const blended = source * (1 - destinationAlpha) + destinationAlpha * blendChannel(blendMode, destination, source);
         const output = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
         surface.data[offset + channel] = output / Math.max(outputAlpha, 1e-9);
       }
@@ -651,7 +711,7 @@ export function replayStrokeFloat(
     return { dabs, affectedPixels };
   }
 
-  const { params, dabs, coverage } = strokeCoverage(surface, stroke);
+  const { params, dabs, coverage } = strokeCoverage(surface, stroke, incremental?.dabs, incremental?.cache);
   const strokeOpacity = params.flow === undefined ? 1 : clamp(params.opacity);
   const color = params.mode === "mask-add" ? [1, 1, 1] as const : workingColor;
   const blendMode = params.blendMode ?? "normal";
@@ -667,7 +727,7 @@ export function replayStrokeFloat(
     const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
     for (let channel = 0; channel < 3; channel += 1) {
       const destination = surface.data[offset + channel];
-      const blended = blendChannel(blendMode, destination, color[channel]);
+      const blended = color[channel] * (1 - destinationAlpha) + destinationAlpha * blendChannel(blendMode, destination, color[channel]);
       const premultiplied = blended * sourceAlpha + destination * destinationAlpha * (1 - sourceAlpha);
       surface.data[offset + channel] = premultiplied / Math.max(outputAlpha, 1e-9);
     }

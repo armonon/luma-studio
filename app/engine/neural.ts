@@ -4,6 +4,9 @@
 // inference remains local after the verified runtime has loaded the assets.
 // We keep the import lazy so the initial JS bundle stays lean.
 
+import { bestSamProposal, type MaskTensor } from "./smart-selection";
+import { configureNeuralRuntime } from "./neural-runtime";
+
 export type ProgressFn = (msg: string, pct: number) => void;
 
 export type LocalSemanticCapability = {
@@ -81,6 +84,7 @@ async function loadHandles(onProgress?: ProgressFn): Promise<NeuralHandles> {
   handlesPromise = (async () => {
     onProgress?.("Loading runtime", 0);
     const mod = await import("@huggingface/transformers");
+    configureNeuralRuntime(mod.env, typeof location === "undefined" ? undefined : location.href);
     const anyMod = mod as unknown as {
       AutoModel: { from_pretrained: (name: string, opts?: unknown) => Promise<unknown> };
       AutoProcessor: { from_pretrained: (name: string, opts?: unknown) => Promise<unknown> };
@@ -91,7 +95,7 @@ async function loadHandles(onProgress?: ProgressFn): Promise<NeuralHandles> {
       };
     };
     anyMod.env.allowLocalModels = false;
-    anyMod.env.useBrowserCache = true;
+    anyMod.env.useBrowserCache = typeof caches !== "undefined";
 
     const progress_callback = (info: {
       status?: string;
@@ -219,9 +223,11 @@ const SAM_MODEL = "Xenova/slimsam-77-uniform";
 
 async function loadSam(onProgress?: ProgressFn): Promise<SamHandles> {
   if (samPromise) return samPromise;
+  let acceptingProgress = true;
   samPromise = (async () => {
     onProgress?.("Loading SAM runtime", 0);
     const mod = await import("@huggingface/transformers");
+    configureNeuralRuntime(mod.env, typeof location === "undefined" ? undefined : location.href);
     const anyMod = mod as unknown as {
       SamModel: { from_pretrained: (name: string, opts?: unknown) => Promise<unknown> };
       AutoProcessor: { from_pretrained: (name: string, opts?: unknown) => Promise<unknown> };
@@ -229,10 +235,10 @@ async function loadSam(onProgress?: ProgressFn): Promise<SamHandles> {
       env: { allowLocalModels?: boolean; useBrowserCache?: boolean };
     };
     anyMod.env.allowLocalModels = false;
-    anyMod.env.useBrowserCache = true;
+    anyMod.env.useBrowserCache = typeof caches !== "undefined";
 
     const progress_callback = (info: { status?: string; file?: string; progress?: number }) => {
-      if (!info) return;
+      if (!info || !acceptingProgress) return;
       if (info.status === "progress" && typeof info.progress === "number") {
         onProgress?.(`Downloading ${info.file ?? "SAM"}`, info.progress);
       } else if (info.status === "done") {
@@ -241,7 +247,8 @@ async function loadSam(onProgress?: ProgressFn): Promise<SamHandles> {
     };
     onProgress?.("Downloading SAM", 0);
     const [model, processor] = await Promise.all([
-      anyMod.SamModel.from_pretrained(SAM_MODEL, { progress_callback }),
+      // Pin the same precision on desktop, web and qualification runners.
+      anyMod.SamModel.from_pretrained(SAM_MODEL, { progress_callback, dtype: "q8" }),
       anyMod.AutoProcessor.from_pretrained(SAM_MODEL, { progress_callback }),
     ]);
     onProgress?.("SAM ready", 100);
@@ -252,6 +259,8 @@ async function loadSam(onProgress?: ProgressFn): Promise<SamHandles> {
   } catch (err) {
     samPromise = null;
     throw err;
+  } finally {
+    acceptingProgress = false;
   }
 }
 
@@ -264,8 +273,9 @@ export async function samPromptMask(
   signal?: AbortSignal,
 ): Promise<HTMLCanvasElement> {
   if (!points.length || points.length > 64) throw new Error("SAM requires between 1 and 64 point prompts");
+  if (source.width * source.height > 4 * 1024 * 1024) throw new Error("SAM inference requires a bounded preview of at most 4 megapixels");
   for (const point of points) {
-    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new Error("SAM point coordinates must be finite");
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || point.x < 0 || point.y < 0 || point.x >= source.width || point.y >= source.height) throw new Error("SAM point must be inside the image");
   }
   throwIfAborted(signal);
   const { model, processor, RawImage } = await loadSam(onProgress);
@@ -283,7 +293,8 @@ export async function samPromptMask(
 
   onProgress?.("Running SAM", 0);
   type Runtime = {
-    (image: unknown, opts?: { input_points?: number[][][]; input_labels?: number[][] }): Promise<Record<string, { data: Float32Array | Uint8Array; dims: number[] }>>;
+    (image: unknown, opts?: { input_points?: number[][][]; input_labels?: number[][] }): Promise<Record<string, unknown>>;
+    post_process_masks(masks: unknown, original: unknown, reshaped: unknown): Promise<MaskTensor[]>;
   };
   const inputs = await (processor as Runtime)(img, {
     input_points: [points.map((point) => [point.x, point.y])],
@@ -292,23 +303,18 @@ export async function samPromptMask(
   throwIfAborted(signal);
   const outputs = await (model as (i: unknown) => Promise<Record<string, { data: Float32Array; dims: number[] }>>)(inputs);
   throwIfAborted(signal);
-  const key = Object.keys(outputs).find((k) => k.toLowerCase().includes("mask")) ?? Object.keys(outputs)[0];
-  const masksTensor = outputs[key];
-  const dims = masksTensor.dims; // typically [1, N, H, W] where N = number of proposals
-  const H = dims[dims.length - 2];
-  const W = dims[dims.length - 1];
+  if (!outputs.pred_masks || !outputs.iou_scores) throw new Error("SAM produced no scored masks");
+  // Remove preprocessing padding before resizing back to the source aspect.
+  const processed = await (processor as Runtime).post_process_masks(outputs.pred_masks, inputs.original_sizes, inputs.reshaped_input_sizes);
+  throwIfAborted(signal);
+  const masksTensor = processed[0];
+  if (!masksTensor) throw new Error("SAM produced no postprocessed mask");
+  const proposal = bestSamProposal(masksTensor, outputs.iou_scores.data, points);
+  const H = proposal.height;
+  const W = proposal.width;
   const perMask = H * W;
-  // SlimSAM produces multiple candidate masks; pick the largest one by area.
-  const nProposals = dims[dims.length - 3] ?? 1;
-  const data = masksTensor.data as Float32Array;
-  let best = 0;
-  let bestArea = -1;
-  for (let n = 0; n < nProposals; n++) {
-    let a = 0;
-    for (let i = 0; i < perMask; i++) if (data[n * perMask + i] > 0) a++;
-    if (a > bestArea) { bestArea = a; best = n; }
-  }
-  const off = best * perMask;
+  const data = masksTensor.data;
+  const off = proposal.offset;
 
   onProgress?.("Building mask", 100);
   const matte = document.createElement("canvas");

@@ -42,14 +42,22 @@ export class CoalescedSaveQueue<T> {
   request() {
     if (this.cancelled) return this.requestedRevision;
     this.requestedRevision += 1;
-    if (!this.running) {
-      this.running = this.drain().finally(() => { this.running = null; });
-    }
+    if (!this.running) this.startDrain();
     return this.requestedRevision;
   }
 
   async waitForIdle() {
-    await this.running;
+    while (this.running) await this.running;
+  }
+
+  private startDrain() {
+    // Publish ownership before user callbacks can request another checkpoint.
+    // An idle/error callback can also enqueue after drain's loop condition was
+    // evaluated; hand that request to a new drain rather than stranding it.
+    this.running = Promise.resolve().then(() => this.drain()).finally(() => {
+      this.running = null;
+      if (!this.cancelled && this.settledRevision < this.requestedRevision) this.startDrain();
+    });
   }
 
   cancel() {

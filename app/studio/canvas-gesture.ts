@@ -1,4 +1,5 @@
 import type { Point } from "../engine/advanced-tools";
+import type { ShapeGesture } from "./shape-tool";
 
 export type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect";
 
@@ -32,6 +33,9 @@ export type CanvasDragDraft = {
   layerId?: string;
   path?: Point[];
   moveStart?: { tx: number; ty: number };
+  shapeGesture?: ShapeGesture;
+  shiftKey?: boolean;
+  altKey?: boolean;
 };
 
 export type CanvasGestureContext = {

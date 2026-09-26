@@ -94,16 +94,24 @@ export async function saveNativeProject(
   if (!invoke) return null;
   const file = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data;
   if (currentPath) {
-    await invoke<boolean>("save_native_path", encodePathBytes(currentPath, file));
+    const saved = await invoke<unknown>("save_native_path", encodePathBytes(currentPath, file));
+    if (saved !== true) throw new Error("The desktop did not confirm the project write. Your document remains unsaved.");
     return currentPath;
   }
-  return invoke<string | null>("save_native_file_as", encodeNamedBytes(fileName || "Untitled.luma", file));
+  const path = await invoke<unknown>("save_native_file_as", encodeNamedBytes(fileName || "Untitled.luma", file));
+  if (path === null) return null;
+  if (typeof path !== "string" || !path.trim() || path.length > 4096 || path.includes("\0")) {
+    throw new Error("The desktop returned an invalid save receipt. Your document remains unsaved.");
+  }
+  return path;
 }
 
 export async function saveNativeFile(data: Blob | Uint8Array, fileName: string, invoke = systemInvoke()) {
   if (!invoke) return false;
   const file = data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data;
-  return invoke<boolean>("save_native_file", encodeNamedBytes(fileName || "Untitled.luma", file));
+  const saved = await invoke<unknown>("save_native_file", encodeNamedBytes(fileName || "Untitled.luma", file));
+  if (typeof saved !== "boolean") throw new Error("The desktop did not confirm the export write.");
+  return saved;
 }
 
 export async function openNativeAiSignIn(invoke = systemInvoke()) {

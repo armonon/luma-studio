@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { decodeUpdaterPublicKey, validateUpdaterEndpoint } from "./release-config.mjs";
 
@@ -12,6 +12,10 @@ decodeUpdaterPublicKey(pubkey);
 const validatedEndpoint = validateUpdaterEndpoint(endpoint);
 const validatedCrashEndpoint = validateUpdaterEndpoint(crashEndpoint);
 const crashOrigin = new URL(validatedCrashEndpoint).origin;
+const base = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
+// Extend the canonical policy so release builds cannot silently lose model
+// download origins allowed in the development candidate.
+const csp = base.app.security.csp.replace(/connect-src([^;]*);/, (_match, origins) => `connect-src${origins} ${crashOrigin};`);
 if (!identity || identity === "-" || !/^Developer ID Application: .+\([A-Z0-9]{10}\)$/.test(identity)) {
   throw new Error("APPLE_SIGNING_IDENTITY must name a Developer ID Application certificate and 10-character Team ID");
 }
@@ -19,7 +23,7 @@ if (!identity || identity === "-" || !/^Developer ID Application: .+\([A-Z0-9]{1
 const config = {
   app: {
     security: {
-      csp: `default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost ${crashOrigin} https://huggingface.co https://*.huggingface.co https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'`,
+      csp,
     },
   },
   bundle: {

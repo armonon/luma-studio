@@ -83,3 +83,32 @@ test("large and layer-heavy documents avoid continuous recovery recompression", 
   assert.equal(recoveryCheckpointDelayMs({ documentPixels: 1, estimatedResidentBytes: 384 * 1024 * 1024, layers: 20 }), 4_000);
   assert.equal(recoveryCheckpointDelayMs({ documentPixels: 1, estimatedResidentBytes: 0, layers: 2_000 }), 8_000);
 });
+
+test("a checkpoint requested from the idle notification is not stranded", async () => {
+  const commits: number[] = [];
+  let queued = false;
+  const queue = new CoalescedSaveQueue<number>({
+    produce: async revision => revision,
+    commit: async value => { commits.push(value); },
+    onState: state => { if (state === "idle" && !queued) { queued = true; queue.request(); } },
+  });
+  queue.request();
+  await queue.waitForIdle();
+  assert.deepEqual(commits, [1, 2]);
+});
+
+test("reentrant producer notifications retain a single serialization owner", async () => {
+  let requested = false, producing = 0, peak = 0;
+  const commits: number[] = [];
+  const queue = new CoalescedSaveQueue<number>({
+    produce: async revision => {
+      producing++; peak = Math.max(peak, producing);
+      await Promise.resolve(); producing--; return revision;
+    },
+    commit: async value => { commits.push(value); },
+    onState: state => { if (state === "producing" && !requested) { requested = true; queue.request(); } },
+  });
+  queue.request(); await queue.waitForIdle();
+  assert.equal(peak, 1);
+  assert.deepEqual(commits, [2]);
+});

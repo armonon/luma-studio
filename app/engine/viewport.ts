@@ -55,6 +55,18 @@ function positiveFinite(value: number, fallback: number) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+export function viewportFitScale(documentWidth: number, documentHeight: number, stageWidth: number, stageHeight: number) {
+  return Math.min(positiveFinite(stageWidth, 1) / positiveFinite(documentWidth, 1), positiveFinite(stageHeight, 1) / positiveFinite(documentHeight, 1));
+}
+
+/** Actual CSS pixel scale, preserving the document point under a stage-relative anchor. */
+export function zoomViewToScale(view: CanvasView, fitScale: number, scale: number, anchorX = 0, anchorY = 0): CanvasView {
+  if (!Number.isFinite(scale) || scale <= 0 || !Number.isFinite(fitScale) || fitScale <= 0) return view;
+  const zoom = Math.max(Math.min(fitScale, 0.000001), Math.min(32, scale)) / fitScale;
+  const ratio = zoom / positiveFinite(view.zoom, 1);
+  return { zoom, panX: anchorX - ratio * (anchorX - view.panX), panY: anchorY - ratio * (anchorY - view.panY) };
+}
+
 /**
  * Maps the editor's fit-relative zoom and screen-space pan to a bounded render
  * target. The returned document rectangle may extend beyond the document; that
@@ -73,13 +85,10 @@ export function calculateDisplayViewport(
   const safeDocumentHeight = positiveFinite(documentHeight, 1);
   const safeStageWidth = positiveFinite(stageWidth, 1);
   const safeStageHeight = positiveFinite(stageHeight, 1);
-  const fitScale = Math.min(
-    safeStageWidth / safeDocumentWidth,
-    safeStageHeight / safeDocumentHeight,
-  );
+  const fitScale = viewportFitScale(safeDocumentWidth, safeDocumentHeight, safeStageWidth, safeStageHeight);
   const cssScale = Math.max(1e-8, fitScale * positiveFinite(view.zoom, 1));
-  const maxDimension = positiveFinite(limits.maxDimension ?? DEFAULT_MAX_DIMENSION, DEFAULT_MAX_DIMENSION);
-  const maxPixels = positiveFinite(limits.maxPixels ?? DEFAULT_MAX_PIXELS, DEFAULT_MAX_PIXELS);
+  const maxDimension = Math.max(1, Math.floor(positiveFinite(limits.maxDimension ?? DEFAULT_MAX_DIMENSION, DEFAULT_MAX_DIMENSION)));
+  const maxPixels = Math.max(1, Math.floor(positiveFinite(limits.maxPixels ?? DEFAULT_MAX_PIXELS, DEFAULT_MAX_PIXELS)));
   let devicePixelRatio = Math.min(positiveFinite(requestedDevicePixelRatio, 1), 3);
   devicePixelRatio = Math.min(
     devicePixelRatio,
@@ -87,9 +96,9 @@ export function calculateDisplayViewport(
     maxDimension / safeStageHeight,
     Math.sqrt(maxPixels / (safeStageWidth * safeStageHeight)),
   );
-  devicePixelRatio = Math.max(0.25, devicePixelRatio);
-  const outputWidth = Math.max(1, Math.round(safeStageWidth * devicePixelRatio));
-  const outputHeight = Math.max(1, Math.round(safeStageHeight * devicePixelRatio));
+  // A minimum DPR would override the budget on very large/high-aspect stages.
+  const outputWidth = Math.max(1, Math.min(maxPixels, Math.floor(safeStageWidth * devicePixelRatio)));
+  const outputHeight = Math.max(1, Math.min(Math.floor(maxPixels / outputWidth), Math.floor(safeStageHeight * devicePixelRatio)));
   const width = safeStageWidth / cssScale;
   const height = safeStageHeight / cssScale;
 

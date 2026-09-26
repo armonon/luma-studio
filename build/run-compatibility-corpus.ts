@@ -1,4 +1,8 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { releaseSourceId } from "./release-source-id.mjs";
+import { acquireQualificationLock } from "./qualification-lock.mjs";
+import { sampleQualificationHost, qualificationHostRefusal, qualifiedHostSamples } from "./qualification-host.mjs";
 import { execFile } from "node:child_process";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +18,7 @@ import { ingestRaw } from "../app/engine/raw.ts";
 import { renderViewport } from "../app/engine/renderer.ts";
 import { Studio } from "../app/engine/studio.ts";
 import { classifyPhotoshopImport } from "./compatibility-corpus-policy.ts";
+import { hasLayerMask } from "../app/engine/layer-mask.ts";
 
 type CorpusKind = "psd" | "psb" | "raw";
 type CorpusCase = {
@@ -73,7 +78,8 @@ function parseArgs() {
   };
 }
 
-async function runCaseIsolated(manifest: string, entry: CorpusCase): Promise<CaseResult> {
+async function runCaseIsolated(manifest: string, entry: CorpusCase, signal: AbortSignal): Promise<CaseResult> {
+  const started = process.hrtime.bigint();
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [
       "--import",
@@ -83,10 +89,14 @@ async function runCaseIsolated(manifest: string, entry: CorpusCase): Promise<Cas
       manifest,
       "--worker-case",
       entry.id,
+      ...(process.argv.includes("--source-backed") ? ["--source-backed"] : []),
     ], {
       cwd: process.cwd(),
       maxBuffer: 10 * 1024 * 1024,
-      timeout: 10 * 60 * 1000,
+      // Keep a small process-start allowance; the worker still enforces the
+      // original workflow duration threshold. Never let a 120s case run 10min.
+      timeout: Math.min(10 * 60 * 1000, (entry.expected?.maximumDurationMs ?? 595_000) + 5_000),
+      signal,
     });
     if (stderr.trim()) process.stderr.write(stderr);
     const encoded = stdout.split(/\r?\n/).findLast((line) => line.startsWith(WORKER_RESULT_PREFIX));
@@ -98,7 +108,7 @@ async function runCaseIsolated(manifest: string, entry: CorpusCase): Promise<Cas
       id: entry.id,
       kind: entry.kind,
       status: "fail",
-      durationMs: 0,
+      durationMs: elapsedMs(started),
       peakRssMiB: 0,
       detail: `isolated corpus worker failed: ${detail}`,
     };
@@ -194,11 +204,34 @@ function applyCorpusEdit(doc: Document) {
   layer.opacity = layer.opacity > 0.98 ? 0.97 : Math.min(1, layer.opacity + 0.01);
 }
 
-async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
+function assertLayerStructure(before: Document, after: Document, stage: string) {
+  const shape = (doc: Document) => doc.layers.map(layer => ({
+    name: layer.name, kind: layer.kind,
+    parent: layer.parentId ? doc.layers.findIndex(parent => parent.id === layer.parentId) : -1,
+    mask: hasLayerMask(layer),
+  }));
+  if (JSON.stringify(shape(before)) !== JSON.stringify(shape(after))) throw new Error(`${stage} changed layer names, types, hierarchy or masks`);
+  for (let i = 0; i < before.layers.length; i++) {
+    if (Math.abs(before.layers[i].opacity - after.layers[i].opacity) > 1 / 255 + 1e-9) throw new Error(`${stage} lost the layer-opacity edit`);
+  }
+}
+
+async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer, metrics: Record<string, number | string>): Promise<Record<string, number | string>> {
+  const sample = (stage: string) => {
+    const memory = process.memoryUsage();
+    metrics.lastCompletedStage = stage;
+    for (const key of ["rss", "external", "arrayBuffers", "heapUsed"] as const) metrics[`${stage}.${key}MiB`] = Math.round(memory[key] / 1024 / 1024 * 10) / 10;
+    metrics[`${stage}.peakRssMiB`] = peakRssMiB();
+  };
+  sample("input");
   const header = assertSafePhotoshopHeader(bytes, entry.file, exceedsBrowserCanvas, { allowFlattenedFallback: true });
   if (header.container !== entry.kind) throw new Error(`container is ${header.container}, manifest says ${entry.kind}`);
   if (entry.expected?.sourceLayers !== header.layers) throw new Error(`source has ${header.layers} layers, manifest expects ${entry.expected?.sourceLayers}`);
-  const opened = await importPsd(bytes);
+  const forceSourceBacked = process.argv.includes("--source-backed");
+  const opened = await importPsd(bytes, forceSourceBacked ? { sourceBacked: true } : {});
+  const sourceBacked = opened.layers.some(layer => layer.surface?.store.sourceState());
+  metrics.storage = sourceBacked ? "compressed-source-backed" : "default";
+  sample("import");
   assertExpectedDimensions(entry, opened);
   const importMode = classifyPhotoshopImport({
     sourceLayers: header.layers,
@@ -217,27 +250,47 @@ async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer)
     if (referenceMeanError > maximum) throw new Error(`Photoshop reference mean error ${referenceMeanError.toFixed(3)} exceeds ${maximum}`);
   }
   applyCorpusEdit(opened);
+  const paintedIndex = sourceBacked ? opened.layers.reduce((best, layer, index) => {
+    if (!layer.surface?.store.sourceState()) return best;
+    return best < 0 || layer.surface.grid.totalTiles > opened.layers[best].surface!.grid.totalTiles ? index : best;
+  }, -1) : -1;
+  if (paintedIndex >= 0) {
+    const surface = opened.layers[paintedIndex].surface!;
+    surface.writePixel(0, 0, [1, 0, 0, 1]);
+    metrics.editedSourceTiles = surface.stats().residentTiles;
+  }
+  const assertPixelEdit = (document: Document, stage: string) => {
+    if (paintedIndex >= 0 && document.layers[paintedIndex].surface?.readPixel(0, 0).join(",") !== "1,0,0,1") throw new Error(`${stage} lost the source-backed pixel edit`);
+  };
   const importPeakRssMiB = peakRssMiB();
 
   const native = await encodeLumaProject(opened, [], entry.id);
+  sample("nativeEncode");
   const reopenedNative = await decodeLumaProject(native);
+  sample("nativeDecode");
   assertExpectedDimensions(entry, reopenedNative.doc);
+  assertLayerStructure(opened, reopenedNative.doc, "Native reopen");
+  assertPixelEdit(reopenedNative.doc, "Native reopen");
   const nativeError = meanAbsoluteError(preview(opened), preview(reopenedNative.doc));
   if (nativeError !== 0) throw new Error(`native save/reopen preview drifted by ${nativeError.toFixed(3)} levels`);
   const nativeRoundTripPeakRssMiB = peakRssMiB();
 
   const exported = exportPhotoshopDocument(reopenedNative.doc, { format: entry.kind });
+  sample("photoshopExport");
   const photoshopExportPeakRssMiB = peakRssMiB();
   const warningCount = exported.report.issues.filter((issue) => issue.severity === "warning").length;
   if (entry.expected?.maximumWarnings !== undefined && warningCount > entry.expected.maximumWarnings) {
     throw new Error(`${warningCount} Photoshop warnings, allowed ${entry.expected.maximumWarnings}`);
   }
-  const reopenedPhotoshop = await importPsd(exported.buffer);
+  const reopenedPhotoshop = await importPsd(exported.buffer, sourceBacked ? { sourceBacked: true } : {});
+  sample("photoshopReopen");
   assertExpectedDimensions(entry, reopenedPhotoshop);
+  assertLayerStructure(reopenedNative.doc, reopenedPhotoshop, "Photoshop reopen");
+  assertPixelEdit(reopenedPhotoshop, "Photoshop reopen");
   const psdError = meanAbsoluteError(preview(reopenedNative.doc), preview(reopenedPhotoshop));
   const maximum = entry.expected?.maximumPsdMeanError ?? 3;
   if (psdError > maximum) throw new Error(`Photoshop round-trip mean error ${psdError.toFixed(3)} exceeds ${maximum}`);
-  return {
+  return Object.assign(metrics, {
     width: opened.width,
     height: opened.height,
     sourceLayers: header.layers,
@@ -252,7 +305,7 @@ async function runPhotoshop(root: string, entry: CorpusCase, bytes: ArrayBuffer)
     nativeRoundTripPeakRssMiB,
     photoshopExportPeakRssMiB,
     photoshopReopenPeakRssMiB: peakRssMiB(),
-  };
+  });
 }
 
 async function runRaw(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<string, number | string>> {
@@ -292,17 +345,20 @@ async function runRaw(entry: CorpusCase, bytes: ArrayBuffer): Promise<Record<str
 async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
   const started = process.hrtime.bigint();
   let inputReady = false;
+  const metrics: Record<string, number | string> = {};
   try {
     const path = safeCasePath(root, entry.file);
     const metadata = await stat(path);
     const limit = entry.kind === "raw" ? FILE_INPUT_LIMITS.rawBytes : FILE_INPUT_LIMITS.photoshopBytes;
     if (!metadata.isFile() || metadata.size < 1 || metadata.size > limit) throw new Error(`file is outside the 1..${Math.round(limit / 1024 / 1024)} MB bound`);
     const source = await readFile(path);
+    metrics.inputSha256 = createHash("sha256").update(source).digest("hex");
+    metrics.inputBytes = source.byteLength;
     const bytes = source.byteOffset === 0 && source.byteLength === source.buffer.byteLength
       ? source.buffer as ArrayBuffer
       : source.buffer.slice(source.byteOffset, source.byteOffset + source.byteLength) as ArrayBuffer;
     inputReady = true;
-    const metrics = entry.kind === "raw" ? await runRaw(entry, bytes) : await runPhotoshop(root, entry, bytes);
+    Object.assign(metrics, entry.kind === "raw" ? await runRaw(entry, bytes) : await runPhotoshop(root, entry, bytes, metrics));
     if (entry.expected?.outcome === "reject") {
       return {
         id: entry.id,
@@ -329,16 +385,18 @@ async function runCase(root: string, entry: CorpusCase): Promise<CaseResult> {
     if (inputReady && entry.expected?.outcome === "reject") {
       const pattern = entry.expected.errorPattern ? new RegExp(entry.expected.errorPattern, "i") : null;
       if (!pattern || pattern.test(message)) {
-        return { id: entry.id, kind: entry.kind, status: "pass", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: `safely rejected: ${message}` };
+        return { id: entry.id, kind: entry.kind, status: "pass", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: `safely rejected: ${message}`, metrics };
       }
     }
-    return { id: entry.id, kind: entry.kind, status: "fail", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: message };
+    return { id: entry.id, kind: entry.kind, status: "fail", durationMs: elapsedMs(started), peakRssMiB: peakRssMiB(), detail: message, metrics };
   }
 }
 
 async function main() {
   const options = parseArgs();
-  const manifest = JSON.parse(await readFile(options.manifest, "utf8")) as unknown;
+  const manifestBytes = await readFile(options.manifest);
+  const manifestSha256 = createHash("sha256").update(manifestBytes).digest("hex");
+  const manifest = JSON.parse(new TextDecoder().decode(manifestBytes)) as unknown;
   assertManifest(manifest);
   const root = manifest.sourceRoot
     ? resolve(dirname(options.manifest), manifest.sourceRoot)
@@ -366,23 +424,65 @@ async function main() {
     if (!["psd", "psb", "raw"].includes(kind)) throw new Error(`Unknown required corpus kind: ${kind}`);
     if (!kinds.has(kind)) throw new Error(`Corpus is missing ${kind.toUpperCase()} coverage`);
   }
-  const results: CaseResult[] = [];
-  for (const entry of cases) {
-    const result = await runCaseIsolated(options.manifest, entry);
-    results.push(result);
-    console.log(`${result.status === "pass" ? "PASS" : "FAIL"} ${entry.id}: ${result.detail}`);
+  const releaseLock = acquireQualificationLock("Compatibility corpus");
+  const controller = new AbortController();
+  const interrupt = () => controller.abort();
+  process.once("SIGINT", interrupt); process.once("SIGTERM", interrupt);
+  try {
+    const results: CaseResult[] = [];
+    const hostSamples: ReturnType<typeof sampleQualificationHost>[] = [];
+    let environmentBlock: string | null = null;
+    const recordHost = () => {
+      const sample = sampleQualificationHost();
+      hostSamples.push(sample);
+      environmentBlock ??= qualificationHostRefusal(sample);
+    };
+    recordHost();
+    const sourceSha256 = releaseSourceId();
+    await mkdir(dirname(options.report), { recursive: true });
+    const checkpoint = async (completed: boolean) => {
+      const manifestUnchanged = createHash("sha256").update(await readFile(options.manifest)).digest("hex") === manifestSha256;
+      const report = {
+        sourceSha256, unchanged: releaseSourceId() === sourceSha256,
+        manifestSha256, manifestUnchanged,
+        completed, interrupted: controller.signal.aborted,
+        environmentQualified: !environmentBlock && qualifiedHostSamples(hostSamples),
+        environmentBlock, hostSamples,
+        generatedAt: new Date().toISOString(), manifest: options.manifest,
+        total: cases.length, executed: results.length,
+        passed: results.filter(result => result.status === "pass").length,
+        failed: results.filter(result => result.status === "fail").length, results,
+      };
+      const pending = `${options.report}.pending-${process.pid}`;
+      await writeFile(pending, `${JSON.stringify(report, null, 2)}\n`);
+      await rename(pending, options.report);
+      return report;
+    };
+    await checkpoint(false);
+    for (const entry of cases) {
+      if (controller.signal.aborted) break;
+      recordHost();
+      if (environmentBlock) break;
+      if (releaseSourceId() !== sourceSha256) throw new Error("Source changed during corpus qualification; rerun against a frozen candidate.");
+      if (createHash("sha256").update(await readFile(options.manifest)).digest("hex") !== manifestSha256) throw new Error("Manifest changed during corpus qualification; do not mix fixture expectations.");
+      // Sample throughout the worker, not just after it has released its memory.
+      // CPU pressure invalidates timing evidence but does not erase fidelity results.
+      const sampler = setInterval(recordHost, 2000);
+      let result: CaseResult;
+      try { result = await runCaseIsolated(options.manifest, entry, controller.signal); }
+      finally { clearInterval(sampler); recordHost(); }
+      results.push(result);
+      console.log(`${result.status === "pass" ? "PASS" : "FAIL"} ${entry.id}: ${result.detail}`);
+      await checkpoint(false);
+      if (environmentBlock) break;
+    }
+    const report = await checkpoint(!controller.signal.aborted && !environmentBlock && results.length === cases.length);
+    if (environmentBlock) console.error(`BLOCKED: ${environmentBlock}`);
+    if (!report.unchanged || !report.manifestUnchanged || !report.completed || !report.environmentQualified || report.failed) process.exitCode = 1;
+  } finally {
+    process.removeListener("SIGINT", interrupt); process.removeListener("SIGTERM", interrupt);
+    releaseLock();
   }
-  const report = {
-    generatedAt: new Date().toISOString(),
-    manifest: options.manifest,
-    total: results.length,
-    passed: results.filter((result) => result.status === "pass").length,
-    failed: results.filter((result) => result.status === "fail").length,
-    results,
-  };
-  await mkdir(dirname(options.report), { recursive: true });
-  await writeFile(options.report, `${JSON.stringify(report, null, 2)}\n`);
-  if (report.failed) process.exitCode = 1;
 }
 
 main().catch((error) => {

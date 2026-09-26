@@ -1,4 +1,13 @@
 "use client";
+import { FONT_CHOICES } from "./font-catalog";
+import { ShellErrorBoundary } from "./shell-error-boundary";
+import { WorkspaceRulers, useWorkspaceRulers } from "./workspace-rulers";
+import { captureCustomShape, decodeShapeLibrary, encodeShapeLibrary, DEFAULT_SHAPE_SETTINGS, SHAPE_LIBRARY_KEY, SHAPE_LIBRARY_LIMIT, SHAPE_PRESETS, type CustomShape, type ShapeSettings } from "../engine/shape-library";
+import { commitShapeDrag, shapeDragGeometry, shapePresetForTool, SHAPE_TOOLS } from "./shape-tool";
+import { vectorPathData } from "../engine/vector-path";
+import { DEFAULT_PEN_SNAP, PEN_SNAP_KEY, createPenPath, normalizePenSnap, penMeasurementLabel, resolvePenSnap, type PenSnapSettings, type PenSnapResult } from "./pen-snap";
+import { loadBundledFont } from "@/app/engine/bundled-fonts";
+import { subscribeTextFontFailures } from "@/app/engine/text-font-resources";
 
 import {
   ChangeEvent,
@@ -12,6 +21,9 @@ import {
   useState,
 } from "react";
 import { LUMA_API_VERSION, LumaAPI, Studio } from "@/app/engine/studio";
+import { formTextAssetFromLayer, formTextAssetWithOutlines, serializeFormTextAsset } from "@/app/engine/form-studio-bridge";
+import { formSpatialAssetFromLayer, serializeFormSpatialAsset } from "@/app/engine/form-spatial-bridge";
+import { DEFAULT_TEXT_SPATIAL } from "@/app/engine/text-3d";
 import {
   AiProvenance,
   CapturedBrushAsset,
@@ -28,18 +40,22 @@ import {
   Transform,
   cloneCurves,
   documentPointToLayer,
+  rotateLayerTransformAround,
   layerCorners,
 } from "@/app/engine/document";
 import { SMART_FILTER_SPECS } from "@/app/engine/filters";
+import type { VectorDeliveryReport } from "@/app/engine/vector-delivery-plan";
 import {
   PRO_ADJUSTMENT_LABELS,
   defaultProAdjustment,
   type ProAdjustmentKind,
 } from "@/app/engine/pro-adjustments";
-import { BrushParams, type ImageBrushMode } from "@/app/engine/brush";
+import { BrushParams, brushPointerPressure, type ImageBrushMode } from "@/app/engine/brush";
 import {
   readRecoveryWorkspace,
   removeRecoveryDocument,
+  discardRecoveryDocuments,
+  finalizePreviousDiscard,
   writeRecoveryDocument,
   writeRecoveryWorkspace,
 } from "@/app/engine/autosave";
@@ -47,6 +63,7 @@ import { CoalescedSaveQueue, recoveryCheckpointDelayMs } from "@/app/engine/save
 import { installGlobalDiagnostics, localDiagnostics } from "@/app/engine/diagnostics";
 import { createCrashReporterFromEnv } from "@/app/engine/crash-reporting";
 import { assertFileSize, assertSafePhotoshopHeader, assertSafeRasterHeader } from "@/app/engine/input-limits";
+import { smartContentUnavailableReason, type SmartContentTarget } from "@/app/engine/smart-object-content";
 import { exceedsBrowserCanvas } from "@/app/engine/large-documents";
 import { RAW_EXTENSIONS, ingestRaw, rawExtension } from "@/app/engine/raw";
 import type { RawDevelopSettings } from "@/app/engine/raw-develop";
@@ -72,6 +89,8 @@ import {
 } from "@/app/engine/advanced-tools";
 import {
   calculateDisplayViewport,
+  viewportFitScale,
+  zoomViewToScale,
   viewportPointToDocument,
   type DisplayViewport,
 } from "@/app/engine/viewport";
@@ -93,6 +112,7 @@ import {
   shortcutConflict,
   type WorkflowPreferences,
 } from "@/app/engine/workflow-preferences";
+import { resolveToolKey } from "./tool-shortcuts";
 import {
   EMPTY_LAYER_FOCUS_STATE,
   enterLayerFocus,
@@ -109,6 +129,11 @@ import {
   type LayerFocusState,
 } from "./layer-focus-model";
 import type { FocusCreateAction } from "./layer-focus-panel";
+import { spatialOperationIdsForTool } from "./spatial-capability-registry";
+import { useDocumentView } from "./use-document-view";
+import { BATCH_MAX_FILES } from "@/app/engine/batch-limits";
+import type { BatchOptions } from "@/app/engine/batch";
+import type { ActionPlaybackReport } from "@/app/engine/action-playback";
 import {
   cancelNativeClose,
   confirmNativeClose,
@@ -120,9 +145,9 @@ import {
 import { loadRecentFiles, saveRecentFiles, withRecentFile } from "../desktop/recent-files";
 import type { StudioCommand } from "../desktop/menu-model";
 import { runDesktopUpdateFlow } from "../desktop/desktop-updater";
-import { StartupOpenCoordinator } from "./startup-open-coordinator";
-import { cornerDragTransform, rotMat, snapTranslation } from "./canvas-geometry";
-import type { TransformCorner } from "./canvas-geometry";
+import { NativeOpenQueue } from "./native-open-queue";
+import { cornerDragTransform, rotationDragTransform, skewDragTransform, constrainedTranslation, isValidTransformQuad, snapTranslation, transformContentBounds } from "./canvas-geometry";
+import type { TransformCorner, TransformMode } from "./canvas-geometry";
 import {
   planCanvasGesture,
   resolveSelectionMode,
@@ -135,6 +160,7 @@ import {
   type ContextualPanelId,
 } from "./contextual-panel-registry";
 import DesktopCanvasHud, { type SpaceDeckFeature } from "./desktop-canvas-hud";
+import { hasNativeImageClipboard, readNativeImageClipboard, pixelPasteSource, SELECTION_CLIPBOARD_TYPE, writePixelClipboard } from "./selection-clipboard-events";
 import {
   DESKTOP_DEMO_LAYERS,
   desktopRadialOverlayPosition,
@@ -143,7 +169,7 @@ import {
   shouldRevealDesktopPassDeck,
   studioUiWorkPolicy,
 } from "./desktop-presentation";
-import { FrameCoalescer } from "./frame-coalescer";
+import { FrameCoalescer, browserFrameCoalescer } from "./frame-coalescer";
 import {
   clampSpaceDeckPosition,
   isEditableTextTarget,
@@ -164,7 +190,13 @@ import {
   type Tool,
   type WorkspaceMode,
 } from "./tool-registry";
+import {
+  cursorRingGeometry,
+  dynamicCursorPresentation,
+} from "./dynamic-cursor";
 import { createCommandRegistry } from "./command-registry";
+import { commandForShortcut } from "../desktop/command-shortcuts";
+import { createMenuStatePublisher, publishNativeMenuState } from "../desktop/native-menu";
 import {
   AppShell,
   AppWindow,
@@ -179,7 +211,7 @@ import {
 import DockManager, { DockPanelContent } from "./dock-manager";
 import LayersPanel from "./panels/layers-panel";
 import PropertiesPanel from "./panels/properties-panel";
-import { ActionsPanel, ChannelsPanel, MeasurePanel } from "./panels/operational-panels";
+import { ActionsPanel, ChannelsPanel, MeasurePanel, EMPTY_ALPHA_DRAFT, type AlphaChannelDraft } from "./panels/operational-panels";
 import { AssetsPanel, StructurePanel } from "./panels/project-panels";
 import DocumentPanel from "./panels/document-panel";
 import NeuralPanel from "./panels/neural-panel";
@@ -192,21 +224,36 @@ import {
   type DockLayout,
 } from "./dock-model";
 import { STUDIO_PANEL_REGISTRY, type PanelId, type PrimaryPanelId } from "./panel-registry";
+import type { TextSelection } from "./panels/type-panel";
+import { resolvedDefaultTextStyle, withDefaultTextStyle } from "@/app/engine/text-model";
 
 declare const __LUMA_NATIVE_DESKTOP__: boolean;
 const NATIVE_DESKTOP_BUILD = typeof __LUMA_NATIVE_DESKTOP__ !== "undefined" && __LUMA_NATIVE_DESKTOP__;
 
 const ExportPopover = lazy(() => import("./export-popover"));
+const PrintExportDialog = lazy(() => import("./print-export-dialog"));
 const ToolDock = lazy(() => import("./tool-dock"));
 const DesktopStatusbar = lazy(() => import("./desktop-statusbar"));
 const StudioTitlebar = lazy(() => import("./studio-titlebar"));
 const ContextToolbar = lazy(() => import("./context-toolbar"));
+const NewDocumentDialog = lazy(() => import("./new-document-dialog"));
+const ExportWarningDialog = lazy(() => import("./export-warning-dialog"));
+const VectorPreflightDialog = lazy(() => import("./vector-preflight-dialog"));
+const RenameLayerDialog = lazy(() => import("./rename-layer-dialog"));
+const PdfImportDialog = lazy(() => import("./pdf-import-dialog"));
 const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
 const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
+const RecolorDialog = lazy(() => import("./recolor-dialog"));
+const CampaignPanel = lazy(() => import("./panels/campaign-panel"));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
 const HslEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.HslEditor })));
 const ProAdjustmentEditor = lazy(() => import("./pro-adjustment-editor"));
+const TypePanel = lazy(() => import("./panels/type-panel"));
+const LetteringObjectPanel = lazy(() => import("./panels/lettering-object-panel"));
+const FormMeshPanel = lazy(() => import("./panels/form-mesh-panel"));
+import { TEXT_OUTLINE_COMMAND } from "./text-outline-command";
+const VectorConstructionPanel = lazy(() => import("./panels/vector-construction-panel"));
 
 type ToneKey = keyof ToneParams;
 const workspaces: ReadonlyArray<readonly [WorkspaceMode, string, string]> = WORKSPACE_REGISTRY.map(
@@ -268,15 +315,47 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const initialPresentation = initialStudioPresentation(desktop);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const dynamicCursorRef = useRef<HTMLDivElement>(null);
+  const dynamicCursorGlyphRef = useRef<HTMLElement>(null);
+  const dynamicCursorReadoutRef = useRef<HTMLOutputElement>(null);
+  const lastCursorPointerRef = useRef<{
+    clientX: number;
+    clientY: number;
+    pointerType: string;
+    pressure: number;
+    shiftKey: boolean;
+    altKey: boolean;
+    buttons: number;
+  } | null>(null);
+  const canvasCursorOverrideRef = useRef<"hand" | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const psdInput = useRef<HTMLInputElement>(null);
   const projectInput = useRef<HTMLInputElement>(null);
+  const smartContentInput = useRef<HTMLInputElement>(null);
+  const smartContentTarget = useRef<SmartContentTarget | null>(null);
   const captureInput = useRef<HTMLInputElement>(null);
   const focusImportInput = useRef<HTMLInputElement>(null);
   const pluginInput = useRef<HTMLInputElement>(null);
   const [studio, setStudio] = useState<Studio | null>(null);
+  const [projectSaving, setProjectSaving] = useState(false);
+  const projectSavingRef = useRef(false);
+  const [showNewDocument, setShowNewDocument] = useState(false);
+  const [layerRenameTarget, setLayerRenameTarget] = useState<{ documentId: string; layerId: string; name: string } | null>(null);
   const [startupReady, setStartupReady] = useState(false);
-  const startupOpenCoordinator = useRef(new StartupOpenCoordinator());
+  const startupReadyRef = useRef(false);
+  const nativeOpenQueue = useRef<NativeOpenQueue | null>(null);
+  const nativeOpeningRef = useRef(false);
+  const [nativeOpening, setNativeOpening] = useState(false);
+  useEffect(() => {
+    // Native panels can leave focus in the webview. Consult synchronous refs,
+    // not a render-delayed listener, before allowing tool or edit shortcuts.
+    const block = (event: KeyboardEvent) => {
+      if (startupReadyRef.current && !projectSavingRef.current && !nativeOpeningRef.current) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", block, true);
+    return () => window.removeEventListener("keydown", block, true);
+  }, []);
   const [version, setVersion] = useState(0);
   const forceUpdate = useCallback(() => setVersion((n) => n + 1), []);
   const [loadedPhotoshopReport, setLoadedPhotoshopReport] = useState<PhotoshopCompatibilityReport | null>(null);
@@ -296,6 +375,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [assetsOpen, setAssetsOpen] = useState(initialPresentation.assetsOpen);
   const [dropActive, setDropActive] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [printTarget, setPrintTarget] = useState<{ id: string; name: string } | null>(null);
+  const [vectorTarget, setVectorTarget] = useState<{ report: VectorDeliveryReport; name: string; assertCurrent: () => void } | null>(null);
   const [showWorkspaceSettings, setShowWorkspaceSettings] = useState(false);
   const [workflowPreferences, setWorkflowPreferences] = useState<WorkflowPreferences<WorkspaceMode, Tool>>(initialWorkflowPreferences);
   const [workflowPreferencesLoaded, setWorkflowPreferencesLoaded] = useState(false);
@@ -306,6 +387,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [activeLayerId, setActiveLayerIdState] = useState<string | null>(null);
   const [draggedLayerId, setDraggedLayerId] = useState<string | null>(null);
   const [styleLayerId, setStyleLayerId] = useState<string | null>(null);
+  const [recolorSession, setRecolorSession] = useState<import("../engine/recolor-target").RecolorSession | null>(null);
+  useEffect(() => () => { recolorSession?.release(); }, [recolorSession]);
   /**
    * Open Recent. A ref rather than state: nothing in the React tree renders it
    * — the native menu is the only consumer — so making it state would trigger
@@ -318,7 +401,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     setActiveLayerIdState(id);
     if (id) setRecentLayerIds((current) => [id, ...current.filter((candidate) => candidate !== id)].slice(0, 24));
   }, []);
-  const [activeAdjustmentId, setActiveAdjustmentId] = useState<string | null>(null);
   const [tone, setTone] = useState<ToneParams>({ ...NEUTRAL_TONE });
   const [rawDevelopDraft, setRawDevelopDraft] = useState<{
     layerId: string;
@@ -368,6 +450,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [measurement, setMeasurement] = useState<{ start: Point; end: Point } | null>(null);
   const [retouchSample, setRetouchSample] = useState<{ x: number; y: number } | null>(null);
   const retouchActive = useRef(false);
+  const brushGestureRef = useRef<{ pointerId: number; layerId: string; documentId: string; params: BrushParams } | null>(null);
+  const quickSelectionRef = useRef<{ pointerId: number; layerId: string; documentId: string; mode: SelectionCombineMode; x: number; y: number } | null>(null);
+  const clipboardEventRef = useRef<ClipboardEvent | null>(null);
+  const clipboardMarkerRef = useRef("");
   const [feather, setFeather] = useState(0);
   const [wandTolerance, setWandTolerance] = useState(24);
   const [selectionSmooth, setSelectionSmooth] = useState(2);
@@ -375,12 +461,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [selectionShift, setSelectionShift] = useState(0);
   const [selectionMode, setSelectionMode] = useState<SelectionCombineMode>("replace");
   const [toast, setToast] = useState("");
+  const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
   const activePreset = 0;
-  const [customName, setCustomName] = useState<string | null>(null);
   const [layerCompName, setLayerCompName] = useState("Layer Comp");
   const [artboardName, setArtboardName] = useState("Artboard");
   const [textDraft, setTextDraft] = useState("WANDER FARTHER");
   const [textSize, setTextSize] = useState(96);
+  const [textSelection, setTextSelection] = useState<TextSelection>({ start: 0, end: 0 });
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -401,22 +488,42 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [showBatch, setShowBatch] = useState(false);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ i: number; total: number; name: string } | null>(null);
+  const batchAbortRef = useRef<AbortController | null>(null);
+  const [batchItems, setBatchItems] = useState<Record<number, { status: "running" | "succeeded" | "failed" | "skipped"; message?: string }>>({});
+  useEffect(() => () => { batchAbortRef.current?.abort(); batchAbortRef.current = null; }, []);
   const batchInput = useRef<HTMLInputElement>(null);
   const [selectedActionIdx, setSelectedActionIdx] = useState<number | null>(null);
+  const [actionReport, setActionReport] = useState<ActionPlaybackReport | null>(null);
   const [useGL, setUseGL] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "unsaved" | "saving" | "error">("saved");
   const [pendingCloseDocumentId, setPendingCloseDocumentId] = useState<string | null>(null);
   const [pendingNativeClose, setPendingNativeClose] = useState(false);
+  const [nativeCloseBusy, setNativeCloseBusy] = useState(false);
+  const nativeCloseBusyRef = useRef(false);
   const unsavedDialogRef = useRef<HTMLElement>(null);
+  const [photoshopApproval, setPhotoshopApproval] = useState<{ report: PhotoshopCompatibilityReport; documentId: string; resolve: (proceed: boolean) => void } | null>(null);
+  const exportApprovalResolver = useRef<((proceed: boolean) => void) | null>(null);
+  useEffect(() => () => { exportApprovalResolver.current?.(false); }, []);
+  const [pdfChoice, setPdfChoice] = useState<{ name: string; resolve: (page: import("../engine/pdf-import").PdfImportChoice | null) => void } | null>(null);
+  const pdfChoiceResolver = useRef<((page: import("../engine/pdf-import").PdfImportChoice | null) => void) | null>(null);
+  useEffect(() => () => { pdfChoiceResolver.current?.(null); pdfChoiceResolver.current = null; }, []);
   const [desktopUpdateInstalling, setDesktopUpdateInstalling] = useState(false);
+  const desktopUpdateInstallingRef = useRef(false);
+  const [desktopUpdatePhase, setDesktopUpdatePhase] = useState("Preparing update…");
   const [exportFormat, setExportFormat] = useState<"png" | "jpeg" | "webp">("png");
   const [photoshopFormat, setPhotoshopFormat] = useState<"auto" | "source" | "psd" | "psb">("auto");
   const [snapGuides, setSnapGuides] = useState(true);
   const [showGuides, setShowGuides] = useState(true);
+  const [showRulers, toggleRulers] = useWorkspaceRulers();
   const glSupported = !!studio && Studio.canUseGL();
 
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
-  const [view, setView] = useState({ zoom: initialPresentation.zoom, panX: 0, panY: 0 });
+  const openDocuments = studio?.listDocuments() ?? [];
+  const activeDocumentId = openDocuments.find(document => document.active)?.id ?? null;
+  const [alphaDraftState, setAlphaDraftState] = useState<{ documentId: string | null; draft: AlphaChannelDraft }>({ documentId: null, draft: EMPTY_ALPHA_DRAFT });
+  const alphaDraft = alphaDraftState.documentId === activeDocumentId ? alphaDraftState.draft : EMPTY_ALPHA_DRAFT;
+  const updateAlphaDraft = (draft: AlphaChannelDraft) => setAlphaDraftState({ documentId: activeDocumentId, draft });
+  const [view, setView] = useDocumentView(activeDocumentId, openDocuments.map(document => document.id), { zoom: initialPresentation.zoom, panX: 0, panY: 0 });
   const viewAnimationRef = useRef<number | null>(null);
   const [displayViewport, setDisplayViewport] = useState<DisplayViewport | null>(null);
   const spaceHeld = useRef(false);
@@ -430,9 +537,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const panFrameRef = useRef<FrameCoalescer<{ panX: number; panY: number }> | null>(null);
 
   useEffect(() => {
-    const coalescer = new FrameCoalescer<{ panX: number; panY: number }>(
-      (callback) => requestAnimationFrame(callback),
-      (frame) => cancelAnimationFrame(frame),
+    const coalescer = browserFrameCoalescer<{ panX: number; panY: number }>(
       ({ panX, panY }) => setView((current) => ({ ...current, panX, panY })),
     );
     panFrameRef.current = coalescer;
@@ -440,35 +545,108 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       coalescer.cancel();
       panFrameRef.current = null;
     };
-  }, []);
+  }, [setView]);
 
   // Draft state for pending vector/marquee shapes.
   const [drag, setDrag] = useState<CanvasDragDraft | null>(null);
   const dragRef = useRef<CanvasDragDraft | null>(null);
   const setDragBoth = (d: CanvasDragDraft | null) => { dragRef.current = d; setDrag(d); };
+  const [shapeSettings, setShapeSettings] = useState<ShapeSettings>(DEFAULT_SHAPE_SETTINGS);
+  const [customShapes, setCustomShapes] = useState<CustomShape[]>([]);
+  const [shapeLibraryReady, setShapeLibraryReady] = useState(false);
+  useEffect(() => {
+    // Restore after hydration; a corrupt library is retained for recovery, not overwritten.
+    try {
+      const shapes = decodeShapeLibrary(localStorage.getItem(SHAPE_LIBRARY_KEY));
+      /* eslint-disable react-hooks/set-state-in-effect */
+      setCustomShapes(shapes);
+      setShapeLibraryReady(true);
+      /* eslint-enable react-hooks/set-state-in-effect */
+    } catch (error) { console.warn("Custom shape library could not be restored", error); }
+  }, []);
+  const currentShapeSettings = { ...shapeSettings, preset: shapePresetForTool(activeTool, shapeSettings.preset) };
+  const chooseShapePreset = (preset: string) => {
+    setShapeSettings(settings => ({ ...settings, preset }));
+    setWorkspace("vector");
+    setActiveTool((["rect", "ellipse", "triangle", "polygon", "line"].includes(preset) ? preset : "custom-shape") as Tool);
+  };
   const resolvedSelectionMode = useCallback((event: { shiftKey: boolean; altKey: boolean }): SelectionCombineMode => (
     resolveSelectionMode(selectionMode, event)
   ), [selectionMode]);
 
   // Free-transform drag state (handles overlay).
+  const [transformMode, setTransformMode] = useState<TransformMode>("scale");
+  const [autoSelectMove, setAutoSelectMove] = useState(true);
+  const [showTransformHandles, setShowTransformHandles] = useState(true);
+  const [distortDraft, setDistortDraft] = useState<{ layerId: string; documentId: string; quad: Quad } | null>(null);
+  const transformFrameRef = useRef<FrameCoalescer<() => void> | null>(null);
+  useEffect(() => {
+    const frame = browserFrameCoalescer<() => void>((apply) => { apply(); forceUpdate(); });
+    transformFrameRef.current = frame;
+    return () => { frame.cancel(); transformFrameRef.current = null; };
+  }, [studio, forceUpdate]);
   type FTDrag =
-    | { kind: "corner"; corner: "tl" | "tr" | "br" | "bl"; startTransform: Transform }
-    | { kind: "rotate"; startTransform: Transform; centerX: number; centerY: number; startAngle: number };
-  const [, setFtDrag] = useState<FTDrag | null>(null);
+    ({ layerId: string; pointerId: number; documentId: string; startTransform: Transform; moved?: boolean } & (
+    | { kind: "corner"; corner: TransformCorner; mode: TransformMode; startX: number; startY: number; quad: Quad; hadDraft: boolean }
+    | { kind: "rotate"; centerX: number; centerY: number; startAngle: number }));
   const ftDragRef = useRef<FTDrag | null>(null);
-  const setFt = useCallback((d: FTDrag | null) => { ftDragRef.current = d; setFtDrag(d); }, []);
+  const setFt = useCallback((d: FTDrag | null) => { ftDragRef.current = d; }, []);
 
   // Pen tool draft. Anchors accumulate; tangent handles are dragged from the
   // current anchor while the mouse is down.
   const [penDraft, setPenDraft] = useState<PathAnchor[]>([]);
   const [penDragging, setPenDragging] = useState<{ index: number } | null>(null);
+  const [penSettings, setPenSettings] = useState<PenSnapSettings>(DEFAULT_PEN_SNAP);
+  const [penPreview, setPenPreview] = useState<PenSnapResult | null>(null);
+  const [penDocumentId, setPenDocumentId] = useState(activeDocumentId);
+  if (penDocumentId !== activeDocumentId) {
+    setPenDocumentId(activeDocumentId); setPenDraft([]); setPenDragging(null); setPenPreview(null);
+  }
+  const penFrameRef = useRef<FrameCoalescer<{ result: PenSnapResult; index?: number; documentId: string }> | null>(null);
+  useEffect(() => {
+    const frame = browserFrameCoalescer<{ result: PenSnapResult; index?: number; documentId: string }>(({ result, index, documentId }) => {
+      if (!studio || studio.activeDocumentState().id !== documentId) return;
+      setPenPreview(result);
+      if (index !== undefined) setPenDraft(draft => draft.map((a, i) => i !== index ? a : {
+        ...a, hOut: { dx: result.point.x - a.x, dy: result.point.y - a.y }, hIn: { dx: a.x - result.point.x, dy: a.y - result.point.y },
+      }));
+    });
+    penFrameRef.current = frame;
+    return () => { frame.cancel(); penFrameRef.current = null; };
+  }, [studio, activeDocumentId, activeTool]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try { setPenSettings(normalizePenSnap(JSON.parse(localStorage.getItem(PEN_SNAP_KEY) ?? "null"))); } catch { /* Keep safe defaults. */ }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const updatePenSettings = (patch: Partial<PenSnapSettings>) => {
+    const next = normalizePenSnap({ ...penSettings, ...patch });
+    setPenSettings(next); setPenPreview(null);
+    try { localStorage.setItem(PEN_SNAP_KEY, JSON.stringify(next)); } catch { /* Session controls still work with unavailable storage. */ }
+  };
   const [pointDraft, setPointDraft] = useState<Point[]>([]);
-  const directAnchorRef = useRef<{ layerId: string; index: number; original: PathStyle; next: PathStyle } | null>(null);
+  const directAnchorRef = useRef<{ layerId: string; index: number; contour: number; original: PathStyle; next: PathStyle } | null>(null);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast(""), 1900);
   }, []);
+  useEffect(() => subscribeTextFontFailures((layer, error) => {
+    if (studio?.doc.layers.includes(layer)) notify(`${layer.name}: ${error instanceof Error ? error.message : "Font unavailable; preview may use a substitute. Choose an available font before export."}`);
+  }), [studio, notify]);
+  const persistCustomShapes = (next: CustomShape[]) => {
+    if (!shapeLibraryReady) throw new Error("Custom shape storage is unavailable; existing presets were not overwritten");
+    localStorage.setItem(SHAPE_LIBRARY_KEY, encodeShapeLibrary(next));
+    setCustomShapes(next);
+  };
+  const removeCustomShape = (id: string) => {
+    try {
+      persistCustomShapes(customShapes.filter(s => s.id !== id));
+      if (shapeSettings.preset === id) setShapeSettings(s => ({ ...s, preset: "star" }));
+      notify("Preset removed; shapes already in your documents are unchanged");
+    } catch (error) { notify(error instanceof Error ? error.message : "Preset could not be removed"); }
+  };
 
   useEffect(() => {
     const hydration = window.setTimeout(() => {
@@ -572,16 +750,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   useEffect(() => {
     if (!canvasRef.current) return;
+    startupReadyRef.current = false;
     setStartupReady(false);
-    startupOpenCoordinator.current.reset();
     let cancelled = false;
     const target = canvasRef.current;
     const s = new Studio(1600, 1067, target);
+    const uiFrame = browserFrameCoalescer<boolean>(forceUpdate);
     const unsub = s.subscribe(() => {
-      forceUpdate();
+      uiFrame.push(true);
+      // Target repair remains synchronous; only the expensive React refresh is
+      // coalesced. Save, dirty-state and recovery subscribers are unchanged.
       const selected = activeLayerIdRef.current;
       if (!selected || !s.findLayer(selected)) setActiveLayerId(s.doc.layers[0]?.id ?? null);
-      setActiveAdjustmentId((current) => current && !s.findLayer(current) ? null : current);
     });
     const api: LumaAPI = {
       version: LUMA_API_VERSION,
@@ -628,6 +808,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     (async () => {
       try {
         const recovery = await readRecoveryWorkspace();
+        if (cancelled) return;
         if (recovery.length) {
           const ordered = [...recovery.filter((entry) => !entry.active), ...recovery.filter((entry) => entry.active)];
           let project: Awaited<ReturnType<Studio["importProject"]>> | null = null;
@@ -637,7 +818,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           // frame. Opening a user-selected .luma file below still restores its
           // complete version history.
           for (const entry of ordered) {
-            project = await s.importProject(entry.blob, { restoreHistory: false });
+            if (cancelled) return;
+            project = await s.importProject(entry.blob, { restoreHistory: false, recoveryId: entry.id });
+            if (cancelled) return;
             s.restoreDocumentSessionState(s.activeDocumentState().id, {
               nativePath: entry.nativePath,
               dirty: entry.dirty,
@@ -645,10 +828,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           }
           if (!project) throw new Error("Recovery workspace was empty");
           setActiveLayerId(project.doc.layers[0]?.id ?? null);
-          setCustomName(project.name);
           notify(recovery.length === 1 ? `Recovered ${project.name}` : `Recovered ${recovery.length} open documents`);
         } else {
           const img = await loadImage(filmstrip[0].src);
+          if (cancelled) return;
           const layer = s.openImage(filmstrip[0].name, img);
           if (desktop) {
             s.setLayerProp(layer.id, "name", "Base Layer", "Starter layer named");
@@ -658,8 +841,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           }
           setActiveLayerId(layer.id);
         }
-      } catch {
+        // Consume restored Blob payloads before rewriting their source index.
+        await finalizePreviousDiscard().catch(error => console.warn("Discard cleanup deferred", error));
+      } catch (error) {
+        if (cancelled) return;
+        notify(error instanceof Error ? `Recovery needs attention: ${error.message}` : "Recovery needs attention");
+        if (s.doc.layers.length) return;
         const img = await loadImage(filmstrip[0].src);
+        if (cancelled) return;
         const layer = s.openImage(filmstrip[0].name, img);
         if (desktop) {
           s.setLayerProp(layer.id, "name", "Base Layer", "Starter layer named");
@@ -669,12 +858,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }
         setActiveLayerId(layer.id);
       } finally {
-        if (!cancelled) setStartupReady(true);
+        if (!cancelled) { startupReadyRef.current = true; setStartupReady(true); }
       }
     })();
     return () => {
       cancelled = true;
       unsub();
+      uiFrame.cancel();
       s.dispose();
       const host = window as unknown as { luma?: LumaAPI };
       if (host.luma === api) delete host.luma;
@@ -682,11 +872,59 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   }, [desktop, forceUpdate, notify, setActiveLayerId]);
 
   const doc = studio?.doc;
+  const bindDisplayCanvas = useCallback((canvas: HTMLCanvasElement | null) => {
+    canvasRef.current = canvas;
+    if (canvas) studio?.attachDisplayTarget(canvas);
+  }, [studio]);
+  const fitScale = doc && displayViewport ? viewportFitScale(doc.width, doc.height, displayViewport.width * displayViewport.cssScale, displayViewport.height * displayViewport.cssScale) : 1;
+  const zoomPercent = Number((view.zoom * fitScale * 100).toFixed(2));
+  const setZoomPercent = (percent: number) => setView(current => zoomViewToScale(current, fitScale, percent / 100));
   const layers: Layer[] = doc?.layers ?? [];
-  const openDocuments = studio?.listDocuments() ?? [];
-  const activeDocumentId = openDocuments.find((documentTab) => documentTab.active)?.id ?? null;
+  const selectedLayerIds = studio?.layerSelection(activeLayerId).ids ?? [];
   const resolvedFocusState = reconcileLayerFocus(focusState, doc, activeDocumentId);
   const activeLayer = layers.find((l) => l.id === activeLayerId) ?? layers[0] ?? null;
+  const changeTransformMode = (mode: TransformMode) => {
+    if (distortDraft || ftDragRef.current) return;
+    setTransformMode(mode);
+    setShowTransformHandles(true);
+  };
+  const applyDistortion = () => {
+    if (!studio || !distortDraft || studio.activeDocumentState().id !== distortDraft.documentId) return;
+    transformFrameRef.current?.flush();
+    try {
+      if (!studio.distortLayer(distortDraft.layerId, distortDraft.quad)) {
+        notify(studio.distortionUnavailableReason(distortDraft.layerId) ?? "This distortion cannot be applied safely");
+        return;
+      }
+      setDistortDraft(null);
+      notify("Distortion applied · Undo restores the original");
+    } catch (error) { notify(error instanceof Error ? error.message : "Distortion failed"); }
+  };
+  const cancelTransformGesture = () => {
+    transformFrameRef.current?.cancel();
+    const f = ftDragRef.current;
+    if (f && studio?.activeDocumentState().id === f.documentId) studio.cancelLiveTransform(f.layerId);
+    const move = dragRef.current;
+    if (move?.kind === "move-layer" && move.layerId) studio?.cancelLiveTransform(move.layerId);
+    setFt(null);
+    setDragBoth(null);
+    setDistortDraft(null);
+  };
+  const transformContext = `${activeDocumentId}:${activeLayerId}:${activeTool}`;
+  const [previousTransformContext, setPreviousTransformContext] = useState(transformContext);
+  if (previousTransformContext !== transformContext) {
+    setPreviousTransformContext(transformContext);
+    setDistortDraft(null);
+  }
+  useEffect(() => {
+    transformFrameRef.current?.cancel();
+    const f = ftDragRef.current;
+    if (f && studio?.activeDocumentState().id === f.documentId) studio.cancelLiveTransform(f.layerId);
+    setFt(null);
+  }, [activeDocumentId, activeLayerId, activeTool, setFt, studio]);
+  const activeTextDefaults = activeLayer?.kind === "text" && activeLayer.text
+    ? resolvedDefaultTextStyle(activeLayer.text)
+    : null;
   const contextualPanel = resolveContextualPanel({
     override: nativePanelOverride,
     inspector: "properties",
@@ -716,6 +954,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const activeLayerIdOrNull = activeLayer?.id ?? null;
   if (activeLayerIdOrNull !== textDraftLayerId) {
     setTextDraftLayerId(activeLayerIdOrNull);
+    setTextSelection({ start: 0, end: 0 });
     if (activeLayer?.kind === "text" && activeLayer.text) setTextDraft(activeLayer.text.text);
   }
   const positionWarpOverlay = (point: Point | null) => {
@@ -794,11 +1033,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       viewAnimationRef.current = progress < 1 ? requestAnimationFrame(tick) : null;
     };
     viewAnimationRef.current = requestAnimationFrame(tick);
-  }, [view]);
+  }, [view, setView]);
 
   useEffect(() => () => {
     if (viewAnimationRef.current !== null) cancelAnimationFrame(viewAnimationRef.current);
-  }, []);
+  }, [activeDocumentId]);
 
   const enterFocusMode = (layerId: string, target: FocusEditTarget = "pixels") => {
     if (!doc || !activeDocumentId) return;
@@ -845,6 +1084,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       // it dereferenced a null ref and crashed the whole React tree.
       const canvas = canvasRef.current;
       if (!canvas) return;
+      studio.attachDisplayTarget(canvas);
       const canvasRect = canvas.getBoundingClientRect();
       if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
       const next = calculateDisplayViewport(
@@ -868,13 +1108,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     clientX: number;
     clientY: number;
     pressure?: number;
+    pointerType?: string;
+    timeStamp?: number;
     tiltX?: number;
     tiltY?: number;
     azimuthAngle?: number;
-  }) => {
+  }, rectOverride?: DOMRect) => {
     const canvas = canvasRef.current;
     if (!canvas || !doc) return { x: 0, y: 0, p: 0.5 };
-    const rect = canvas.getBoundingClientRect();
+    const rect = rectOverride ?? canvas.getBoundingClientRect();
     const viewport = displayViewport ?? calculateDisplayViewport(
       doc.width,
       doc.height,
@@ -892,13 +1134,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     );
     const x = point.x;
     const y = point.y;
-    const p = e.pressure !== undefined && e.pressure > 0 && e.pressure !== 0.5 ? e.pressure : 0.5;
+    const p = brushPointerPressure(e);
     const tiltX = e.tiltX ?? 0;
     const tiltY = e.tiltY ?? 0;
     const azimuth = Number.isFinite(e.azimuthAngle)
       ? e.azimuthAngle
       : (tiltX || tiltY ? Math.atan2(tiltY, tiltX) : 0);
-    return { x, y, p, tiltX, tiltY, azimuth };
+    return { x, y, p, tiltX, tiltY, azimuth, time: e.timeStamp };
   }, [doc, displayViewport, view]);
 
   const currentBrushMode = (): BrushParams["mode"] => {
@@ -955,9 +1197,130 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const quadTool = activeTool === "perspective-crop" || activeTool === "perspective-warp";
   const moveTool = activeTool === "move" || activeTool === "path-select";
 
+  const cursorUnavailableReason = (() => {
+    if (paintingTool) {
+      if (!activeLayer) return "No layer";
+      if (activeLayer.locked) return "Layer locked";
+      if (activeTool !== "mask-add" && activeTool !== "mask-remove" && activeLayer.kind !== "raster") return "Select raster";
+    }
+    if (retouchTool) {
+      if (!activeLayer) return "No layer";
+      if (activeLayer.locked) return "Layer locked";
+      if (activeLayer.kind !== "raster" || !activeLayer.surface) return "Select raster";
+    }
+    if ((wandTool || activeTool === "sel-sam") && activeLayer?.kind !== "raster") return "Select raster";
+    if ((activeTool === "pattern" || activeTool === "fill" || activeTool === "perspective-warp") && activeLayer?.kind !== "raster") return "Select raster";
+    if (activeTool === "direct-select" && !activeLayer?.path) return "Select path";
+    if (activeTool === "capture-brush" && captureSampling && !captureSampleMerged && !activeLayer) return "No source";
+    return null;
+  })();
+  const cursorNeedsSourceSample = retouchTool
+    && (retouchMode === "clone" || retouchMode === "heal" || retouchMode === "patch")
+    && !retouchSample
+    && !cursorUnavailableReason;
+  const cursorDocumentSize = activeTool === "capture-brush" && captureSampling ? captureRadius * 2 : brushSize;
+  const cursorBasePresentation = dynamicCursorPresentation(activeTool, {
+    selectionMode,
+    captureSampling: activeTool === "capture-brush" && captureSampling,
+    unavailableReason: cursorUnavailableReason,
+    needsSourceSample: cursorNeedsSourceSample,
+    size: cursorDocumentSize,
+    hardness: activeTool === "pencil" ? 1 : hardness,
+    roundness: activeTool === "pencil" ? 1 : brushRoundness,
+    angle: brushAngle,
+    color: activeTool === "erase" || activeTool === "mask-remove" ? "#ff6b7a" : brushColor,
+  });
+
+  const updateDynamicCursor = (pointer: {
+    clientX: number;
+    clientY: number;
+    pointerType: string;
+    pressure: number;
+    shiftKey: boolean;
+    altKey: boolean;
+    buttons: number;
+  }) => {
+    lastCursorPointerRef.current = pointer;
+    const element = dynamicCursorRef.current;
+    const canvas = canvasRef.current;
+    if (!element || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const presentation = dynamicCursorPresentation(activeTool, {
+      selectionMode,
+      shiftKey: pointer.shiftKey,
+      altKey: pointer.altKey,
+      captureSampling: activeTool === "capture-brush" && captureSampling,
+      unavailableReason: cursorUnavailableReason,
+      needsSourceSample: cursorNeedsSourceSample,
+      size: cursorDocumentSize,
+      hardness: activeTool === "pencil" ? 1 : hardness,
+      roundness: activeTool === "pencil" ? 1 : brushRoundness,
+      angle: brushAngle,
+      color: activeTool === "erase" || activeTool === "mask-remove" ? "#ff6b7a" : brushColor,
+    });
+    const pressure = pointer.pointerType === "pen" ? pointer.pressure : undefined;
+    const geometry = cursorRingGeometry({
+      documentSize: presentation.size,
+      viewportDocumentWidth: displayViewport?.width ?? doc?.width ?? 1,
+      canvasCssWidth: rect.width,
+      pressure,
+      pressureSize: pressureSize && presentation.kind === "brush",
+    });
+    const override = canvasCursorOverrideRef.current;
+    element.dataset.visible = "true";
+    element.dataset.kind = override ?? presentation.kind;
+    element.dataset.status = presentation.status;
+    element.dataset.pressed = pointer.buttons ? "true" : "false";
+    element.dataset.clipped = geometry.clipped ? "true" : "false";
+    element.style.transform = `translate3d(${pointer.clientX - rect.left}px, ${pointer.clientY - rect.top}px, 0)`;
+    element.style.setProperty("--cursor-size", `${geometry.displayDiameter}px`);
+    element.style.setProperty("--cursor-hardness", `${Math.max(4, geometry.displayDiameter * presentation.hardness)}px`);
+    element.style.setProperty("--cursor-roundness", String(presentation.roundness));
+    element.style.setProperty("--cursor-angle", `${presentation.angle}deg`);
+    element.style.setProperty("--cursor-color", presentation.color);
+    const glyph = dynamicCursorGlyphRef.current;
+    const readout = dynamicCursorReadoutRef.current;
+    if (glyph) glyph.textContent = override === "hand" ? "✋" : presentation.glyph;
+    if (readout) readout.textContent = override === "hand" ? "Pan canvas" : presentation.readout;
+  };
+
+  const updateDynamicCursorFromEvent = (event: ReactPointerEvent<HTMLCanvasElement>) => updateDynamicCursor({
+    clientX: event.clientX,
+    clientY: event.clientY,
+    pointerType: event.pointerType,
+    pressure: event.pressure,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    buttons: event.buttons,
+  });
+
+  const setCanvasCursorOverride = (override: "hand" | null, pressed = false) => {
+    canvasCursorOverrideRef.current = override;
+    const pointer = lastCursorPointerRef.current;
+    if (pointer) updateDynamicCursor({ ...pointer, buttons: pressed ? Math.max(1, pointer.buttons) : pointer.buttons });
+  };
+
+  const hideDynamicCursor = () => {
+    lastCursorPointerRef.current = null;
+    if (dynamicCursorRef.current) dynamicCursorRef.current.dataset.visible = "false";
+  };
+
+  // Settings, zoom, layer validity, and tool changes should update the cursor
+  // even when the pointer itself has not moved. This is a direct DOM refresh,
+  // not a React state update, so it cannot turn pointer motion into app renders.
+  useEffect(() => {
+    const pointer = lastCursorPointerRef.current;
+    if (pointer) updateDynamicCursor(pointer);
+  });
+
   const snapLayerTranslation = (layer: Layer, tx: number, ty: number) => (
-    doc && snapGuides ? snapTranslation(layer, doc, view.zoom, tx, ty) : { tx, ty }
+    doc && snapGuides ? snapTranslation(layer, doc, (canvasRef.current?.getBoundingClientRect().width ?? doc.width) / doc.width, tx, ty) : { tx, ty }
   );
+  const snapPenPoint = (point: Point, modifiers: { shiftKey: boolean; altKey: boolean }, handleOrigin?: Point) => resolvePenSnap({
+    point, anchors: penDraft, width: studio!.doc.width, height: studio!.doc.height, guides: studio!.doc.guides,
+    zoom: (canvasRef.current?.getBoundingClientRect().width || studio!.doc.width) / studio!.doc.width,
+    settings: penSettings, shiftKey: modifiers.shiftKey, altKey: modifiers.altKey, handleOrigin,
+  });
 
   const activateCapturedBrush = (asset: CapturedBrushAsset, mode: ImageBrushMode = capturedBrushMode) => {
     if (!studio) return;
@@ -1013,7 +1376,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (brushGestureRef.current) return;
     if (!studio) return;
+    updateDynamicCursorFromEvent(e);
     if (passDeckOpen && !passDeckPinned && !spaceHeld.current) {
       setPassDeckOpen(false);
       spaceGestureRef.current = "idle";
@@ -1026,6 +1391,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (!passDeckPinned) setPassDeckOpen(false);
       (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
       panDragRef.current = { startX: e.clientX, startY: e.clientY, panX: view.panX, panY: view.panY };
+      setCanvasCursorOverride("hand", true);
       return;
     }
     (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
@@ -1087,7 +1453,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if ((params.mode === "paint" || params.mode === "erase") && activeLayer.kind !== "raster") {
         notify("Brush needs a raster layer"); return;
       }
-      studio.beginStroke(activeLayer.id, params, p);
+      try {
+        if (studio.beginStroke(activeLayer.id, params, p)) {
+          brushGestureRef.current = { pointerId: e.pointerId, layerId: activeLayer.id, documentId: studio.activeDocumentState().id, params };
+        } else notify("Select an unlocked paintable layer");
+      } catch (error) { notify(error instanceof Error ? error.message : "Brush stroke could not start"); }
       return;
     }
 
@@ -1101,7 +1471,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (marqueeTool || vectorDragTool || transformDragTool) {
-      setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: activeTool as CanvasDragDraft["kind"] });
+      setDragBoth({ x0: p.x, y0: p.y, x1: p.x, y1: p.y, kind: activeTool as CanvasDragDraft["kind"], shiftKey: e.shiftKey, altKey: e.altKey,
+        ...(SHAPE_TOOLS.has(activeTool) ? { shapeGesture: { documentId: studio.activeDocumentState().id, settings: { ...currentShapeSettings }, fill: brushColor, custom: customShapes.find(s => s.id === currentShapeSettings.preset) } } : {}),
+      });
       return;
     }
     if (lassoTool) {
@@ -1110,7 +1482,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     if (wandTool) {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("Wand needs a raster layer"); return; }
-      studio.selectByColor(activeLayer.id, p.x, p.y, activeTool === "sel-quick" ? Math.max(6, wandTolerance / 2) : wandTolerance, resolvedSelectionMode(e), activeTool === "sel-quick" ? true : !e.metaKey);
+      try {
+        const mode = resolvedSelectionMode(e);
+        if (activeTool === "sel-quick") studio.beginSelectionGesture(mode);
+        studio.selectByColor(activeLayer.id, p.x, p.y, activeTool === "sel-quick" ? Math.max(6, wandTolerance / 2) : wandTolerance, mode, activeTool === "sel-quick" ? true : !e.metaKey);
+        if (activeTool === "sel-quick") quickSelectionRef.current = { pointerId: e.pointerId, layerId: activeLayer.id, documentId: studio.activeDocumentState().id, mode: mode === "replace" ? "add" : mode, x: p.x, y: p.y };
+      } catch (error) { studio.cancelSelectionGesture(); quickSelectionRef.current = null; notify(error instanceof Error ? error.message : "Selection failed safely"); return; }
       notify(activeTool === "sel-quick" ? "Quick selection painted" : "Selection updated");
       return;
     }
@@ -1143,6 +1520,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (activeTool === "sel-sam") {
+      if (neural) return;
       if (!activeLayer || activeLayer.kind !== "raster") { notify("SAM needs a raster layer"); return; }
       const mode = resolvedSelectionMode(e);
       setNeural({ msg: "SAM click", pct: 0 });
@@ -1150,43 +1528,50 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         try {
           const res = await studio.samClickSelect(activeLayer.id, p.x, p.y, mode, (msg, pct) => setNeural({ msg, pct }));
           setNeural(null);
-          notify(res.used === "sam" ? "SAM select" : "Fell back to wand");
-        } catch {
+          notify(res.used === "sam" ? "SAM select" : `Smart Select unavailable; used Magic Wand. ${res.reason ?? ""}`);
+        } catch (error) {
           setNeural(null);
-          notify("SAM failed");
+          notify(error instanceof Error ? error.message : "SAM failed");
         }
       })();
       return;
     }
     if (activeTool === "pen") {
-      // Check for close-path (click near first anchor)
-      if (penDraft.length >= 2) {
-        const first = penDraft[0];
-        const dx = p.x - first.x;
-        const dy = p.y - first.y;
-        if (Math.hypot(dx, dy) < Math.max(8, (doc?.width ?? 1000) * 0.008)) {
-          commitPenPath(true);
-          return;
-        }
-      }
-      const anchor: PathAnchor = { x: p.x, y: p.y, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } };
+      penFrameRef.current?.cancel();
+      const snapped = snapPenPoint(p, e);
+      if (snapped.closes) { commitPenPath(true); return; }
+      if (penDraft.length >= 4096) { notify("Path anchor limit reached; finish this path first"); return; }
+      const anchor: PathAnchor = { ...snapped.point, hIn: { dx: 0, dy: 0 }, hOut: { dx: 0, dy: 0 } };
       setPenDraft((d) => [...d, anchor]);
+      setPenPreview(snapped);
       setPenDragging({ index: penDraft.length });
       return;
     }
     if (["text", "vertical-text", "path-text", "type-mask"].includes(activeTool)) {
-      if (activeTool === "type-mask") studio.selectTextMask(textDraft, p.x, p.y, `700 ${textSize}px 'Inter', system-ui, sans-serif`, false);
+      if (activeTool === "type-mask") {
+        const sourceDocument = studio.doc;
+        void loadBundledFont("Lato", 700).then(() => {
+          if (studio.doc !== sourceDocument) return;
+          studio.selectTextMask(textDraft, p.x, p.y, `700 ${textSize}px "Lato", sans-serif`, false);
+          notify("Type selection created");
+        }).catch(() => notify("Bundled font could not load; selection was not changed"));
+        return;
+      }
       else if (activeTool === "path-text") {
         if (!activeLayer?.path) { notify("Select a path layer first"); return; }
         const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
         if (!local) return;
-        studio.addTextLayer(
+        const layer = studio.addTextLayer(
           textDraft,
-          { x: local.x, y: local.y, layout: "path", path: activeLayer.path, color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` },
+          { x: local.x, y: local.y, layout: "path", path: activeLayer.path, color: brushColor, font: `700 ${textSize}px "Lato", sans-serif` },
           activeLayer.transform,
         );
-      } else studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor, font: `700 ${textSize}px 'Inter', system-ui, sans-serif` });
-      notify(activeTool === "type-mask" ? "Type selection created" : "Text added");
+        setActiveLayerId(layer.id);
+      } else {
+        const layer = studio.addTextLayer(textDraft, { x: p.x, y: p.y, layout: activeTool === "vertical-text" ? "vertical" : "point", color: brushColor, font: `700 ${textSize}px "Lato", sans-serif` });
+        setActiveLayerId(layer.id);
+      }
+      notify("Text added");
       return;
     }
     if (activeTool === "eyedropper" || activeTool === "color-sampler") {
@@ -1199,20 +1584,25 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     if (activeTool === "direct-select") {
       if (!activeLayer?.path) { notify("Select a path layer"); return; }
+      if (activeLayer.locked) { notify("Unlock this layer before editing its anchors"); return; }
+      if (activeLayer.path.booleanSource || activeLayer.path.offsetSource) { notify("Expand the generated shape to editable contours first"); return; }
       const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
       if (!local) return;
       let index = 0;
+      let contour = 0;
       let distance = Infinity;
-      activeLayer.path.anchors.forEach((anchor, candidate) => {
+      [activeLayer.path, ...(activeLayer.path.contours ?? [])].forEach((part, partIndex) => part.anchors.forEach((anchor, candidate) => {
         const d = Math.hypot(anchor.x - local.x, anchor.y - local.y);
-        if (d < distance) { distance = d; index = candidate; }
-      });
+        if (d < distance) { distance = d; index = candidate; contour = partIndex; }
+      }));
+      if (!Number.isFinite(distance)) return;
       const original = structuredClone(activeLayer.path);
-      directAnchorRef.current = { layerId: activeLayer.id, index, original, next: structuredClone(original) };
+      directAnchorRef.current = { layerId: activeLayer.id, index, contour, original, next: structuredClone(original) };
       return;
     }
     if (moveTool && doc) {
-      const hit = hitTestEditableLayer(doc, p.x, p.y, resolvedFocusState.scope?.layerId);
+      if (distortDraft) { notify("Apply or cancel the Distort draft first"); return; }
+      const hit = autoSelectMove ? hitTestEditableLayer(doc, p.x, p.y, resolvedFocusState.scope?.layerId) : null;
       const interactionLayer = hit ?? activeLayer;
       if (!interactionLayer) return;
       if (hit && hit.id !== activeLayerId) setActiveLayerId(hit.id);
@@ -1230,22 +1620,40 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const commitPenPath = useCallback((closeIt: boolean) => {
+    penFrameRef.current?.cancel();
+    setPenPreview(null);
+    if (studio && studio.activeDocumentState().id !== penDocumentId) { setPenDraft([]); setPenDragging(null); return; }
     if (!studio || penDraft.length < 2) { setPenDraft([]); setPenDragging(null); return; }
-    const path: PathStyle = {
-      anchors: penDraft.map((a) => ({ ...a, hIn: { ...a.hIn }, hOut: { ...a.hOut } })),
-      closed: closeIt,
-      fill: brushColor,
-      stroke: "#000000",
-      strokeWidth: 0,
-    };
-    studio.addPathLayer(path);
+    const path = createPenPath(penDraft, closeIt, brushColor);
+    try { setActiveLayerId(studio.addPathLayer(path).id); }
+    catch (error) { notify(error instanceof Error ? error.message : "Path could not be created; draft retained"); return; }
     setPenDraft([]);
     setPenDragging(null);
     notify(closeIt ? "Path closed" : "Path added");
-  }, [studio, penDraft, brushColor, notify]);
+  }, [studio, penDraft, brushColor, notify, setActiveLayerId, penDocumentId]);
 
   const onPointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
+    updateDynamicCursorFromEvent(e);
+    // A captured paint gesture wins over tool/layer changes until release.
+    if (brushGestureRef.current) {
+      const gesture = brushGestureRef.current;
+      if (gesture.pointerId !== e.pointerId) return;
+      if (gesture.documentId !== studio.activeDocumentState().id) { studio.cancelStroke(); brushGestureRef.current = null; return; }
+      if (e.buttons === 0) return;
+      const source = e.nativeEvent;
+      const coalesced = typeof source.getCoalescedEvents === "function" ? source.getCoalescedEvents() : [];
+      const points = coalesced.length ? coalesced : [source];
+      const rect = canvasRef.current?.getBoundingClientRect();
+      try {
+        for (const point of points) studio.paintTo(gesture.layerId, gesture.params, eventToDoc({
+          clientX: point.clientX, clientY: point.clientY, pressure: point.pressure,
+          tiltX: point.tiltX, tiltY: point.tiltY, azimuthAngle: point.azimuthAngle,
+          timeStamp: point.timeStamp, pointerType: point.pointerType || e.pointerType,
+        }, rect));
+      } catch (error) { brushGestureRef.current = null; notify(error instanceof Error ? error.message : "Stroke cancelled safely"); }
+      return;
+    }
     const stageRect = stageRef.current?.getBoundingClientRect();
     if (stageRect) spacePointerRef.current = { x: e.clientX - stageRect.left, y: e.clientY - stageRect.top };
     if (activeTool === "radial-warp") positionWarpOverlay(eventToDoc(e));
@@ -1261,17 +1669,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       setCaptureHover(eventToDoc(e));
       return;
     }
-    if (activeTool === "pen" && penDragging) {
+    if (activeTool === "pen") {
       const p = eventToDoc(e);
-      setPenDraft((d) => {
-        const next = d.map((a) => ({ ...a, hIn: { ...a.hIn }, hOut: { ...a.hOut } }));
-        const a = next[penDragging.index];
-        if (a) {
-          a.hOut = { dx: p.x - a.x, dy: p.y - a.y };
-          a.hIn = { dx: -(p.x - a.x), dy: -(p.y - a.y) };
-        }
-        return next;
-      });
+      const index = penDragging?.index;
+      const origin = index !== undefined ? penDraft[index] : undefined;
+      const result = snapPenPoint(p, e, origin);
+      penFrameRef.current?.push({ result, index, documentId: studio.activeDocumentState().id });
       return;
     }
     if (activeTool === "direct-select" && directAnchorRef.current && e.buttons !== 0) {
@@ -1282,33 +1685,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       const local = documentPointToLayer(pathLayer.transform, p.x, p.y);
       if (!local) return;
       const next = structuredClone(edit.next);
-      next.anchors[edit.index] = { ...next.anchors[edit.index], x: local.x, y: local.y };
+      const part = edit.contour === 0 ? next : next.contours?.[edit.contour - 1];
+      if (!part?.anchors[edit.index]) return;
+      part.anchors[edit.index] = { ...part.anchors[edit.index], x: local.x, y: local.y };
       edit.next = next;
       studio.liveUpdatePath(edit.layerId, next);
       return;
     }
-    if (activeTool === "sel-quick" && e.buttons !== 0 && activeLayer?.kind === "raster") {
+    if (quickSelectionRef.current && e.buttons !== 0) {
+      const gesture = quickSelectionRef.current;
+      if (gesture.pointerId !== e.pointerId) return;
+      if (gesture.documentId !== studio.activeDocumentState().id || activeTool !== "sel-quick") { studio.cancelSelectionGesture(); quickSelectionRef.current = null; return; }
       const p = eventToDoc(e);
-      studio.selectByColor(activeLayer.id, p.x, p.y, Math.max(6, wandTolerance / 2), "add", true);
+      if (Math.hypot(p.x - gesture.x, p.y - gesture.y) < 4) return;
+      try {
+        studio.selectByColor(gesture.layerId, p.x, p.y, Math.max(6, wandTolerance / 2), gesture.mode, true);
+        gesture.x = p.x; gesture.y = p.y;
+      } catch (error) { studio.cancelSelectionGesture(); quickSelectionRef.current = null; notify(error instanceof Error ? error.message : "Selection cancelled"); }
       return;
     }
     const d = dragRef.current;
-    if (paintingTool && e.buttons !== 0 && activeLayer) {
-      // Coalesced events for smoother strokes on high-frequency devices.
-      type WithCoalesced = { getCoalescedEvents?: () => Array<{
-        clientX: number;
-        clientY: number;
-        pressure?: number;
-        tiltX?: number;
-        tiltY?: number;
-        azimuthAngle?: number;
-      }> };
-      const src = e.nativeEvent as WithCoalesced;
-      const events = src.getCoalescedEvents ? src.getCoalescedEvents() : [];
-      const points = events.length ? events : [e.nativeEvent];
-      for (const ev of points) studio.paintTo(activeLayer.id, brushParams(), eventToDoc(ev));
-      return;
-    }
     if (retouchTool && retouchActive.current && e.buttons !== 0 && activeLayer) {
       type WithCoalesced = { getCoalescedEvents?: () => Array<{
         clientX: number; clientY: number; pressure?: number; tiltX?: number; tiltY?: number; azimuthAngle?: number;
@@ -1321,12 +1717,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!d) return;
     const p = eventToDoc(e);
     const nextPath = d.kind === "sel-lasso" && d.path ? [...d.path, { x: p.x, y: p.y }] : d.path;
-    const next: CanvasDragDraft = { ...d, x1: p.x, y1: p.y, path: nextPath };
+    const next: CanvasDragDraft = { ...d, x1: p.x, y1: p.y, path: nextPath, shiftKey: e.shiftKey, altKey: e.altKey };
     const draggedLayer = d.layerId ? studio.findLayer(d.layerId) : null;
     if (d.kind === "move-layer" && draggedLayer && d.moveStart) {
-      const dx = p.x - d.x0;
-      const dy = p.y - d.y0;
-      studio.liveUpdateTransform(draggedLayer.id, snapLayerTranslation(draggedLayer, d.moveStart.tx + dx, d.moveStart.ty + dy));
+      if (d.x1 === d.x0 && d.y1 === d.y0 && p.x === d.x0 && p.y === d.y0) return;
+      const { dx, dy } = constrainedTranslation(p.x - d.x0, p.y - d.y0, e.shiftKey);
+      const raw = { tx: d.moveStart.tx + dx, ty: d.moveStart.ty + dy };
+      const patch = e.altKey ? raw : snapLayerTranslation(draggedLayer, raw.tx, raw.ty);
+      // Snapping must not displace the constrained axis.
+      if (e.shiftKey) { if (dx === 0) patch.tx = raw.tx; else patch.ty = raw.ty; }
+      const documentId = studio.activeDocumentState().id;
+      transformFrameRef.current?.push(() => {
+        if (studio.activeDocumentState().id === documentId) studio.liveUpdateTransform(draggedLayer.id, patch);
+      });
+      dragRef.current = next;
+      return;
     }
     if (d.kind === "ruler") setMeasurement({ start: { x: d.x0, y: d.y0 }, end: { x: p.x, y: p.y } });
     setDragBoth(next);
@@ -1334,13 +1739,37 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const onPointerUp = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!studio) return;
+    if (quickSelectionRef.current) {
+      const gesture = quickSelectionRef.current;
+      if (gesture.pointerId !== e.pointerId) return;
+      quickSelectionRef.current = null;
+      if (e.type === "pointercancel" || gesture.documentId !== studio.activeDocumentState().id) studio.cancelSelectionGesture();
+      else try { studio.endSelectionGesture(); } catch (error) { notify(error instanceof Error ? error.message : "Selection cancelled safely"); }
+      return;
+    }
+    if (brushGestureRef.current) {
+      const gesture = brushGestureRef.current;
+      if (gesture.pointerId !== e.pointerId) return;
+      brushGestureRef.current = null;
+      try {
+        if (e.type === "pointercancel" || gesture.documentId !== studio.activeDocumentState().id) studio.cancelStroke();
+        else studio.endStroke(gesture.layerId, gesture.params, eventToDoc(e));
+      } catch (error) { notify(error instanceof Error ? error.message : "Stroke cancelled safely"); }
+      updateDynamicCursorFromEvent(e);
+      return;
+    }
+    if (dragRef.current?.kind === "move-layer") onPointerMove(e);
+    transformFrameRef.current?.flush();
+    updateDynamicCursorFromEvent(e);
     if (panDragRef.current) {
       panFrameRef.current?.flush();
       panDragRef.current = null;
+      setCanvasCursorOverride(spaceHeld.current ? "hand" : null);
       if (!spaceHeld.current) spaceGestureRef.current = "idle";
       return;
     }
     if (activeTool === "pen" && penDragging) {
+      penFrameRef.current?.flush();
       setPenDragging(null);
       return;
     }
@@ -1352,10 +1781,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       notify("Anchor moved");
       return;
     }
-    if (paintingTool && activeLayer) {
-      studio.endStroke(activeLayer.id, brushParams());
-      return;
-    }
     if (retouchTool && retouchActive.current) {
       studio.endRetouchStroke();
       retouchActive.current = false;
@@ -1363,6 +1788,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
     const d = dragRef.current;
     if (!d) return;
+    if (d.shapeGesture) {
+      setDragBoth(null);
+      if (e.type === "pointercancel") return;
+      try {
+        const end = eventToDoc(e);
+        const layer = commitShapeDrag(studio, { ...d, x1: end.x, y1: end.y, shiftKey: e.shiftKey, altKey: e.altKey });
+        if (layer) { setActiveLayerId(layer.id); notify(`${layer.name} added · editable vector`); }
+      } catch (error) { notify(error instanceof Error ? error.message : "Shape creation failed"); }
+      return;
+    }
     const draggedLayer = d.layerId ? studio.findLayer(d.layerId) : null;
     if (d.kind === "move-layer" && draggedLayer) {
       studio.updateTransform(draggedLayer.id, { tx: draggedLayer.transform.tx, ty: draggedLayer.transform.ty });
@@ -1409,7 +1844,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       } else if (intent?.kind === "frame") {
         studio.addFrame(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.shifted);
       } else if (intent?.kind === "paragraph-text") {
-        studio.addTextLayer(intent.text, {
+        const layer = studio.addTextLayer(intent.text, {
           x: intent.bounds.x,
           y: intent.bounds.y,
           layout: "paragraph",
@@ -1418,6 +1853,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           color: intent.color,
           font: intent.font,
         });
+        setActiveLayerId(layer.id);
       } else if (intent?.kind === "gradient") {
         studio.gradientFill(intent.layerId, intent.from, intent.to, intent.startColor, intent.endColor, intent.gradientType);
       } else if (intent?.kind === "crop") {
@@ -1437,9 +1873,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const ensureAdjustmentLayer = (): string => {
     if (!studio) return "";
-    if (activeAdjustmentId && studio.findLayer(activeAdjustmentId)) return activeAdjustmentId;
+    if (activeLayer?.kind === "adjustment-tone") return activeLayer.id;
     const layer = studio.addAdjustmentLayer("Tone", NEUTRAL_TONE);
-    setActiveAdjustmentId(layer.id);
     setActiveLayerId(layer.id);
     return layer.id;
   };
@@ -1447,13 +1882,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const onToneChange = (key: ToneKey, value: number) => {
     if (!studio) return;
     const id = ensureAdjustmentLayer();
-    const next = { ...tone, [key]: value };
+    const next = { ...(studio.findLayer(id)?.tone ?? NEUTRAL_TONE), [key]: value };
     setTone(next);
     studio.liveUpdateTone(id, next);
   };
   const onToneCommit = () => {
-    if (!studio || !activeAdjustmentId) return;
-    studio.updateTone(activeAdjustmentId, tone);
+    if (!studio || activeLayer?.kind !== "adjustment-tone" || !activeLayer.tone) return;
+    studio.updateTone(activeLayer.id, activeLayer.tone);
   };
 
   const commitRawDevelop = (settings: RawDevelopSettings | null) => {
@@ -1463,9 +1898,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
   const resetTone = () => {
-    if (!studio || !activeAdjustmentId) { setTone({ ...NEUTRAL_TONE }); return; }
+    if (!studio || activeLayer?.kind !== "adjustment-tone") { setTone({ ...NEUTRAL_TONE }); return; }
     setTone({ ...NEUTRAL_TONE });
-    studio.updateTone(activeAdjustmentId, { ...NEUTRAL_TONE });
+    studio.updateTone(activeLayer.id, { ...NEUTRAL_TONE });
     notify("Tone reset");
   };
 
@@ -1495,11 +1930,45 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const importDocumentFile = async (file: File, nativePath?: string) => {
     if (!file || !studio) return;
+    if (/\.lumaformmesh$/i.test(file.name)) {
+      if (file.size > 8 * 1024 * 1024) throw new Error("Form mesh import is limited to 8 MiB");
+      const imported = await studio.importFormMesh(await file.text());
+      setActiveLayerId(imported.layers[0].id); setTone({ ...NEUTRAL_TONE });
+      notify("Form mesh opened with retained geometry and materials. Select the layer for its mesh controls."); return;
+    }
+    if (/\.lumaformtext$/i.test(file.name)) {
+      if (file.size > 4 * 1024 * 1024) throw new Error("Form text import is limited to 4 MiB");
+      const imported = await studio.importFormText(await file.text());
+      setActiveLayerId(imported.layers[0]?.id ?? null); setTone({ ...NEUTRAL_TONE });
+      notify("Form source opened in a new document · editable text and spatial settings · scene geometry is not imported");
+      return;
+    }
+    if (/\.pdf$/i.test(file.name)) {
+      if (file.size > 8 * 1024 * 1024) throw new Error("Editable PDF import is limited to 8 MiB");
+      if (pdfChoiceResolver.current) throw new Error("Finish the current PDF import first");
+      const choice = await new Promise<import("../engine/pdf-import").PdfImportChoice | null>(resolve => { pdfChoiceResolver.current = resolve; setPdfChoice({ name: file.name, resolve }); });
+      pdfChoiceResolver.current = null;
+      if (choice === null) return;
+      const { page, mode, ppi } = choice;
+      const name = `${file.name.replace(/\.pdf$/i, "")} · Page ${page}`;
+      const bytes = await file.arrayBuffer();
+      const imported = mode === "editable" ? await studio.importPdf(bytes, page, name) : mode === "objects" ? await studio.importPdfObjects(bytes, page, choice.fontFamily ?? "Lato", name) : await studio.importRenderedPdf(bytes, page, ppi, name);
+      setActiveLayerId(imported.layers[0]?.id ?? null); setTone({ ...NEUTRAL_TONE });
+      notify(mode === "editable" ? `${imported.layers.length} editable PDF paths · RGB · save as .luma` : mode === "objects" ? `${imported.layers.length} editable PDF objects · fonts mapped to ${choice.fontFamily ?? "Lato"} · review text spacing before delivery` : `PDF page rendered at ${ppi} ppi · flattened RGB layer · save as .luma`);
+      return;
+    }
+    if (/\.svg$/i.test(file.name)) {
+      if (file.size > 2 * 1024 * 1024) throw new Error("Editable SVG import is limited to 2 MiB");
+      const name = file.name.replace(/\.svg$/i, "");
+      const imported = await studio.importSvg(await file.text(), name);
+      setActiveLayerId(imported.layers[0]?.id ?? null);
+      setTone({ ...NEUTRAL_TONE });
+      notify(`${file.name} · ${imported.layers.length} editable vector paths · save as .luma to preserve editing`);
+      return;
+    }
     if (/\.luma$/i.test(file.name)) {
       const project = await studio.importProject(file);
       setActiveLayerId(project.doc.layers[0]?.id ?? null);
-      setActiveAdjustmentId(null);
-      setCustomName(project.name || file.name.replace(/\.luma$/i, ""));
       studio.markDocumentSaved(undefined, nativePath);
       await writeRecoveryDocument(await studio.exportRecoveryDocument());
       setSaveState("saved");
@@ -1511,11 +1980,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       assertFileSize(file, "photoshopBytes");
       const photoshopBytes = await file.arrayBuffer();
       assertSafePhotoshopHeader(photoshopBytes, file.name, exceedsBrowserCanvas, { allowFlattenedFallback: true });
-      const d = await studio.importPsd(photoshopBytes);
+      const d = await studio.importPsd(photoshopBytes, file.name.replace(/\.ps[db]$/i, ""));
       setPhotoshopFormat("source");
       setActiveLayerId(d.layers[0]?.id ?? null);
-      setActiveAdjustmentId(null);
-      setCustomName(file.name.replace(/\.ps[db]$/i, ""));
       setTone({ ...NEUTRAL_TONE });
       const report = await studio.photoshopCompatibility({ format: "source" });
       const previewOnly = report.issues.filter((issue) => issue.severity === "warning").length;
@@ -1542,8 +2009,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         if (ingested?.kind === "developed-raw") {
           const layer = studio.openDevelopedDng(name, bytes, ingested.developed);
           setActiveLayerId(layer.id);
-          setCustomName(name);
-          setActiveAdjustmentId(null);
           setTone({ ...NEUTRAL_TONE });
           notify(`${ingested.developed.provenance.format} developed · ${ingested.developed.metadata.bitsPerSample}-bit Bayer · 32-bit float master`);
           return;
@@ -1606,8 +2071,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       }
       const layer = studio.openImage(name, img, source);
       setActiveLayerId(layer.id);
-      setCustomName(name);
-      setActiveAdjustmentId(null);
       setTone({ ...NEUTRAL_TONE });
       notify(
         raw
@@ -1681,10 +2144,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     await importDocumentFile(new File([data], opened.name, { type: mimeForFileName(opened.name) }), opened.path);
   };
 
-  const openNativeDocument = async () => {
+  const openNativeDocument = async (isActive: () => boolean) => {
     try {
       const opened = await openNativeFile();
-      if (!opened) return;
+      if (!opened || !isActive()) return;
       await importOpenedFile(opened);
     } catch (error) {
       notify(error instanceof Error ? error.message : "Native open failed");
@@ -1706,12 +2169,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     }
   };
 
-  const openDocumentPath = async (path: string) => {
-    const readyPath = startupOpenCoordinator.current.route(path);
-    if (!readyPath) return;
+  const openDocumentPath = async (readyPath: string, isActive: () => boolean) => {
     try {
       const opened = await readNativePath(readyPath);
-      if (!opened) return;
+      if (!opened || !isActive()) return;
       await importOpenedFile(opened);
       const next = withRecentFile(recentFilesRef.current, readyPath);
       recentFilesRef.current = next;
@@ -1723,7 +2184,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const requestDocumentOpen = () => {
-    if (isNativeFilesystemAvailable()) void openNativeDocument();
+    if (isNativeFilesystemAvailable()) nativeOpenQueue.current?.enqueue("picker");
     else fileInput.current?.click();
   };
 
@@ -1750,7 +2211,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
    * images become fitted layers on the current canvas.
    */
   const DOCUMENT_DROP_PATTERN = new RegExp(
-    `\\.(luma|psd|psb|${RAW_EXTENSIONS.join("|")})$`,
+    `\\.(luma|svg|pdf|lumaformtext|lumaformmesh|psd|psb|${RAW_EXTENSIONS.join("|")})$`,
     "i",
   );
 
@@ -1771,8 +2232,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const queueBatchFiles = (files: File[]) => {
+    if (batchAbortRef.current) return;
     const images = files.filter((file) => /\.(png|jpe?g|webp)$/i.test(file.name));
-    if (images.length) setBatchFiles((current) => [...current, ...images]);
+    if (images.length + batchFiles.length > BATCH_MAX_FILES) { notify(`Batch accepts at most ${BATCH_MAX_FILES} images. Split this into smaller runs.`); return; }
+    if (images.length) { setBatchFiles((current) => [...current, ...images]); setBatchItems({}); }
     if (images.length !== files.length) notify("Batch accepts PNG, JPEG, and WebP images only");
   };
 
@@ -1783,9 +2246,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const pasteImageAsLayer = async () => {
+    const targetId = studio?.activeDocumentState().id;
     try {
       const { clipboardImageFile } = await import("./focus-import");
       const file = await clipboardImageFile();
+      if (studio?.activeDocumentState().id !== targetId) throw new Error("Document changed while reading the clipboard; paste again");
       if (file) await importLayerFile(file);
       else notify("The clipboard does not contain an image");
     } catch (error) {
@@ -1837,6 +2302,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       event.preventDefault();
       depth = 0;
       setDropActive(false);
+      if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || showNewDocument || recolorSession || pdfChoiceResolver.current) {
+        notify("Finish the current dialog or file operation before dropping files");
+        return;
+      }
       const files = Array.from(event.dataTransfer?.files ?? []);
       if (files.length) {
         if (showBatch) queueBatchFiles(files);
@@ -1855,9 +2324,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       window.removeEventListener("drop", onDrop);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studio, showBatch]);
+  }, [studio, showBatch, pendingCloseDocumentId, pendingNativeClose, showNewDocument, recolorSession]);
 
-  const projectName = customName || filmstrip[activePreset].name || "Untitled";
+  // The engine owns document identity. UI-only copies drift after close,
+  // recovery, scripting and AI branches and can save a tab under another name.
+  const projectName = openDocuments.find(document => document.active)?.name ?? "Untitled";
 
   const downloadOrSave = async (blob: Blob, fileName: string) => {
     if (isNativeFilesystemAvailable()) return saveNativeFile(blob, fileName);
@@ -1870,16 +2341,35 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     return true;
   };
 
+  const sendLayerToForm = async (layer: Layer) => {
+    try {
+      const asset = formSpatialAssetFromLayer(layer, spatialOperationIdsForTool(activeTool));
+      const fileName = `${layer.name.replace(/[^a-z0-9_-]+/gi, "-") || "Luma-Layer"}.lumaform`;
+      const saved = await downloadOrSave(
+        new Blob([serializeFormSpatialAsset(asset)], { type: "application/vnd.luma-form.spatial+json" }),
+        fileName,
+      );
+      if (saved) notify("Spatial layer ready for Form Studio");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Spatial export failed");
+    }
+  };
+
   const saveProject = async (saveAs = false, nameOverride?: string) => {
-    if (!studio) return;
+    if (!studio || projectSavingRef.current || nativeOpeningRef.current) return false;
+    projectSavingRef.current = true;
+    setProjectSaveError(null);
+    setProjectSaving(true);
+    transformFrameRef.current?.flush();
     setSaveState("saving");
     try {
-      const saveName = nameOverride ?? projectName;
-      const blob = await studio.exportProject(saveName);
+      const saveName = nameOverride ?? studio.activeDocumentState().name;
+      const ticket = await studio.prepareProjectSave(saveName);
+      const blob = ticket.blob;
       const fileName = `${saveName.replace(/[^a-z0-9_-]+/gi, "-")}.luma`;
       let savedPath: string | undefined;
       if (isNativeFilesystemAvailable()) {
-        const currentPath = saveAs ? undefined : studio.activeDocumentState().nativePath;
+        const currentPath = saveAs ? undefined : ticket.nativePath;
         const result = await saveNativeProject(blob, fileName, currentPath);
         if (!result) { setSaveState("unsaved"); return false; }
         savedPath = result;
@@ -1887,16 +2377,23 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         const saved = await downloadOrSave(blob, fileName);
         if (!saved) { setSaveState("unsaved"); return false; }
       }
-      studio.markDocumentSaved(undefined, savedPath);
-      if (savedPath) setCustomName(savedPath.split(/[\\/]/).at(-1)?.replace(/\.luma$/i, "") ?? saveName);
-      await writeRecoveryDocument(await studio.exportRecoveryDocument());
+      const settled = studio.completeProjectSave(ticket, savedPath);
+      if (!settled) { setSaveState("unsaved"); notify("Saved the earlier version. Newer changes still need saving."); return false; }
+      try { await writeRecoveryDocument(await studio.exportRecoveryDocument(ticket.documentId)); }
+      catch { notify("Project saved; recovery checkpoint could not be updated"); }
+      if (studio.listDocuments().find(document => document.id === ticket.documentId)?.dirty) {
+        setSaveState("unsaved"); notify("New changes arrived after saving. Save again before closing."); return false;
+      }
       setSaveState("saved");
       notify("Project + version history saved");
       return true;
-    } catch {
+    } catch (error) {
       setSaveState("error");
-      notify("Project save failed");
+      setProjectSaveError(error instanceof Error ? error.message : "Project save failed");
       return false;
+    } finally {
+      projectSavingRef.current = false;
+      setProjectSaving(false);
     }
   };
 
@@ -1908,7 +2405,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     studio.closeDocument(id);
-    void removeRecoveryDocument(id);
+    void removeRecoveryDocument(id).catch(() => notify("Document closed; its recovery checkpoint could not be removed"));
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -1916,12 +2413,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!studio || !pendingCloseDocumentId) return;
     studio.switchDocument(pendingCloseDocumentId);
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
-    const saved = await saveProject(false);
+    const saved = await saveProject(false, studio.activeDocumentState().name);
     if (!saved) return;
     const id = pendingCloseDocumentId;
     setPendingCloseDocumentId(null);
     studio.closeDocument(id);
-    void removeRecoveryDocument(id);
+    void removeRecoveryDocument(id).catch(() => notify("Document closed; its recovery checkpoint could not be removed"));
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -1930,7 +2427,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const id = pendingCloseDocumentId;
     setPendingCloseDocumentId(null);
     studio.closeDocument(id);
-    void removeRecoveryDocument(id);
+    void removeRecoveryDocument(id).catch(() => notify("Document closed; its recovery checkpoint could not be removed"));
     setActiveLayerId(studio.doc.layers[0]?.id ?? null);
   };
 
@@ -1948,10 +2445,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   useEffect(() => {
     if (!studio || !desktop) return;
     return listenForNativeCloseRequest(() => {
+      if (!startupReadyRef.current) { void cancelNativeClose(); notify("Wait for document recovery to finish"); return; }
+      if (nativeCloseBusyRef.current) return;
+      if (projectSavingRef.current || nativeOpeningRef.current) { void cancelNativeClose(); notify("Wait for the file operation to finish"); return; }
       if (studio.dirtyDocuments().length) setPendingNativeClose(true);
       else void confirmNativeClose();
     });
-  }, [studio, desktop]);
+  }, [studio, desktop, notify]);
 
   useEffect(() => {
     if (!pendingCloseDocumentId && !pendingNativeClose) return;
@@ -1966,6 +2466,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        if (nativeCloseBusyRef.current) return;
         if (pendingNativeClose) {
           setPendingNativeClose(false);
           void cancelNativeClose();
@@ -1998,14 +2499,41 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   }, [pendingCloseDocumentId, pendingNativeClose]);
 
   const saveAllAndCloseNative = async () => {
-    if (!studio) return;
-    for (const dirty of studio.dirtyDocuments()) {
-      studio.switchDocument(dirty.id);
-      setActiveLayerId(studio.doc.layers[0]?.id ?? null);
-      if (!await saveProject(false, dirty.name)) return;
+    if (!studio || nativeCloseBusyRef.current) return;
+    nativeCloseBusyRef.current = true;
+    setNativeCloseBusy(true);
+    try {
+      for (const dirty of studio.dirtyDocuments()) {
+        studio.switchDocument(dirty.id);
+        setActiveLayerId(studio.doc.layers[0]?.id ?? null);
+        if (!await saveProject(false, dirty.name)) return;
+      }
+      if (studio.dirtyDocuments().length) { notify("Some documents changed while saving. Review them before quitting."); return; }
+      await confirmNativeClose();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Luma could not quit safely. Your documents remain open.");
+    } finally {
+      nativeCloseBusyRef.current = false;
+      setNativeCloseBusy(false);
     }
-    setPendingNativeClose(false);
-    await confirmNativeClose();
+  };
+
+  const discardAllAndCloseNative = async () => {
+    if (!studio || nativeCloseBusyRef.current) return;
+    nativeCloseBusyRef.current = true;
+    setNativeCloseBusy(true);
+    let restoreRecovery: (() => Promise<void>) | undefined;
+    try {
+      restoreRecovery = await discardRecoveryDocuments(studio.dirtyDocuments().map(document => document.id));
+      await confirmNativeClose();
+    } catch (error) {
+      try { await restoreRecovery?.(); }
+      catch { notify("Quit was canceled, but recovery restoration failed. Keep these documents open and save them."); return; }
+      notify(error instanceof Error ? error.message : "Discard could not be committed. Your documents remain open.");
+    } finally {
+      nativeCloseBusyRef.current = false;
+      setNativeCloseBusy(false);
+    }
   };
 
   const onProjectImport = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -2020,12 +2548,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   useEffect(() => {
-    if (!studio) return;
+    if (!studio || !startupReady) return;
     let timer = 0;
     let active = true;
     const queue = new CoalescedSaveQueue<Awaited<ReturnType<Studio["exportRecoveryDocument"]>>>({
       produce: () => studio.exportRecoveryDocument(),
-      commit: (checkpoint) => writeRecoveryDocument(checkpoint),
+      commit: (checkpoint) => writeRecoveryDocument(checkpoint, () => studio.listDocuments().some(doc => doc.id === checkpoint.id)),
       onState: (state) => {
         if (!active) return;
         if (state === "producing" || state === "committing") setSaveState("saving");
@@ -2060,7 +2588,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       active = false;
       void queue.waitForIdle();
     };
-  }, [studio, projectName]);
+  }, [studio, startupReady]);
 
   useEffect(() => {
     if (!studio) return;
@@ -2091,7 +2619,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const addAdjust = () => {
     if (!studio) return;
     const layer = studio.addAdjustmentLayer("Tone", NEUTRAL_TONE);
-    setActiveAdjustmentId(layer.id);
     setActiveLayerId(layer.id);
     setTone({ ...NEUTRAL_TONE });
     switchWorkspace("develop");
@@ -2147,14 +2674,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       return;
     }
     if (action === "group") {
-      if (!activeLayerId) { notify("Select a layer to group"); return; }
-      const group = studio.groupLayer(activeLayerId);
-      if (group) setActiveLayerId(group.id);
-      else notify("Select a content layer to group");
+      executeStudioCommand("group-layer");
       return;
     }
     if (action === "generate") { focusInspector("ai"); return; }
-    if (action === "paste") void pasteImageAsLayer();
+    if (action === "paste") executeStudioCommand("paste-pixels");
   };
 
   const runSubject = () => {
@@ -2201,6 +2725,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       const layers = await studio.generativeEditVariations(activeLayer.id, aiPrompt.trim(), aiOperation, {
         endpoint: resolveAiEditEndpoint(desktop),
         controls: currentAiControls(),
+        ...(aiOperation === "upscale" || aiOperation === "expand" ? { geometryCopy: { mode: aiOperation, factor: aiOperation === "upscale" ? 2 : 1.5 } } : {}),
         quality: aiQuality,
         variations: aiVariations,
         signal: controller.signal,
@@ -2241,28 +2766,34 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     try {
       const mime = exportFormat === "jpeg" ? "image/jpeg" : exportFormat === "webp" ? "image/webp" : "image/png";
       const blob = await studio.exportImage(mime, 0.92);
-      const saved = await downloadOrSave(blob, `${customName || filmstrip[activePreset].name}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`);
+      const saved = await downloadOrSave(blob, `${projectName}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`);
       if (saved) notify(`Exported ${exportFormat.toUpperCase()}`);
     } catch { notify("Export failed"); }
   };
 
   const runBatchNow = async () => {
-    if (!studio || !batchFiles.length) return;
-    const { runBatch } = await import("@/app/engine/batch");
+    if (!studio || !batchFiles.length || batchAbortRef.current) return;
     const action = selectedActionIdx != null ? studio.actions.get(selectedActionIdx) : null;
+    if (selectedActionIdx != null && !action) { notify("The selected action is no longer available. Choose another action."); return; }
+    const controller = new AbortController();
+    batchAbortRef.current = controller;
+    setBatchItems({});
     setBatchProgress({ i: 0, total: batchFiles.length, name: "" });
     try {
+      const { runBatch } = await import("@/app/engine/batch");
+      const onItem: BatchOptions["onItem"] = (index, status, message) => setBatchItems(current => ({ ...current, [index]: { status, message } }));
       const result = await runBatch(batchFiles, action ?? null, (i, total, name) => {
         setBatchProgress({ i, total, name });
-      });
+      }, undefined, { signal: controller.signal, onItem });
+      if (batchAbortRef.current !== controller) return;
       const saved = await downloadOrSave(result.archive, `luma-batch-${Date.now()}.zip`);
-      if (saved) notify(result.failed.length
-        ? `Batch complete · ${result.succeeded} exported · ${result.failed.length} failed (see report)`
-        : `Batch complete · ${result.succeeded} images`);
+      if (saved) notify(`${result.cancelled ? "Batch stopped" : "Batch finished"} · ${result.succeeded} exported · ${result.failed.length} failed · ${result.skipped} skipped (see report)`);
+      else notify("Batch output was not saved. You can run the queue again.");
     } catch (err) {
       console.warn(err);
-      notify("Batch failed");
+      notify(err instanceof Error ? err.message : "Batch failed");
     } finally {
+      batchAbortRef.current = null;
       setBatchProgress(null);
     }
   };
@@ -2270,19 +2801,22 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const exportPsd = async () => {
     if (!studio) return;
     try {
-      const { buffer: buf, report } = await studio.exportPhotoshop({ format: photoshopFormat });
+      const { buffer: buf, report } = await studio.exportPhotoshop({ format: photoshopFormat }, report => new Promise<boolean>(resolve => {
+        exportApprovalResolver.current?.(false);
+        exportApprovalResolver.current = resolve;
+        setPhotoshopApproval({ report, documentId: studio.activeDocumentState().id, resolve });
+      }));
       const blob = new Blob([buf], { type: "image/vnd.adobe.photoshop" });
-      const saved = await downloadOrSave(blob, `${customName || filmstrip[activePreset].name}-luma.${report.container}`);
+      const saved = await downloadOrSave(blob, `${projectName}-luma.${report.container}`);
       if (!saved) return;
       const warnings = report.issues.filter((issue) => issue.severity === "warning").length;
-      notify(`Exported ${report.container.toUpperCase()}${warnings ? ` · ${warnings} compatibility warning${warnings === 1 ? "" : "s"}` : " · editable fidelity preserved"}`);
+      notify(`Exported ${report.container.toUpperCase()}${warnings ? ` · ${warnings} acknowledged compatibility warning${warnings === 1 ? "" : "s"}` : " · no detected compatibility warnings"}`);
     } catch (error) { notify(error instanceof Error ? error.message : "Photoshop export failed"); }
   };
 
-  const startRecording = () => {
+  const startRecording = (name: string) => {
     if (!studio) return;
-    const name = window.prompt("Action name?", `Action ${studio.actions.list().length + 1}`);
-    if (!name) return;
+    if (!name.trim()) return;
     studio.startRecording(name);
     setRecordingName(name);
     notify(`Recording: ${name}`);
@@ -2297,9 +2831,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (!studio) return;
     const a = studio.actions.get(i);
     if (!a) return;
-    const target = studio.replay(a, activeLayerId);
-    if (target) setActiveLayerId(target);
-    notify(`Played ${a.name}`);
+    try {
+      const report = studio.replayWithReport(a, activeLayerId);
+      if (report.targetId && studio.findLayer(report.targetId)) setActiveLayerId(report.targetId);
+      const failure = report.steps.find(step => step.status === "failed");
+      setActionReport(report);
+      notify(failure ? `Stopped at step ${failure.index + 1}: ${failure.message}` : `Played ${a.name} · ${report.steps.filter(step => step.status === "applied").length} changes`);
+    } catch (error) { notify(error instanceof Error ? error.message : "Action failed"); }
   };
 
   const focusInspector = (tab: "layers" | "properties" | "ai") => {
@@ -2329,10 +2867,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     if (nextWorkspace) setWorkspace(nextWorkspace);
     selectInspectorTab("properties");
     if (layer.kind === "adjustment-tone") {
-      setActiveAdjustmentId(layer.id);
       if (layer.tone) setTone({ ...layer.tone });
-    } else {
-      setActiveAdjustmentId(null);
     }
   };
 
@@ -2344,7 +2879,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
    * than a menu item that quietly does nothing.
    */
   const runStudioCommand = (command: StudioCommand) => {
-    if (desktopUpdateInstalling) {
+    if (desktopUpdateInstallingRef.current) {
       notify("A signed update is being installed");
       return;
     }
@@ -2356,6 +2891,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         }
         void runDesktopUpdateFlow({
           onStatus: notify,
+          onPhase: (phase) => {
+            const locked = phase !== "idle" && phase !== "checking";
+            desktopUpdateInstallingRef.current = locked;
+            setDesktopUpdateInstalling(locked);
+            setDesktopUpdatePhase(phase === "downloading" ? "Downloading and verifying update…"
+              : phase === "checkpointing" ? "Protecting your workspace…" : "Installing verified update…");
+          },
           confirmInstall: (update) => {
             if (studio?.dirtyDocuments().length) {
               notify("Documents changed during the update check. Save them before installing");
@@ -2365,30 +2907,97 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           },
           beforeInstall: async () => {
             if (!studio) throw new Error("No workspace is available to checkpoint");
-            await writeRecoveryWorkspace(await studio.exportRecoveryWorkspace());
-            setDesktopUpdateInstalling(true);
+            return studio.checkpointForRestart(writeRecoveryWorkspace);
           },
         }).then((result) => {
-          if (result.status === "unavailable") notify("Automatic updates are available in signed release builds");
+          if (result.status === "busy") notify("An update check is already running");
+          else if (result.status === "unavailable") notify("Automatic updates are available in signed release builds");
           else if (result.status === "current") notify("Luma Studio is up to date");
           else if (result.status === "cancelled" && !studio?.dirtyDocuments().length) notify("Update cancelled");
         }).catch((error) => {
-          setDesktopUpdateInstalling(false);
           notify(error instanceof Error ? error.message : "Update check failed");
         });
         return;
+      case "new-document": setShowNewDocument(true); return;
+      case "close-document": if (studio) requestCloseDocument(studio.activeDocumentState().id); return;
       case "open": requestDocumentOpen(); return;
       case "save": void saveProject(); return;
       case "save-as": void saveProject(true); return;
       case "export": setShowExportMenu(true); return;
+      case "export-print": if (studio && isNativeFilesystemAvailable()) { const state = studio.activeDocumentState(); setPrintTarget({ id: state.id, name: state.name }); } return;
       case "batch": setShowBatch(true); return;
 
-      case "undo": studio?.undo(); forceUpdate(); return;
-      case "redo": studio?.redo(); forceUpdate(); return;
+      case "undo":
+        if (distortDraft || ftDragRef.current || dragRef.current?.kind === "move-layer") cancelTransformGesture();
+        else studio?.undo();
+        forceUpdate(); return;
+      case "redo":
+        if (distortDraft || ftDragRef.current || dragRef.current?.kind === "move-layer") cancelTransformGesture();
+        else studio?.redo();
+        forceUpdate(); return;
       case "history": setShowHistory(true); return;
+      case "copy-pixels": case "copy-merged": case "cut-pixels": {
+        if (!studio) return;
+        try {
+          const pendingCut = command === "cut-pixels" && hasNativeImageClipboard() ? studio.preparePixelCut(activeLayerId!) : undefined;
+          const canvas = pendingCut?.canvas ?? (command === "cut-pixels" ? studio.cutPixels(activeLayerId!) : studio.copyPixels(activeLayerId ?? undefined, command === "copy-merged"));
+          const marker = `Luma pixels ${crypto.randomUUID()}`;
+          clipboardMarkerRef.current = marker;
+          if (!hasNativeImageClipboard()) {
+            clipboardEventRef.current?.clipboardData?.setData(SELECTION_CLIPBOARD_TYPE, marker);
+            clipboardEventRef.current?.clipboardData?.setData("text/plain", marker);
+          }
+          void writePixelClipboard(canvas, marker).then(shared => {
+            if (pendingCut) {
+              if (!shared) throw new Error("Clipboard publication was superseded");
+              pendingCut.complete();
+            }
+            notify(shared ? `${pendingCut ? "Pixels cut" : "Pixels copied"} · 8-bit RGBA` : "Pixels ready to paste in Luma · system clipboard unavailable");
+          }).catch(error => notify(`${pendingCut ? "Cut not completed; original pixels kept. " : ""}${error instanceof Error ? error.message : String(error)}`));
+        } catch (error) { notify(error instanceof Error ? error.message : "Copy failed; no pixels changed"); }
+        return;
+      }
+      case "paste-pixels": case "paste-in-place": case "selection-to-layer": {
+        if (!studio) return;
+        if (command !== "selection-to-layer" && hasNativeImageClipboard()) {
+          const targetId = studio.activeDocumentState().id;
+          let transfer: ReturnType<Studio["beginClipboardImport"]> | undefined;
+          void readNativeImageClipboard(clipboardMarkerRef.current, studio.hasPixelClipboard(), () => {
+            if (studio.activeDocumentState().id !== targetId) throw new Error("Document changed while reading the clipboard; paste again");
+            transfer = studio.beginClipboardImport();
+          }).then(async result => {
+            if (studio.activeDocumentState().id !== targetId) throw new Error("Document changed while reading the clipboard; paste again");
+            transfer?.assertCurrent();
+            if (result === "internal") {
+              const layer = studio.pastePixels(command === "paste-in-place");
+              setActiveLayerId(layer.id); notify("Pixels pasted · original transparency preserved");
+            } else await importLayerFile(result);
+          }).catch(error => notify(error instanceof Error ? error.message : String(error))).finally(() => transfer?.release());
+          return;
+        }
+        if (!studio.hasPixelClipboard() && command === "paste-pixels") { void pasteImageAsLayer(); return; }
+        try {
+          const layer = command === "selection-to-layer" ? studio.selectionToLayer(activeLayerId!) : studio.pastePixels(command === "paste-in-place");
+          setActiveLayerId(layer.id); notify("Pixels added as an editable raster layer");
+        } catch (error) { notify(error instanceof Error ? error.message : "Paste failed safely"); }
+        return;
+      }
+      case "delete-pixels":
+        try { if (studio && activeLayerId) studio.clearPixels(activeLayerId); }
+        catch (error) { notify(error instanceof Error ? error.message : "Delete failed safely"); }
+        return;
       case "copy-layer-style":
         if (!studio || !activeLayerId || !studio.copyLayerStyle(activeLayerId)) notify("Select a layer to copy its style");
         else notify("Layer style copied");
+        return;
+      case "define-custom-shape":
+        try {
+          if (!activeLayer) throw new Error("Select a closed vector layer first");
+          const preset = captureCustomShape(activeLayer, `custom-${crypto.randomUUID()}`);
+          persistCustomShapes([...customShapes, preset]);
+          chooseShapePreset(preset.id);
+          notify("Outline saved locally · drag to draw a new copy");
+        } catch (error) { notify(error instanceof Error ? error.message : "Custom shape could not be saved"); }
         return;
       case "paste-layer-style":
         if (!studio || !activeLayerId || !studio.pasteLayerStyle(activeLayerId)) notify("Copy a style, then select an unlocked layer");
@@ -2407,30 +3016,86 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       case "select-all": studio?.selectAll(); return;
       case "deselect": studio?.deselect(); return;
       case "invert-selection": studio?.invertSelectionArea(); return;
+      case "select-channel":
+        try { studio?.selectCompositeChannel(); notify("Channel loaded as selection · refine, copy, cut or create a mask"); }
+        catch (error) { notify(error instanceof Error ? error.message : "Channel extraction failed"); }
+        return;
+      case "channel-save": case "channel-update": case "channel-rename": case "channel-delete": case "channel-invert": case "channel-calculate": case "channel-load":
+        if (!studio) return;
+        try {
+          if (command === "channel-load") studio.loadAlphaChannel(alphaDraft.id, alphaDraft.loadMode);
+          else {
+            const operation = command.slice("channel-".length) as "save" | "update" | "rename" | "delete" | "invert" | "calculate";
+            const id = studio.editAlphaChannel(operation, alphaDraft);
+            updateAlphaDraft({ ...alphaDraft, id: operation === "delete" ? "" : id });
+          }
+          forceUpdate();
+        } catch (error) { notify(error instanceof Error ? error.message : "Alpha channel operation failed"); }
+        return;
       case "select-subject":
         activateTool("sel-sam", "select");
-        focusInspector("ai");
-        void runNeuralSubject();
+        executeStudioCommand("panel-selection");
+        if (studio && activeLayerId && !neural) {
+          setNeural({ msg: "Selecting subject", pct: 0 });
+          void studio.selectSubject(activeLayerId, selectionMode, (msg, pct) => setNeural({ msg, pct }))
+            .then(() => notify("Subject selected · refine edges or copy/cut pixels"))
+            .catch(error => notify(error instanceof Error ? error.message : "Select Subject unavailable; try Quick Selection"))
+            .finally(() => setNeural(null));
+        }
         return;
 
       case "new-layer": addBlank(); return;
       case "duplicate-layer":
         if (studio && activeLayerId) {
-          const layer = studio.duplicateLayer(activeLayerId);
-          if (layer) setActiveLayerId(layer.id);
+          const copies = studio.duplicateLayers(selectedLayerIds);
+          setActiveLayerId(studio.setSelectedLayers(copies.map(layer => layer.id)));
           forceUpdate();
         } else notify("Select a layer to duplicate");
         return;
       case "group-layer":
-        if (studio && activeLayerId) studio.groupLayer(activeLayerId);
+        if (studio && selectedLayerIds.length) setActiveLayerId(studio.setSelectedLayers([studio.groupLayers(selectedLayerIds).id]));
         forceUpdate();
         return;
-      case "delete-layer": removeActive(); return;
+      case "ungroup-layers":
+        if (studio) setActiveLayerId(studio.setSelectedLayers(studio.ungroupLayers(selectedLayerIds)));
+        forceUpdate(); return;
+      case "merge-layers":
+        if (studio) setActiveLayerId(studio.setSelectedLayers([studio.mergeLayers(selectedLayerIds).id]));
+        forceUpdate(); return;
+      case "delete-layer":
+        if (studio) { studio.removeLayers(selectedLayerIds); setActiveLayerId(studio.setSelectedLayers([studio.doc.layers[0]?.id].filter((id): id is string => Boolean(id)))); }
+        forceUpdate(); return;
+      case "rename-layer": {
+        if (studio && activeLayer) setLayerRenameTarget({ documentId: studio.activeDocumentState().id, layerId: activeLayer.id, name: activeLayer.name });
+        return;
+      }
+      case "toggle-layer-lock": case "toggle-layer-visibility": {
+        if (studio) {
+          const key = command === "toggle-layer-lock" ? "locked" : "visible";
+          const targets = layers.filter(layer => selectedLayerIds.includes(layer.id));
+          studio.setLayersFlag(selectedLayerIds, key, !targets.every(layer => layer[key]));
+        }
+        forceUpdate(); return;
+      }
       case "convert-smart-object":
         if (studio && activeLayerId) {
           studio.convertToSmartObject(activeLayerId);
           forceUpdate();
         } else notify("Select a layer to convert");
+        return;
+      case "replace-smart-content":
+        if (studio && activeLayerId) {
+          try {
+            smartContentTarget.current = studio.prepareSmartContentReplacement(activeLayerId);
+            smartContentInput.current?.click();
+          } catch (error) { notify(error instanceof Error ? error.message : "Content replacement unavailable"); }
+        }
+        return;
+      case "edit-smart-content":
+        if (studio && activeLayerId) void studio.editSmartContents(activeLayerId).then(() => { forceUpdate(); notify("Edit this contents tab, then choose Layer → Apply Contents to Parent"); }).catch(error => notify(error instanceof Error ? error.message : "Unable to open contents"));
+        return;
+      case "apply-smart-content":
+        if (studio) void studio.applySmartContents().then(id => { setActiveLayerId(id); forceUpdate(); notify("Contents applied · editable source saved inside the parent .luma project"); }).catch(error => notify(error instanceof Error ? error.message : "Unable to apply contents"));
         return;
       case "bring-forward":
         if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1);
@@ -2442,6 +3107,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         return;
       case "layer-style":
         if (activeLayerId) setStyleLayerId(activeLayerId);
+        return;
+      case "recolor":
+        if (studio && activeLayerId && !recolorSession) {
+          try { setRecolorSession(studio.prepareRecolor(activeLayerId)); }
+          catch (error) { notify(error instanceof Error ? error.message : "Unable to open Recolor"); }
+        }
         return;
       case "curves":
         if (studio) {
@@ -2482,16 +3153,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         return;
       }
 
-      case "zoom-in": setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return;
-      case "zoom-out": setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return;
+      case "zoom-in": setView(v => zoomViewToScale(v, fitScale, v.zoom * fitScale * 1.2)); return;
+      case "zoom-out": setView(v => zoomViewToScale(v, fitScale, v.zoom * fitScale / 1.2)); return;
       case "zoom-fit": setView({ zoom: 1, panX: 0, panY: 0 }); return;
-      case "zoom-actual": setView((v) => ({ ...v, zoom: 1 })); return;
+      case "zoom-actual": setZoomPercent(100); return;
       case "toggle-guides": setShowGuides((visible) => !visible); return;
+      case "toggle-rulers": toggleRulers(); return;
 
       case "panel-layers": focusInspector("layers"); setNativePanelOverride(null); return;
+      case "panel-properties": focusInspector("properties"); return;
+      case "panel-selection": openStudioPanel("selection"); return;
+      case "panel-mask": openStudioPanel("mask"); return;
+      case "panel-raw": openStudioPanel("raw"); return;
+      case "panel-paint": openStudioPanel("paint"); return;
+      case "panel-vector": openStudioPanel("vector"); return;
+      case "panel-transform": openStudioPanel("transform"); return;
+      case "panel-measure": openStudioPanel("measure"); return;
       case "panel-document": openStudioPanel("document"); setNativePanelOverride(null); return;
       case "panel-channels": openStudioPanel("channels"); setNativePanelOverride(null); return;
       case "panel-comps": openStudioPanel("structure"); setNativePanelOverride(null); return;
+      case "panel-campaign": openStudioPanel("campaign"); setNativePanelOverride(null); return;
       case "panel-assets": openStudioPanel("assets"); setNativePanelOverride(null); return;
       case "panel-neural": focusInspector("ai"); return;
       case "panel-actions": openStudioPanel("actions"); setNativePanelOverride(null); return;
@@ -2503,12 +3184,44 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   const commandRegistry = createCommandRegistry({
     enabled: (command) => {
-      if (desktopUpdateInstalling) return false;
+      if (!startupReady) return false;
+      if (desktopUpdateInstalling || projectSaving || nativeOpening || pendingCloseDocumentId || pendingNativeClose || layerRenameTarget || showExportMenu || printTarget || vectorTarget || recolorSession) return false;
+      if (command === "export-print") return Boolean(studio && isNativeFilesystemAvailable() && studio.doc.bitDepth === 8 && studio.doc.colorSpace === "srgb" && studio.doc.width * studio.doc.height <= 4_000_000);
+      if (command === "new-document" || command === "close-document") return Boolean(studio && startupReady);
       if (command === "undo") return studio?.canUndo() ?? false;
       if (command === "redo") return studio?.canRedo() ?? false;
-      if (["save", "save-as", "export", "document-properties", "select-all", "deselect", "invert-selection", "crop-selection"].includes(command)) return Boolean(studio);
-      if (["duplicate-layer", "group-layer", "delete-layer", "convert-smart-object", "bring-forward", "send-backward", "layer-style", "copy-layer-style"].includes(command)) return Boolean(studio && activeLayerId);
+      if (command === "group-layer") return Boolean(studio && !studio.layerBatchReason(selectedLayerIds, "group"));
+      if (command === "ungroup-layers") return Boolean(studio && !studio.layerBatchReason(selectedLayerIds, "ungroup"));
+      if (command === "merge-layers") return Boolean(studio && !studio.layerBatchReason(selectedLayerIds, "merge"));
+      if (command === "delete-layer") return Boolean(studio && !studio.layerBatchReason(selectedLayerIds, "delete"));
+      if (command === "rename-layer") return Boolean(studio && selectedLayerIds.length === 1);
+      if (["layer-style", "copy-layer-style", "paste-layer-style", "bring-forward", "send-backward"].includes(command) && selectedLayerIds.length !== 1) return false;
+      if (command === "bring-forward" || command === "send-backward") return Boolean(studio && activeLayerId && !studio.layerBatchReason([activeLayerId], "group"));
+      if (["toggle-layer-lock", "toggle-layer-visibility"].includes(command)) return Boolean(studio && selectedLayerIds.length);
+      const pixelTarget = resolvedFocusState.scope?.target !== "mask";
+      if (command === "select-subject") return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap && !neural);
+      if (command === "copy-merged") return Boolean(studio && doc?.layers.length);
+      if (command === "copy-pixels" || command === "selection-to-layer") return Boolean(studio && pixelTarget && activeLayer && activeLayer.kind !== "group" && !activeLayer.kind.startsWith("adjustment-"));
+      if (command === "cut-pixels" || command === "delete-pixels") return Boolean(studio && pixelTarget && activeLayer?.kind === "raster" && !activeLayer.locked && (activeLayer.bitmap || activeLayer.surface) && (command !== "cut-pixels" || doc?.bitDepth === 8));
+      if (command === "paste-pixels") return Boolean(studio);
+      if (command === "paste-in-place") return Boolean(studio?.hasPixelClipboard());
+      if (["save", "save-as", "export", "document-properties", "select-all", "select-channel", "deselect", "invert-selection", "crop-selection"].includes(command)) return Boolean(studio);
+      if (command === "replace-smart-content") return Boolean(studio && !smartContentUnavailableReason(studio.doc, activeLayer ?? undefined));
+      if (command === "edit-smart-content") return Boolean(studio && !smartContentUnavailableReason(studio.doc, activeLayer ?? undefined, "edit"));
+      if (command === "apply-smart-content") return !!studio?.canApplySmartContents();
+      if (command.startsWith("channel-")) {
+        const channels = studio?.doc.alphaChannels ?? [];
+        const selected = channels.some(channel => channel.id === alphaDraft.id);
+        if (command === "channel-save") return !!studio?.doc.selection && channels.length < 64;
+        if (command === "channel-update") return selected && !!studio?.doc.selection;
+        if (command === "channel-calculate") return selected && channels.length < 64 && channels.some(channel => channel.id === alphaDraft.otherId);
+        return selected;
+      }
+      if (command === "convert-smart-object") return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap && !activeLayer.locked);
+      if (["duplicate-layer", "group-layer", "delete-layer", "bring-forward", "send-backward", "layer-style", "copy-layer-style"].includes(command)) return Boolean(studio && activeLayerId);
       if (command === "paste-layer-style") return Boolean(studio && activeLayerId && !activeLayer?.locked);
+      if (command === "recolor") return Boolean(studio && selectedLayerIds.length === 1 && activeLayer && !activeLayer.locked && !recolorSession);
+      if (command === "define-custom-shape") return Boolean(studio && (activeLayer?.path || activeLayer?.shape) && !activeLayer?.parentId && shapeLibraryReady && customShapes.length < SHAPE_LIBRARY_LIMIT);
       if (["filter-invert", "filter-blur", "filter-sharpen", "filter-desaturate"].includes(command)) {
         return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap && !activeLayer.locked);
       }
@@ -2516,10 +3229,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     },
     checked: (command) => {
       if (command === "toggle-guides") return showGuides;
-      const panelId: PanelId | null = command === "panel-layers" ? "layers"
+      if (command === "toggle-rulers") return showRulers;
+      const panelId: PanelId | null = command === "panel-properties" ? "properties"
+        : command === "panel-selection" ? "selection" : command === "panel-mask" ? "mask"
+        : command === "panel-raw" ? "raw" : command === "panel-paint" ? "paint"
+        : command === "panel-vector" ? "vector" : command === "panel-transform" ? "transform"
+        : command === "panel-measure" ? "measure" : command === "panel-layers" ? "layers"
         : command === "panel-document" ? "document"
           : command === "panel-channels" ? "channels"
             : command === "panel-comps" ? "structure"
+            : command === "panel-campaign" ? "campaign"
               : command === "panel-assets" ? "assets"
                 : command === "panel-neural" ? "neural"
                   : command === "panel-actions" ? "actions"
@@ -2531,8 +3250,40 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     },
   });
   const executeStudioCommand = (command: StudioCommand) => {
-    commandRegistry.execute(command, runStudioCommand);
+    if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || desktopUpdateInstalling) return;
+    if (isEditableTextTarget(document.activeElement) && ["undo", "redo", "select-all"].includes(command)) {
+      document.execCommand(command === "select-all" ? "selectAll" : command);
+      return;
+    }
+    if (isEditableTextTarget(document.activeElement) && ["copy-pixels", "copy-merged", "cut-pixels", "paste-pixels", "paste-in-place", "delete-pixels", "selection-to-layer"].includes(command)) return;
+    if (showNewDocument || pdfChoiceResolver.current || printTarget || vectorTarget) return;
+    try { commandRegistry.execute(command, runStudioCommand); }
+    catch (error) { notify(error instanceof Error ? error.message : "Layer operation failed"); }
   };
+  const menuPublisherRef = useRef<ReturnType<typeof createMenuStatePublisher> | null>(null);
+  const menuStateRef = useRef<Record<string, boolean>>({});
+  const menuStateJson = JSON.stringify(Object.fromEntries(commandRegistry.all().map(command => [command.id, startupReady && !showNewDocument && !pdfChoice && command.enabled()])));
+  useEffect(() => {
+    if (!desktop) return;
+    const publisher = createMenuStatePublisher(publishNativeMenuState);
+    menuPublisherRef.current = publisher;
+    const refresh = () => {
+      const states = { ...menuStateRef.current };
+      if (!projectSavingRef.current && isEditableTextTarget(document.activeElement)) {
+        states.undo = true; states.redo = true; states["select-all"] = true;
+      }
+      publisher.publish(states);
+    };
+    const afterFocus = () => queueMicrotask(refresh);
+    document.addEventListener("focusin", afterFocus);
+    document.addEventListener("focusout", afterFocus);
+    refresh();
+    return () => { publisher.dispose(); menuPublisherRef.current = null; document.removeEventListener("focusin", afterFocus); document.removeEventListener("focusout", afterFocus); };
+  }, [desktop]);
+  useEffect(() => {
+    menuStateRef.current = JSON.parse(menuStateJson);
+    menuPublisherRef.current?.publish(menuStateRef.current);
+  }, [menuStateJson]);
 
   const spaceDeckContext = resolveSpaceDeckContext({
     layer: activeLayer,
@@ -2546,7 +3297,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   });
   const spaceToolLabel = Object.values(modeTools).flat().find(([tool]) => tool === activeTool)?.[2] ?? "Canvas";
   /* eslint-disable react-hooks/refs -- These callbacks are data handed to the HUD's event handlers; the feature builder never invokes them during render. */
-  const spaceToolFeatures: SpaceDeckFeature[] = (() => {
+  const baseSpaceToolFeatures: SpaceDeckFeature[] = (() => {
     const range = (
       id: string,
       label: string,
@@ -2669,6 +3420,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       ...(wandTool || activeTool === "sel-magnetic" ? [
         range("tolerance", "Tolerance", wandTolerance, 0, 255, 1, `${wandTolerance}`, setWandTolerance),
       ] : []),
+      ...([ ["copy-pixels", "Copy", "Copy selected pixels", "⧉"], ["cut-pixels", "Cut", "Copy and remove selected pixels", "✂"], ["paste-pixels", "Paste", "Paste pixels as a new layer", "+"], ["delete-pixels", "Delete", "Clear selected pixels", "⌫"] ] as const).map(([id, label, detail, icon]) => action(id, label, detail, icon, () => executeStudioCommand(id), !commandRegistry.enabled(id))),
     ];
 
     if (activeTool === "tone" && activeLayer?.kind.startsWith("adjustment-") && activeLayer.kind !== "adjustment-tone") return [action(
@@ -2698,7 +3450,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const typeTool = ["text", "paragraph-text", "vertical-text", "path-text", "type-mask"].includes(activeTool);
     if (typeTool) {
       const textLayer = activeLayer?.kind === "text" ? activeLayer : null;
-      const activeSize = textLayer?.text ? parseInt(textLayer.text.font.match(/(\d+)px/)?.[1] || `${textSize}`, 10) : textSize;
+      const activeTypeStyle = textLayer?.text ? resolvedDefaultTextStyle(textLayer.text) : null;
+      const activeSize = activeTypeStyle?.fontSize ?? textSize;
+      const updateDefaultType = (patch: Parameters<typeof withDefaultTextStyle>[1], live = false) => {
+        if (!textLayer?.text) return;
+        const update = withDefaultTextStyle(textLayer.text, patch);
+        if (live) studio?.liveUpdateText(textLayer.id, update);
+        else studio?.updateText(textLayer.id, update);
+      };
       return [
         {
           kind: "text", id: "text-content", label: "Text", value: textLayer?.text?.text ?? textDraft,
@@ -2716,21 +3475,41 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         },
         range("text-size", "Font size", activeSize, 8, 500, 1, `${activeSize} px`, (value) => {
           setTextSize(value);
-          if (textLayer?.text) studio?.liveUpdateText(textLayer.id, { font: textLayer.text.font.replace(/\d+px/, `${value}px`) });
+          updateDefaultType({ fontSize: value, axes: { ...(activeTypeStyle?.axes ?? {}), opsz: value } }, true);
         }, () => { if (textLayer?.text) studio?.updateText(textLayer.id, {}); }),
-        color("text-color", "Color", textLayer?.text?.color ?? brushColor, (value) => {
+        color("text-color", "Color", activeTypeStyle?.color ?? brushColor, (value) => {
           setBrushColor(value);
-          if (textLayer?.text) studio?.updateText(textLayer.id, { color: value });
+          updateDefaultType({ color: value });
         }),
         ...(textLayer?.text ? [
-          range("tracking", "Tracking", textLayer.text.tracking ?? 0, -100, 600, 10, `${textLayer.text.tracking ?? 0}`, (value) => studio?.liveUpdateText(textLayer.id, { tracking: value }), () => studio?.updateText(textLayer.id, {})),
+          choice("font-family", "Typeface", activeTypeStyle!.fontFamily, FONT_CHOICES.some(font => font.value === activeTypeStyle!.fontFamily) ? FONT_CHOICES : [{ label: `${activeTypeStyle!.fontFamily.split(",")[0]} · current`, value: activeTypeStyle!.fontFamily }, ...FONT_CHOICES], (value) => updateDefaultType({ fontFamily: value })),
+          choice("font-weight", "Weight", `${Math.round(activeTypeStyle!.fontWeight / 100) * 100}`, [100, 200, 300, 400, 500, 600, 700, 800, 900].map((value) => ({ value: `${value}`, label: `${value}` })), (value) => updateDefaultType({ fontWeight: Number(value), axes: { ...activeTypeStyle!.axes, wght: Number(value) } })),
+          range("tracking", "Tracking", activeTypeStyle!.tracking, -100, 600, 10, `${activeTypeStyle!.tracking}`, (value) => updateDefaultType({ tracking: value }, true), () => studio?.updateText(textLayer.id, {})),
+          range("line-height", "Leading", textLayer.text.lineHeight, 0.5, 3, 0.05, `${textLayer.text.lineHeight.toFixed(2)}×`, (value) => studio?.liveUpdateText(textLayer.id, { lineHeight: value }), () => studio?.updateText(textLayer.id, {})),
           range("paragraph-spacing", "Paragraph gap", textLayer.text.paragraphSpacing ?? 0, 0, 3, 0.1, `${(textLayer.text.paragraphSpacing ?? 0).toFixed(1)}×`, (value) => studio?.liveUpdateText(textLayer.id, { paragraphSpacing: value }), () => studio?.updateText(textLayer.id, {})),
+          choice("text-align", "Alignment", textLayer.text.align, [
+            { value: "left", label: "Left" }, { value: "center", label: "Center" }, { value: "right", label: "Right" },
+          ], (value) => studio?.updateText(textLayer.id, { align: value as "left" | "center" | "right" })),
+          choice("text-direction", "Direction", textLayer.text.direction ?? "auto", [
+            { value: "auto", label: "Automatic" }, { value: "ltr", label: "Left to right" }, { value: "rtl", label: "Right to left" },
+          ], (value) => studio?.updateText(textLayer.id, { direction: value as "auto" | "ltr" | "rtl" })),
           ...(textLayer.text.layout === "paragraph" ? [toggle("justify", "Justify", "Stretch paragraph lines", textLayer.text.justify ?? false, (value) => studio?.updateText(textLayer.id, { justify: value }))] : []),
         ] : []),
       ];
     }
 
-    const shapeTool = ["rect", "ellipse", "triangle", "polygon", "line", "custom-shape", "frame"].includes(activeTool);
+    if (SHAPE_TOOLS.has(activeTool)) return [
+      choice("shape-preset", "New shape", currentShapeSettings.preset, [...SHAPE_PRESETS.map(s => ({ value: s.id, label: s.label })), ...customShapes.map(s => ({ value: s.id, label: s.name }))], chooseShapePreset),
+      color("new-shape-fill", "New fill", brushColor, setBrushColor),
+      toggle("new-shape-filled", "Fill", "Fill new shapes", shapeSettings.filled, value => setShapeSettings(s => ({ ...s, filled: value }))),
+      color("new-shape-stroke", "New stroke", shapeSettings.stroke, value => setShapeSettings(s => ({ ...s, stroke: value }))),
+      range("new-shape-width", "Stroke width", shapeSettings.strokeWidth, currentShapeSettings.preset === "line" ? 1 : 0, 100, 1, `${shapeSettings.strokeWidth} px`, value => setShapeSettings(s => ({ ...s, strokeWidth: value }))),
+      ...(["polygon", "star"].includes(currentShapeSettings.preset) ? [range("shape-sides", "Sides / points", shapeSettings.sides, 3, 64, 1, `${shapeSettings.sides}`, value => setShapeSettings(s => ({ ...s, sides: value })))] : []),
+      ...(currentShapeSettings.preset === "star" ? [range("shape-inner", "Inner radius", shapeSettings.innerRatio * 100, 5, 95, 1, `${Math.round(shapeSettings.innerRatio * 100)}%`, value => setShapeSettings(s => ({ ...s, innerRatio: value / 100 })))] : []),
+      ...(currentShapeSettings.preset === "rect" ? [range("shape-radius", "Corner radius", shapeSettings.radius, 0, 200, 1, `${shapeSettings.radius} px`, value => setShapeSettings(s => ({ ...s, radius: value })))] : []),
+      action("save-shape", "Save selected outline", "Reuse selected vector geometry", "◇", () => executeStudioCommand("define-custom-shape"), !commandRegistry.enabled("define-custom-shape")),
+    ];
+    const shapeTool = activeTool === "frame";
     if (shapeTool) {
       const shapeLayer = activeLayer?.kind === "shape" ? activeLayer : null;
       return [
@@ -2749,7 +3528,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       ];
     }
 
-    if (activeTool === "pen" || activeTool === "path-select" || activeTool === "direct-select") return [
+    if (activeTool === "pen") return [
+      toggle("pen-snap", "Snap", "Anchors, guides and canvas edges · Option bypasses", penSettings.snap, value => updatePenSettings({ snap: value })),
+      toggle("pen-grid", "Grid snap", "Snap near grid intersections", penSettings.grid, value => updatePenSettings({ grid: value })),
+      range("pen-grid-spacing", "Grid spacing", penSettings.gridSize, 1, 1000, 1, `${penSettings.gridSize} px`, value => updatePenSettings({ gridSize: value })),
+      choice("pen-angle", "Shift angle", String(penSettings.angleStep), [15, 30, 45, 90].map(a => ({ value: String(a), label: `${a}°` })), value => updatePenSettings({ angleStep: Number(value) })),
+      toggle("pen-measure", "Measurements", "Chord / handle length, angle and deltas", penSettings.measurements, value => updatePenSettings({ measurements: value })),
+      color("pen-fill", "Path color", brushColor, setBrushColor),
+      action("finish-path", "Finish open path", "Commit current anchors · Enter", "↗", () => commitPenPath(false), penDraft.length < 2),
+      action("close-path", "Close path", "Join first and last anchor", "◇", () => commitPenPath(true), penDraft.length < 2),
+    ];
+    if (activeTool === "path-select" || activeTool === "direct-select") return [
       color("path-fill", "Path fill", activeLayer?.path?.fill ?? brushColor, (value) => {
         setBrushColor(value);
         if (activeLayer?.path) studio?.updatePath(activeLayer.id, { ...activeLayer.path, fill: value });
@@ -2766,7 +3555,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     ];
 
     if (["crop", "perspective-crop", "straighten", "content-move", "perspective-warp"].includes(activeTool)) return [
-      range("view-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+      range("view-zoom", "View zoom", zoomPercent, 0.01, 3200, 0.01, `${zoomPercent}%`, setZoomPercent),
       toggle("show-guides", "Guides", "Show alignment guides", showGuides, setShowGuides),
       toggle("snap-guides", "Snap", "Snap transforms to guides", snapGuides, setSnapGuides),
       ...(activeTool === "content-move" ? [range("move-feather", "Selection feather", feather, 0, 200, 1, `${feather} px`, setFeather)] : []),
@@ -2777,7 +3566,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       color("sample-color", "Current color", brushColor, setBrushColor),
       ...(activeTool === "color-sampler" ? [action("clear-samples", "Clear samples", `${colorSamples.length} saved`, "×", () => setColorSamples([]), colorSamples.length === 0)] : []),
       ...(activeTool === "ruler" ? [action("clear-ruler", "Clear ruler", measurement ? "Remove measurement" : "No measurement", "×", () => setMeasurement(null), !measurement)] : []),
-      range("measure-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+      range("measure-zoom", "View zoom", zoomPercent, 0.01, 3200, 0.01, `${zoomPercent}%`, setZoomPercent),
+    ];
+
+    if (moveTool && activeLayer) return [
+      choice("transform-mode", "Transform mode", transformMode, [
+        { value: "scale", label: "Transform" }, { value: "skew", label: "Skew" },
+        ...(!studio?.distortionUnavailableReason(activeLayer.id) ? [{ value: "distort", label: "Distort" }] : []),
+      ], (value) => changeTransformMode(value as TransformMode)),
+      toggle("move-auto-select", "Auto-select", "Select the layer under the pointer", autoSelectMove, setAutoSelectMove),
+      toggle("move-handles", "Handles", "Show transform handles", showTransformHandles, setShowTransformHandles),
+      toggle("move-snap", "Snap", "Option/Alt bypasses snapping", snapGuides, setSnapGuides),
+      ...(distortDraft ? [action("apply-distort", "Apply distortion", "Rasterizes the draft · undoable", "✓", applyDistortion), action("cancel-distort", "Cancel", "Discard the draft", "×", cancelTransformGesture)] : []),
     ];
 
     if (activeLayer) return [
@@ -2789,11 +3589,75 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     ];
 
     return [
-      range("canvas-zoom", "View zoom", view.zoom * 100, 5, 3200, 1, `${Math.round(view.zoom * 100)}%`, (value) => setView((current) => ({ ...current, zoom: value / 100 }))),
+      range("canvas-zoom", "View zoom", zoomPercent, 0.01, 3200, 0.01, `${zoomPercent}%`, setZoomPercent),
       toggle("canvas-guides", "Guides", "Show alignment guides", showGuides, setShowGuides),
       toggle("canvas-snap", "Snap", "Snap tools to guides", snapGuides, setSnapGuides),
     ];
   })();
+  const activeSpatial = activeLayer?.spatial ?? activeLayer?.text?.spatial ?? DEFAULT_TEXT_SPATIAL;
+  const supportsSpatialPreview = Boolean(
+    activeLayer
+    && activeLayer.kind !== "group"
+    && !activeLayer.kind.startsWith("adjustment-"),
+  );
+  const spatialSpaceFeatures: SpaceDeckFeature[] = activeLayer && !activeLayer.lettering3d && !activeLayer.mesh3d ? [
+    ...(supportsSpatialPreview ? [{
+      kind: "toggle" as const,
+      id: "spatial-enabled",
+      label: "3D workspace",
+      detail: "Tilt and depth for this layer",
+      value: activeSpatial.enabled,
+      onChange: (enabled: boolean) => studio?.updateLayerSpatial(activeLayer.id, { enabled }),
+    }] : []),
+    ...(supportsSpatialPreview && activeSpatial.enabled ? [
+      {
+        kind: "range" as const,
+        id: "spatial-tilt-x",
+        label: "3D tilt X",
+        value: activeSpatial.transform.rotationX,
+        min: -180,
+        max: 180,
+        step: 1,
+        output: `${Math.round(activeSpatial.transform.rotationX)}°`,
+        onChange: (rotationX: number) => studio?.liveUpdateLayerSpatial(activeLayer.id, { transform: { rotationX } }),
+        onCommit: () => studio?.updateLayerSpatial(activeLayer.id, {}),
+      },
+      {
+        kind: "range" as const,
+        id: "spatial-tilt-y",
+        label: "3D tilt Y",
+        value: activeSpatial.transform.rotationY,
+        min: -180,
+        max: 180,
+        step: 1,
+        output: `${Math.round(activeSpatial.transform.rotationY)}°`,
+        onChange: (rotationY: number) => studio?.liveUpdateLayerSpatial(activeLayer.id, { transform: { rotationY } }),
+        onCommit: () => studio?.updateLayerSpatial(activeLayer.id, {}),
+      },
+      {
+        kind: "range" as const,
+        id: "spatial-depth",
+        label: "3D depth",
+        value: activeSpatial.extrusion.depth,
+        min: 0,
+        max: 1000,
+        step: 1,
+        output: `${Math.round(activeSpatial.extrusion.depth)} px`,
+        onChange: (depth: number) => studio?.liveUpdateLayerSpatial(activeLayer.id, { extrusion: { depth } }),
+        onCommit: () => studio?.updateLayerSpatial(activeLayer.id, {}),
+      },
+    ] : []),
+    {
+      kind: "action" as const,
+      id: "send-layer-to-form",
+      label: "Send to Form Studio",
+      detail: "Export the selected layer",
+      icon: "↗",
+      onRun: () => { void sendLayerToForm(activeLayer); },
+    },
+  ] : [];
+  const spaceToolFeatures: SpaceDeckFeature[] = [...baseSpaceToolFeatures, ...spatialSpaceFeatures,
+    ...(activeLayer && ["text","shape","path"].includes(activeLayer.kind) ? [{kind:"action" as const,id:"campaign-workspace",label:"Campaign",detail:"Linked styles, formats & delivery",icon:"▦",onRun:()=>executeStudioCommand("panel-campaign")}] : [])];
   /* eslint-enable react-hooks/refs */
   const spaceToolFeatureCount = spaceToolFeatures.length;
   const { width: spaceDeckWidth, height: spaceDeckHeight } = spaceDeckDimensions(spaceToolFeatureCount);
@@ -2872,40 +3736,94 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   // click would land on nothing at all.
   const latestCommand = useRef<(command: StudioCommand) => void>(runStudioCommand);
   const latestOpenPath = useRef(openDocumentPath);
+  const latestNativePicker = useRef(openNativeDocument);
+  const latestClipboard = useRef({ studio, importLayerFile, blocked: false });
   useEffect(() => {
     latestCommand.current = executeStudioCommand;
     latestOpenPath.current = openDocumentPath;
+    latestNativePicker.current = openNativeDocument;
+    latestClipboard.current = { studio, importLayerFile, blocked: !startupReady || projectSaving || nativeOpening || Boolean(pendingCloseDocumentId) || pendingNativeClose || showNewDocument || Boolean(pdfChoice) || desktopUpdateInstalling };
   });
 
-  // Recovery is intentionally allowed to finish first, then every Finder or
-  // Open Recent request queued during startup is opened in arrival order. The
-  // final requested file therefore wins instead of being replaced by recovery.
   useEffect(() => {
-    if (!desktop || !studio || !startupReady) return;
-    const pending = startupOpenCoordinator.current.markReady();
-    if (!pending.length) return;
-    void (async () => {
-      for (const path of pending) await latestOpenPath.current(path);
-    })();
-  }, [desktop, startupReady, studio]);
+    const handleClipboard = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || isEditableTextTarget(event.target) || isEditableTextTarget(document.activeElement)) return;
+      const state = latestClipboard.current;
+      if (!state.studio || state.blocked || projectSavingRef.current || nativeOpeningRef.current) return;
+      if (event.type === "copy" || event.type === "cut") {
+        event.preventDefault();
+        clipboardEventRef.current = event;
+        try { latestCommand.current(event.type === "cut" ? "cut-pixels" : "copy-pixels"); }
+        finally { clipboardEventRef.current = null; }
+        return;
+      }
+      const data = event.clipboardData;
+      if (hasNativeImageClipboard()) {
+        event.preventDefault();
+        latestCommand.current("paste-pixels");
+        return;
+      }
+      if (!data) return;
+      const file = Array.from(data.files).find(file => file.type.startsWith("image/"));
+      const marker = data.getData(SELECTION_CLIPBOARD_TYPE) || data.getData("text/plain");
+      const source = pixelPasteSource(Array.from(data.types), marker, clipboardMarkerRef.current, state.studio.hasPixelClipboard(), Boolean(file));
+      if (source === "none") return;
+      event.preventDefault();
+      if (source === "internal") latestCommand.current("paste-pixels");
+      else if (file) void state.importLayerFile(file);
+    };
+    document.addEventListener("copy", handleClipboard);
+    document.addEventListener("cut", handleClipboard);
+    document.addEventListener("paste", handleClipboard);
+    return () => {
+      document.removeEventListener("copy", handleClipboard);
+      document.removeEventListener("cut", handleClipboard);
+      document.removeEventListener("paste", handleClipboard);
+    };
+  }, []);
 
   // The native menu bar lives in the Tauri process, so its clicks arrive as an
   // event rather than a DOM interaction — as does a double-clicked document,
   // one from the command line, and an Open Recent pick. Web builds see none.
   useEffect(() => {
     if (!desktop) return;
+    const queue = new NativeOpenQueue(async (request, isActive) => {
+      nativeOpeningRef.current = true;
+      setNativeOpening(true);
+      try {
+        if (request === "picker") await latestNativePicker.current(isActive);
+        else await latestOpenPath.current(request.slice(5), isActive);
+      } finally {
+        nativeOpeningRef.current = false;
+        if (isActive()) setNativeOpening(false);
+      }
+    }, error => console.error("Native open queue failed", error));
+    nativeOpenQueue.current = queue;
     const stopMenu = listenForMenuCommands((command) => latestCommand.current(command));
-    const stopOpen = listenForOpenFile((path) => { void latestOpenPath.current(path); });
-    return () => { stopMenu(); stopOpen(); };
-  }, [desktop]);
+    const stopOpen = listenForOpenFile(path => {
+      // The ref closes the synchronous gap before React publishes save state.
+      if (projectSavingRef.current) queue.setPaused(true);
+      if (queue.enqueue(`path:${path}`) === "full") notify("Open queue is full (32 files). Please open the remaining files after it finishes.");
+    });
+    return () => { queue.dispose(); nativeOpenQueue.current = null; stopMenu(); stopOpen(); };
+  }, [desktop, notify]);
+
+  useEffect(() => {
+    nativeOpenQueue.current?.setPaused(!studio || !startupReady || projectSaving || Boolean(pendingCloseDocumentId) || pendingNativeClose || showNewDocument || Boolean(pdfChoice) || Boolean(vectorTarget) || desktopUpdateInstalling);
+  }, [desktop, studio, startupReady, projectSaving, pendingCloseDocumentId, pendingNativeClose, showNewDocument, pdfChoice, vectorTarget, desktopUpdateInstalling]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      if (!startupReadyRef.current || projectSavingRef.current || nativeOpeningRef.current) return;
+      if (pendingCloseDocumentId || pendingNativeClose || showNewDocument || pdfChoiceResolver.current) return;
       if (desktopUpdateInstalling) {
         e.preventDefault();
         return;
       }
       const editingText = isEditableTextTarget(e.target);
+      const controlTarget = e.target instanceof Element ? e.target : null;
+      if (["Enter", "Return", " "].includes(e.key) && controlTarget?.closest('button, summary, [role="tab"], [role="option"]')) return;
       if (!editingText && passDeckOpen && /^[1-4]$/.test(e.key)) {
         e.preventDefault();
         const index = Number(e.key) - 1;
@@ -2931,6 +3849,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         spaceHeld.current = true;
         document.documentElement.dataset.spaceHeld = "true";
         document.body.style.cursor = "grab";
+        setCanvasCursorOverride("hand");
         spaceGestureRef.current = "pending";
         if (!passDeckOpen) {
           if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
@@ -2945,9 +3864,24 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         e.preventDefault();
         return;
       }
+      const shortcutCommand = commandForShortcut(e);
+      if (shortcutCommand) {
+        if (editingText && ["copy-merged", "paste-in-place", "selection-to-layer"].includes(shortcutCommand)) return;
+        // Tauri owns native accelerators. Running both paths performs edits twice.
+        if (!isNativeFilesystemAvailable()) { e.preventDefault(); latestCommand.current(shortcutCommand); }
+        return;
+      }
       if (editingText) return;
+      if (e.key === "Escape" && quickSelectionRef.current) {
+        e.preventDefault(); studio?.cancelSelectionGesture(); quickSelectionRef.current = null; return;
+      }
+      if (e.key === "Escape" && (ftDragRef.current || distortDraft || dragRef.current?.kind === "move-layer")) {
+        e.preventDefault(); cancelTransformGesture(); return;
+      }
+      if (e.key === "Enter" && distortDraft) { e.preventDefault(); applyDistortion(); return; }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
         e.preventDefault();
+        if (distortDraft || ftDragRef.current || dragRef.current?.kind === "move-layer") { cancelTransformGesture(); return; }
         if (e.shiftKey) studio?.redo(); else studio?.undo();
         return;
       }
@@ -2963,7 +3897,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (e.key === "Escape" && showFilters) { setShowFilters(false); return; }
       if (e.key === "Escape" && showBatch && !batchProgress) { setShowBatch(false); return; }
       if (e.key === "Enter" && activeTool === "pen") { e.preventDefault(); commitPenPath(false); return; }
-      if (e.key === "Escape" && activeTool === "pen") { setPenDraft([]); setPenDragging(null); return; }
+      if (e.key === "Escape" && activeTool === "pen") { penFrameRef.current?.cancel(); setPenDraft([]); setPenDragging(null); setPenPreview(null); return; }
+      if (e.key === "Escape" && dragRef.current?.shapeGesture) { e.preventDefault(); setDragBoth(null); notify("Shape cancelled"); return; }
       if (e.key === "Enter" && pointSelectionTool && pointDraft.length >= 3) {
         e.preventDefault();
         studio?.selectLasso(pointDraft, resolvedSelectionMode(e), feather);
@@ -2978,11 +3913,15 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         enterFocusMode(activeLayerId);
         return;
       }
-      if (e.code === "Space" && !e.repeat) { spaceHeld.current = true; document.body.style.cursor = "grab"; }
-      if (e.key === "0" && !e.metaKey && !e.ctrlKey) { setView({ zoom: 1, panX: 0, panY: 0 }); return; }
-      if (e.key === "1" && !e.metaKey && !e.ctrlKey) { setView((v) => ({ ...v, zoom: 1 })); return; }
-      if ((e.key === "+" || e.key === "=") && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.min(32, v.zoom * 1.2) })); return; }
-      if (e.key === "-" && !e.metaKey) { setView((v) => ({ ...v, zoom: Math.max(0.05, v.zoom / 1.2) })); return; }
+      if (e.code === "Space" && !e.repeat) {
+        spaceHeld.current = true;
+        document.body.style.cursor = "grab";
+        setCanvasCursorOverride("hand");
+      }
+      if (e.key === "0" && !e.metaKey && !e.ctrlKey) { latestCommand.current("zoom-fit"); return; }
+      if (e.key === "1" && !e.metaKey && !e.ctrlKey) { latestCommand.current("zoom-actual"); return; }
+      if ((e.key === "+" || e.key === "=") && !e.metaKey) { latestCommand.current("zoom-in"); return; }
+      if (e.key === "-" && !e.metaKey) { latestCommand.current("zoom-out"); return; }
       if ((e.key === "[" || e.key === "]") && !e.metaKey && !e.ctrlKey && !e.altKey) {
         e.preventDefault();
         const direction = e.key === "]" ? 1 : -1;
@@ -2998,17 +3937,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       // workspace's single-letter tool shortcuts (or brush-size brackets).
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (activeLayerId && studio) { studio.clearPixels(activeLayerId); return; }
+        e.preventDefault(); latestCommand.current("delete-pixels"); return;
       }
-      const t = modeTools[workspace].find(([tool, , , fallback]) => (
-        !workflowPreferences.hiddenTools.includes(tool)
-        && resolveShortcut(tool, fallback, workflowPreferences).toLowerCase() === e.key.toLowerCase()
-      ));
+      const t = resolveToolKey(e.key, workspace, workflowPreferences, desktop);
       if (t) {
-        setPointDraft([]);
-        directAnchorRef.current = null;
-        setActiveTool(t[0]);
-        if (t[0] === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
+        activateTool(t.id, t.workspace);
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -3018,6 +3951,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         spaceHeld.current = false;
         delete document.documentElement.dataset.spaceHeld;
         document.body.style.cursor = "";
+        setCanvasCursorOverride(panDragRef.current ? "hand" : null);
         if (spaceGestureRef.current === "pending") {
           const next = togglePinnedSpaceDeck({ open: passDeckOpen, pinned: passDeckPinned });
           if (!next.open) {
@@ -3039,11 +3973,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       }
     };
     const onBlur = () => {
+      if (ftDragRef.current || dragRef.current?.kind === "move-layer") cancelTransformGesture();
       if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
       spaceOpenTimerRef.current = null;
       spaceHeld.current = false;
       delete document.documentElement.dataset.spaceHeld;
       document.body.style.cursor = "";
+      setCanvasCursorOverride(null);
+      hideDynamicCursor();
       if (!passDeckPinned) setPassDeckOpen(false);
       spaceGestureRef.current = passDeckPinned ? "deck" : "idle";
     };
@@ -3060,7 +3997,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, desktopUpdateInstalling, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck]);
+  }, [desktop, desktopUpdateInstalling, pendingCloseDocumentId, pendingNativeClose, showNewDocument, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck, distortDraft]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -3111,6 +4048,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   // Overlay for pending selection/shape drag
   const dragOverlay = useMemo(() => {
     if (!drag || !doc) return null;
+    if (drag.shapeGesture) {
+      let geometry: ReturnType<typeof shapeDragGeometry>;
+      let pathData = "";
+      try {
+        geometry = shapeDragGeometry(drag);
+        if (geometry?.kind === "path") pathData = vectorPathData(geometry.path);
+      } catch { return null; }
+      if (!geometry) return null;
+      return <svg viewBox={`0 0 ${doc.width} ${doc.height}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible", pointerEvents: "none" }} aria-hidden="true">
+          {geometry.kind === "path" ? <path d={pathData} fill={geometry.path.fill} fillRule={geometry.path.fillRule} fillOpacity={.65} stroke={geometry.path.stroke} strokeWidth={geometry.path.strokeWidth} /> : geometry.style.kind === "ellipse" ? <ellipse cx={geometry.style.x + geometry.style.w / 2} cy={geometry.style.y + geometry.style.h / 2} rx={geometry.style.w / 2} ry={geometry.style.h / 2} fill={geometry.style.fill} fillOpacity={.65} stroke={geometry.style.stroke} strokeWidth={geometry.style.strokeWidth} /> : <rect x={geometry.style.x} y={geometry.style.y} width={geometry.style.w} height={geometry.style.h} rx={geometry.style.radius} fill={geometry.style.fill} fillOpacity={.65} stroke={geometry.style.stroke} strokeWidth={geometry.style.strokeWidth} />}
+        </svg>;
+    }
     const x = Math.min(drag.x0, drag.x1);
     const y = Math.min(drag.y0, drag.y1);
     const w = Math.abs(drag.x1 - drag.x0);
@@ -3135,7 +4084,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
   // Pen draft overlay
   const penOverlay = useMemo(() => {
-    if (!doc || activeTool !== "pen" || penDraft.length === 0) return null;
+    if (!doc || activeTool !== "pen" || (!penDraft.length && !penPreview)) return null;
+    const scale = penPreview?.zoom ?? 1;
+    const last = penDraft.at(-1);
     const toPct = (p: { x: number; y: number }) => ({
       left: `${(p.x / doc.width) * 100}%`,
       top: `${(p.y / doc.height) * 100}%`,
@@ -3148,12 +4099,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     return (
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
         <svg viewBox={`0 0 ${doc.width} ${doc.height}`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", overflow: "visible" }}>
-          <path d={path} stroke="rgba(255,255,255,0.9)" strokeWidth={Math.max(1, doc.width * 0.001)} fill="none" vectorEffect="non-scaling-stroke" />
+          <path d={path} stroke="rgba(255,255,255,0.9)" strokeWidth={1.5} fill="none" vectorEffect="non-scaling-stroke" />
+          {penPreview && <>
+            {penPreview.guides.map(g => <line key={g.axis} x1={g.axis === "x" ? g.position : 0} y1={g.axis === "y" ? g.position : 0} x2={g.axis === "x" ? g.position : doc.width} y2={g.axis === "y" ? g.position : doc.height} stroke="#60d8fa" strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />)}
+            {!penPreview.handle && last && <path d={`M${last.x} ${last.y} C${last.x + last.hOut.dx} ${last.y + last.hOut.dy} ${penPreview.point.x} ${penPreview.point.y} ${penPreview.point.x} ${penPreview.point.y}`} stroke="#87c7ff" strokeWidth={1.5} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" fill="none" />}
+            <circle cx={penPreview.point.x} cy={penPreview.point.y} r={(penPreview.closes ? 7 : 4) / scale} fill="none" stroke={penPreview.closes ? "#ffbe74" : "#60d8fa"} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          </>}
           {penDraft.map((a, i) => (
             <g key={i}>
-              <line x1={a.x + a.hIn.dx} y1={a.y + a.hIn.dy} x2={a.x + a.hOut.dx} y2={a.y + a.hOut.dy} stroke="rgba(124,92,231,0.7)" strokeWidth={Math.max(0.5, doc.width * 0.0006)} vectorEffect="non-scaling-stroke" />
-              <circle cx={a.x + a.hIn.dx} cy={a.y + a.hIn.dy} r={doc.width * 0.003} fill="#7c5ce7" />
-              <circle cx={a.x + a.hOut.dx} cy={a.y + a.hOut.dy} r={doc.width * 0.003} fill="#7c5ce7" />
+              <line x1={a.x + a.hIn.dx} y1={a.y + a.hIn.dy} x2={a.x + a.hOut.dx} y2={a.y + a.hOut.dy} stroke="rgba(124,92,231,0.7)" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              <circle cx={a.x + a.hIn.dx} cy={a.y + a.hIn.dy} r={3 / scale} fill="#7c5ce7" />
+              <circle cx={a.x + a.hOut.dx} cy={a.y + a.hOut.dy} r={3 / scale} fill="#7c5ce7" />
             </g>
           ))}
         </svg>
@@ -3166,9 +4122,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             border: "1px solid rgba(0,0,0,.4)", borderRadius: 2,
           }} />
         ))}
+        {penPreview && (penSettings.measurements || penPreview.label) && <div className="pen-measurement" style={{ left: `${Math.max(1, Math.min(70, penPreview.point.x / doc.width * 100))}%`, top: `${Math.max(1, Math.min(88, penPreview.point.y / doc.height * 100))}%` }}>
+          {penPreview.label && <strong>{penPreview.label}</strong>}
+          {penSettings.measurements && <span>{penMeasurementLabel(penPreview)}</span>}
+        </div>}
       </div>
     );
-  }, [doc, activeTool, penDraft]);
+  }, [doc, activeTool, penDraft, penPreview, penSettings.measurements]);
 
   const pointOverlay = useMemo(() => {
     if (!doc || pointDraft.length === 0) return null;
@@ -3185,10 +4145,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   // Free-transform overlay: handles for the active non-adjustment layer when
   // the Move tool is active. Handles live in the same coordinate space as the
   // canvas via percentage positioning, so they follow zoom/resize.
-  const transformOverlay = useMemo(() => {
-    if (!doc || !activeLayer || !moveTool) return null;
-    if (activeLayer.kind === "adjustment-tone") return null;
-    const [tl, tr, br, bl] = layerCorners(activeLayer, doc.width, doc.height);
+  const transformOverlay = (() => {
+    if (!doc || !activeLayer || !moveTool || !showTransformHandles) return null;
+    if (activeLayer.kind.startsWith("adjustment-") || activeLayer.kind === "group" || activeLayer.locked) return null;
+    const bounds = transformContentBounds(activeLayer, doc.width, doc.height);
+    const { width, height } = bounds;
+    const draft = distortDraft?.layerId === activeLayer.id && distortDraft.documentId === activeDocumentId ? distortDraft : null;
+    const corners = draft ? draft.quad.map(p => [p.x, p.y] as [number, number]) : layerCorners(activeLayer, width, height, bounds.x, bounds.y);
+    const [tl, tr, br, bl] = corners;
     const toPct = (p: [number, number]) => ({
       left: `${(p[0] / doc.width) * 100}%`,
       top: `${(p[1] / doc.height) * 100}%`,
@@ -3196,17 +4160,19 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     // Rotate handle 32 px (in doc units, roughly) above top-center.
     const topCenter: [number, number] = [(tl[0] + tr[0]) / 2, (tl[1] + tr[1]) / 2];
     const angle = activeLayer.transform.rotation;
-    const rotOffset = doc.height * 0.04;
+    const screenScale = Math.max(0.000001, fitScale * view.zoom);
+    const handleSize = 10 / Math.max(view.zoom, 0.05);
+    const rotOffset = 30 / screenScale;
     const rotHandle: [number, number] = [
-      topCenter[0] - Math.sin(angle) * rotOffset,
+      topCenter[0] + Math.sin(angle) * rotOffset,
       topCenter[1] - Math.cos(angle) * rotOffset,
     ];
     const handleStyle = {
       position: "absolute" as const,
-      width: 12,
-      height: 12,
-      marginLeft: -6,
-      marginTop: -6,
+      width: handleSize,
+      height: handleSize,
+      marginLeft: -handleSize / 2,
+      marginTop: -handleSize / 2,
       background: "#fff",
       border: "1px solid rgba(0,0,0,.4)",
       borderRadius: 2,
@@ -3221,65 +4187,90 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         x2={(q[0] / doc.width) * 100}
         y2={(q[1] / doc.height) * 100}
         stroke="rgba(255,255,255,0.7)"
-        strokeWidth={0.15}
+        strokeWidth={1}
         strokeDasharray="0.4 0.4"
         vectorEffect="non-scaling-stroke"
       />
     );
 
     const onCornerDown = (corner: "tl" | "tr" | "br" | "bl") => (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || ftDragRef.current) return;
+      if (transformMode === "distort") {
+        const reason = studio?.distortionUnavailableReason(activeLayer.id);
+        if (reason) { notify(reason); return; }
+      }
       e.stopPropagation();
+      e.preventDefault();
       (e.target as Element).setPointerCapture(e.pointerId);
-      setFt({ kind: "corner", corner, startTransform: { ...activeLayer.transform } });
+      const p = eventToDoc(e);
+      setFt({ kind: "corner", corner, mode: transformMode, layerId: activeLayer.id, pointerId: e.pointerId, documentId: studio!.activeDocumentState().id,
+        startX: p.x, startY: p.y, hadDraft: !!draft, quad: corners.map(([x, y]) => ({ x, y })) as unknown as Quad, startTransform: { ...activeLayer.transform } });
     };
     const onRotateDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 || draft || ftDragRef.current) return;
       e.stopPropagation();
+      e.preventDefault();
       (e.target as Element).setPointerCapture(e.pointerId);
       // Center in canvas doc-space
       const cx = (tl[0] + br[0]) / 2;
       const cy = (tl[1] + br[1]) / 2;
       const p = eventToDoc(e);
       const startAngle = Math.atan2(p.y - cy, p.x - cx);
-      setFt({ kind: "rotate", startTransform: { ...activeLayer.transform }, centerX: cx, centerY: cy, startAngle });
+      setFt({ kind: "rotate", layerId: activeLayer.id, pointerId: e.pointerId, documentId: studio!.activeDocumentState().id, startTransform: { ...activeLayer.transform }, centerX: cx, centerY: cy, startAngle });
     };
     const onHandleMove = (e: ReactPointerEvent<HTMLDivElement>) => {
       if (!studio) return;
       const f = ftDragRef.current;
-      if (!f) return;
+      if (!f || f.pointerId !== e.pointerId || f.documentId !== studio.activeDocumentState().id) return;
       const p = eventToDoc(e);
       if (f.kind === "corner") {
-        applyCornerDrag(activeLayer, f.corner, f.startTransform, p.x, p.y);
+        if (!f.moved && Math.hypot(p.x - f.startX, p.y - f.startY) < 0.001) return;
+        f.moved = true;
+        const index = (["tl", "tr", "br", "bl"] as const).indexOf(f.corner);
+        if (f.mode === "distort") {
+          const quad = f.quad.map((point, i) => i === index ? { x: point.x + p.x - f.startX, y: point.y + p.y - f.startY } : { ...point }) as unknown as Quad;
+          if (isValidTransformQuad(quad)) transformFrameRef.current?.push(() => {
+            if (studio.activeDocumentState().id === f.documentId) setDistortDraft({ layerId: f.layerId, documentId: f.documentId, quad });
+          });
+        } else {
+          const patch = f.mode === "skew"
+            ? skewDragTransform(f.startTransform, f.corner === "tl" || f.corner === "tr", height, p.x - f.startX, p.y - f.startY, bounds.y)
+            : cornerDragTransform(f.corner, f.startTransform, width, height, f.quad[index].x + p.x - f.startX, f.quad[index].y + p.y - f.startY, e.shiftKey, bounds.x, bounds.y);
+          transformFrameRef.current?.push(() => {
+            if (studio.activeDocumentState().id === f.documentId) studio.liveUpdateTransform(f.layerId, patch);
+          });
+        }
       } else if (f.kind === "rotate") {
         const now = Math.atan2(p.y - f.centerY, p.x - f.centerX);
         const delta = now - f.startAngle;
-        const newRot = f.startTransform.rotation + delta;
-        // Rotate around visual center: adjust translation so center stays put.
-        const R0 = rotMat(f.startTransform.rotation);
-        const cLocal = { x: doc.width / 2 * f.startTransform.sx, y: doc.height / 2 * f.startTransform.sy };
-        const cCanvas = {
-          x: R0[0] * cLocal.x + R0[1] * cLocal.y + f.startTransform.tx,
-          y: R0[2] * cLocal.x + R0[3] * cLocal.y + f.startTransform.ty,
-        };
-        const Rn = rotMat(newRot);
-        const newTx = cCanvas.x - (Rn[0] * cLocal.x + Rn[1] * cLocal.y);
-        const newTy = cCanvas.y - (Rn[2] * cLocal.x + Rn[3] * cLocal.y);
-        studio.liveUpdateTransform(activeLayer.id, { rotation: newRot, tx: newTx, ty: newTy });
+        if (!f.moved && Math.abs(delta) < 1e-6) return;
+        f.moved = true;
+        const patch = rotationDragTransform(f.startTransform, delta, f.centerX, f.centerY, e.shiftKey);
+        transformFrameRef.current?.push(() => {
+          if (studio.activeDocumentState().id === f.documentId) studio.liveUpdateTransform(f.layerId, patch);
+        });
       }
     };
-    const applyCornerDrag = (layer: Layer, corner: TransformCorner, start: Transform, px: number, py: number) => {
-      studio!.liveUpdateTransform(layer.id, cornerDragTransform(corner, start, doc.width, doc.height, px, py));
-    };
-    const onHandleUp = () => {
-      if (!studio) return;
-      if (ftDragRef.current && activeLayer) {
-        studio.updateTransform(activeLayer.id, { ...activeLayer.transform });
+    const onHandleUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+      const f = ftDragRef.current;
+      if (!studio || !f || f.pointerId !== e.pointerId) return;
+      if (e.type === "pointercancel") {
+        transformFrameRef.current?.cancel();
+        studio.cancelLiveTransform(f.layerId);
+        if (f.kind === "corner" && f.mode === "distort") setDistortDraft(f.hadDraft ? { layerId: f.layerId, documentId: f.documentId, quad: f.quad } : null);
+      } else if (f.documentId === studio.activeDocumentState().id) {
+        onHandleMove(e);
+        transformFrameRef.current?.flush();
+        if (f.kind !== "corner" || f.mode !== "distort") studio.updateTransform(f.layerId, {});
       }
       setFt(null);
     };
 
     return (
       <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+        {draft && <div style={{ position: "absolute", left: 16 / view.zoom, top: 16 / view.zoom, transform: `scale(${1 / view.zoom})`, transformOrigin: "top left", padding: "6px 10px", background: "#202328", color: "#e1e5eb", border: "1px solid #85b8ff", borderRadius: 4, fontSize: 11, whiteSpace: "nowrap" }}>Distort wireframe · Enter to apply · Esc to cancel</div>}
         <svg viewBox={`0 0 100 100`} preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }}>
+          {draft && <polygon points={corners.map(([x, y]) => `${x / doc.width * 100},${y / doc.height * 100}`).join(" ")} fill="rgba(100,170,255,.13)" />}
           {svgLine(tl, tr)}
           {svgLine(tr, br)}
           {svgLine(br, bl)}
@@ -3288,31 +4279,31 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         {([["tl", tl], ["tr", tr], ["br", br], ["bl", bl]] as const).map(([c, pt]) => (
           <div
             key={c}
-            style={{ ...handleStyle, ...toPct(pt), cursor: c === "tl" || c === "br" ? "nwse-resize" : "nesw-resize" }}
+            title={`${transformMode === "scale" ? "Scale · Shift constrains proportions" : transformMode === "skew" ? "Skew edge" : "Distort corner"} (${c})`}
+            style={{ ...handleStyle, ...toPct(pt), touchAction: "none", cursor: transformMode === "skew" ? "ew-resize" : transformMode === "distort" ? "crosshair" : c === "tl" || c === "br" ? "nwse-resize" : "nesw-resize" }}
             onPointerDown={onCornerDown(c)}
             onPointerMove={onHandleMove}
             onPointerUp={onHandleUp}
             onPointerCancel={onHandleUp}
           />
         ))}
-        <div
+        {!draft && <div
           style={{
             ...handleStyle,
             ...toPct(rotHandle),
             borderRadius: "50%",
-            width: 14, height: 14, marginLeft: -7, marginTop: -7,
-            background: "#7c5ce7",
+            background: "#85b8ff", touchAction: "none",
             cursor: "grab",
           }}
           onPointerDown={onRotateDown}
           onPointerMove={onHandleMove}
           onPointerUp={onHandleUp}
           onPointerCancel={onHandleUp}
-          title="Rotate"
-        />
+          title="Rotate · Shift snaps to 15°"
+        />}
       </div>
     );
-  }, [doc, activeLayer, moveTool, studio, eventToDoc, setFt]);
+  })();
 
   return (
     <AppShell>
@@ -3320,14 +4311,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       <div className="spatial-aura aura-blue" />
       <div className="spatial-aura aura-violet" />
 
-      <AppWindow>
+      <AppWindow inert={nativeOpening || projectSaving || Boolean(pendingCloseDocumentId) || pendingNativeClose || undefined}>
         <MenuBarRegion>
+        <ShellErrorBoundary title="Application controls" onSave={() => { void saveProject(); }}>
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
             desktop={desktop}
             projectName={projectName}
             saveState={saveState}
-            zoom={Math.round(view.zoom * 100)}
+            dirty={openDocuments.find(document => document.active)?.dirty ?? true}
+            projectSaving={projectSaving}
+            zoom={zoomPercent}
             canUndo={studio?.canUndo() ?? false}
             canRedo={studio?.canRedo() ?? false}
             exportOpen={showExportMenu}
@@ -3337,25 +4331,34 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             commandEnabled={commandRegistry.enabled}
           />
         </Suspense>
+        </ShellErrorBoundary>
         </MenuBarRegion>
 
         <AppWorkspace>
           <ToolRailRegion>
+          <ShellErrorBoundary title="Tools" region="rail" onSave={() => { void saveProject(); }}>
           <Suspense fallback={<aside className="spatial-toolbar" aria-label="Loading tools" />}>
             <ToolDock
               groups={toolPaletteGroups}
               activeWorkspace={workspace}
               activeTool={activeTool}
               compactDesktop={desktop}
+              foreground={brushColor}
+              background={secondaryColor}
+              onForegroundChange={setBrushColor}
+              onSwapColors={() => { setBrushColor(secondaryColor); setSecondaryColor(brushColor); }}
               onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
               onAiSelect={() => { activateTool("sel-sam", "select"); focusInspector("ai"); }}
               onCommand={executeStudioCommand}
+              commandEnabled={commandRegistry.enabled}
             />
           </Suspense>
+          </ShellErrorBoundary>
           </ToolRailRegion>
 
           <DocumentAreaRegion data-assets-open={assetsOpen}>
             <ContextualTaskBarRegion>
+            <ShellErrorBoundary title="Tool options" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<div className="studio-contextbar" />}>
               <ContextToolbar
                 tool={activeTool}
@@ -3364,6 +4367,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 layerName={activeLayer?.name ?? "No active layer"}
                 layerKind={activeLayer?.kind.replaceAll("-", " ") ?? "Open an image to begin"}
                 mode={TOOL_REGISTRY[activeTool].options}
+                shapeControls={{
+                  settings: currentShapeSettings, fill: brushColor, custom: customShapes, enabled: !!doc,
+                  canSave: commandRegistry.enabled("define-custom-shape"),
+                  onChange: patch => setShapeSettings(s => ({ ...s, ...patch })), onPreset: chooseShapePreset, onFill: setBrushColor,
+                  onSave: () => executeStudioCommand("define-custom-shape"), onRemove: removeCustomShape,
+                }}
+                penControls={{ settings: penSettings, enabled: !!doc, count: penDraft.length, onChange: updatePenSettings, onFinish: () => commitPenPath(false), onClose: () => commitPenPath(true) }}
+                transformControls={{
+                  mode: transformMode, enabled: !!activeLayer && !activeLayer.locked && !activeLayer.kind.startsWith("adjustment-") && activeLayer.kind !== "group",
+                  autoSelect: autoSelectMove, handles: showTransformHandles, snap: snapGuides, draft: !!distortDraft,
+                  distortionReason: activeLayer ? studio?.distortionUnavailableReason(activeLayer.id) ?? null : "Select a raster layer",
+                  onMode: changeTransformMode, onAutoSelect: () => setAutoSelectMove(value => !value),
+                  onHandles: () => setShowTransformHandles(value => !value), onSnap: () => setSnapGuides(value => !value),
+                  onApply: applyDistortion, onCancel: cancelTransformGesture,
+                }}
                 selectionMode={selectionMode}
                 values={{
                   color: brushColor,
@@ -3378,7 +4396,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   contrast: selectionContrast,
                   shiftEdge: selectionShift,
                   tolerance: wandTolerance,
-                  textSize,
+                  textSize: activeTextDefaults?.fontSize ?? textSize,
+                  fontFamily: activeTextDefaults?.fontFamily ?? '"Lato", sans-serif',
+                  fontWeight: Math.round((activeTextDefaults?.fontWeight ?? 700) / 100) * 100,
+                  textAlign: activeLayer?.kind === "text" && activeLayer.text ? activeLayer.text.align : "left",
                 }}
                 showGuides={showGuides}
                 assetsOpen={assetsOpen}
@@ -3398,8 +4419,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   else if (key === "textSize") {
                     const size = Number(value);
                     setTextSize(size);
-                    if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, { font: activeLayer.text.font.replace(/\d+px/, `${size}px`) });
+                    if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, withDefaultTextStyle(activeLayer.text, { fontSize: size, axes: { ...(activeTextDefaults?.axes ?? {}), opsz: size } }));
                   }
+                  else if (key === "fontFamily" && activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, withDefaultTextStyle(activeLayer.text, { fontFamily: String(value) }));
+                  else if (key === "fontWeight" && activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, withDefaultTextStyle(activeLayer.text, { fontWeight: Number(value), axes: { ...(activeTextDefaults?.axes ?? {}), wght: Number(value) } }));
+                  else if (key === "textAlign" && activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, { align: value as "left" | "center" | "right" });
                 }}
                 onSelectionMode={setSelectionMode}
                 onFit={() => setView({ zoom: 1, panX: 0, panY: 0 })}
@@ -3407,9 +4431,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onToggleAssets={() => setAssetsOpen((value) => !value)}
               />
             </Suspense>
+            </ShellErrorBoundary>
             </ContextualTaskBarRegion>
 
-            <div className="spatial-document-tabs">
+            <div className="spatial-document-tabs" aria-label="Open documents">
               {openDocuments.map((documentTab) => (
                 <div
                   key={documentTab.id}
@@ -3419,14 +4444,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     onClick={() => {
                       setFocusState(leaveLayerFocus(resolvedFocusState));
                       studio?.switchDocument(documentTab.id);
-                      setActiveLayerId(studio?.doc.layers[0]?.id ?? null);
-                      setCustomName(documentTab.name);
+                      setActiveLayerId(studio?.rememberedLayerSelectionPrimary() ?? null);
                     }}
                     aria-current={documentTab.active ? "page" : undefined}
                   >
-                    <span>{documentTab.name}{documentTab.dirty ? " •" : ""}</span>
+                    <span>{documentTab.name}</span>{documentTab.dirty && <i className="document-dirty-dot" aria-label="Unsaved changes" />}
                   </button>
-                  {openDocuments.length > 1 && (
                     <button
                       onClick={() => {
                         setFocusState(leaveLayerFocus(resolvedFocusState));
@@ -3434,9 +4457,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       }}
                       aria-label={`Close ${documentTab.name}`}
                     >×</button>
-                  )}
                 </div>
               ))}
+              <button className="document-new-button" onClick={() => executeStudioCommand("new-document")} disabled={!commandRegistry.enabled("new-document")} aria-label="New document" title="New document (⌘N)">＋</button>
             </div>
             <div
               ref={stageRef}
@@ -3459,12 +4482,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 const clientX = e.clientX;
                 const clientY = e.clientY;
                 setView((v) => {
-                  const nz = Math.max(0.05, Math.min(32, v.zoom * factor));
                   // Zoom around cursor: shift pan so the point under the cursor stays fixed.
                   const cx = clientX - rect.left - rect.width / 2;
                   const cy = clientY - rect.top - rect.height / 2;
-                  const k = nz / v.zoom;
-                  return { zoom: nz, panX: cx - k * (cx - v.panX), panY: cy - k * (cy - v.panY) };
+                  return zoomViewToScale(v, fitScale, v.zoom * fitScale * factor, cx, cy);
                 });
               }}
             >
@@ -3486,7 +4507,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </div>
                   <div className="focus-target-switch" aria-label="Editing target">
                     <button className={resolvedFocusState.scope.target === "pixels" ? "active" : ""} onClick={() => enterFocusMode(focusedLayer.id, "pixels")}>Pixels</button>
-                    <button disabled={!focusedLayer.mask} className={resolvedFocusState.scope.target === "mask" ? "active" : ""} onClick={() => enterFocusMode(focusedLayer.id, "mask")}>Mask</button>
+                    <button disabled={!focusedLayer.mask && !focusedLayer.maskSurface} className={resolvedFocusState.scope.target === "mask" ? "active" : ""} onClick={() => enterFocusMode(focusedLayer.id, "mask")}>Mask</button>
                   </div>
                   <div className="focus-context-switch" aria-label="Context visibility">
                     <span>Context</span>
@@ -3499,15 +4520,30 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 </nav>
               )}
               <div
-                className={`spatial-canvas tool-${activeTool} workspace-${workspace}`}
+                className={`spatial-canvas dynamic-cursor-enabled tool-${activeTool} workspace-${workspace}`}
               >
+                {showRulers && doc && displayViewport && <WorkspaceRulers key={`rulers-${activeDocumentId}`} viewport={displayViewport} width={doc.width} height={doc.height} onGuide={(orientation, position) => {
+                  if (!studio || studio.activeDocumentState().id !== activeDocumentId) return;
+                  try { studio.addGuide(orientation, position); setShowGuides(true); forceUpdate(); }
+                  catch (error) { notify(error instanceof Error ? error.message : "Could not add guide"); }
+                }} />}
                 <canvas
-                  ref={canvasRef}
+                  key={activeDocumentId}
+                  ref={bindDisplayCanvas}
+                  onPointerEnter={updateDynamicCursorFromEvent}
                   onPointerDown={onPointerDown}
                   onPointerMove={onPointerMove}
                   onPointerUp={onPointerUp}
-                  onPointerCancel={onPointerUp}
-                  onPointerLeave={() => positionWarpOverlay(null)}
+                  onPointerCancel={(event) => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); }}
+                  onLostPointerCapture={() => {
+                    if (brushGestureRef.current) { studio?.cancelStroke(); brushGestureRef.current = null; }
+                    if (quickSelectionRef.current) { studio?.cancelSelectionGesture(); quickSelectionRef.current = null; }
+                  }}
+                  onPointerLeave={() => {
+                    if (!penDragging) { penFrameRef.current?.cancel(); setPenPreview(null); }
+                    positionWarpOverlay(null);
+                    hideDynamicCursor();
+                  }}
                   style={{
                     position: "absolute",
                     inset: 0,
@@ -3518,6 +4554,22 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     display: "block",
                   }}
                 />
+                <div
+                  ref={dynamicCursorRef}
+                  className="dynamic-canvas-cursor"
+                  data-kind={cursorBasePresentation.kind}
+                  data-status={cursorBasePresentation.status}
+                  data-visible="false"
+                  data-pressed="false"
+                  aria-hidden="true"
+                >
+                  <i className="dynamic-cursor-ring" />
+                  <i className="dynamic-cursor-hardness" />
+                  <i className="dynamic-cursor-reticle" />
+                  <b className="dynamic-cursor-color" />
+                  <span ref={dynamicCursorGlyphRef} className="dynamic-cursor-glyph">{cursorBasePresentation.glyph}</span>
+                  <output ref={dynamicCursorReadoutRef}>{cursorBasePresentation.readout}</output>
+                </div>
                 {doc && displayViewport && (
                   <div
                     className="document-overlay-plane"
@@ -3635,7 +4687,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       ? `${doc.width}×${doc.height} · ${doc.colorSpace.toUpperCase()} · ${doc.bitDepth}-bit master${doc.proofing.profile !== "none" ? ` · PROOF ${doc.proofing.profile.toUpperCase()}` : ""} · CPU tiled preview · ${useGL && glSupported ? "GPU 16F export" : "CPU export"} · ${engineState?.blendPasses ?? 0} blend passes · ${formatBytes(engineState?.workingSetBytes ?? 0)}${engineState?.historyOverBudget ? " · history over budget" : ""}`
                       : "Loading…"}
                   </span>
-                  <span>{Math.round(view.zoom * 100)}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
+                  <span>{zoomPercent}% · {layers.length} layer{layers.length === 1 ? "" : "s"}{doc?.selection ? " · sel" : ""}</span>
                 </div>
                 {recordingName && (
                   <div style={{ position: "absolute", top: 12, left: 12, background: "rgba(200,30,30,.9)", color: "#fff", padding: "4px 8px", borderRadius: 999, fontSize: 11 }}>
@@ -3645,6 +4697,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               </div>
             </div>
 
+            <ShellErrorBoundary title="Layer Focus" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<section className="layer-focus-panel" aria-label="Loading Layer Focus" />}>
               <LayerFocusPanel
                 items={focusPanelItems}
@@ -3665,6 +4718,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onCollapse={() => setAssetsOpen(false)}
               />
             </Suspense>
+            </ShellErrorBoundary>
           </DocumentAreaRegion>
 
           <DockRegion>
@@ -3680,9 +4734,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           >
             <DockPanelContent panelId="layers">
               <LayersPanel
+                key={activeDocumentId}
                 studio={studio}
                 layers={layers}
                 activeLayerId={activeLayerId}
+                selectedLayerIds={selectedLayerIds}
+                onSelectLayers={(layer, modifiers) => {
+                  if (!studio) return;
+                  const selection = studio.selectLayers(layer.id, modifiers, activeLayerId);
+                  setActiveLayerId(selection.primary);
+                  setNativePanelOverride(null);
+                  forceUpdate();
+                }}
+                onCommand={executeStudioCommand}
+                commandEnabled={commandRegistry.enabled}
                 activeLayer={activeLayer}
                 draggedLayerId={draggedLayerId}
                 onDragStart={setDraggedLayerId}
@@ -3697,12 +4762,17 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onAddTone={addAdjust}
                 onAddProfessionalAdjustment={addProfessionalAdjustment}
                 onRemoveActive={removeActive}
+                onRenameLayer={(layer) => { if (studio) setLayerRenameTarget({ documentId: studio.activeDocumentState().id, layerId: layer.id, name: layer.name }); }}
               />
             </DockPanelContent>
 
             {desktop && (
               <DockPanelContent panelId="properties">
-                <PropertiesPanel
+                {selectedLayerIds.length > 1 ? <section className="layer-selection-summary" aria-label="Multiple layer properties">
+                  <strong>{selectedLayerIds.length} layers selected</strong>
+                  <span>Group to keep layers editable, or merge compatible layers into one raster. Select one layer for its properties.</span>
+                  {(["group-layer", "ungroup-layers", "merge-layers", "duplicate-layer", "toggle-layer-lock", "toggle-layer-visibility"] as const).map(id => <button key={id} disabled={!commandRegistry.enabled(id)} onClick={() => executeStudioCommand(id)}>{commandRegistry.get(id).label}</button>)}
+                </section> : <PropertiesPanel
                   showPanelPicker={NATIVE_DESKTOP_BUILD}
                   toolLabel={activeToolMeta?.[2] ?? "Properties"}
                   hasSelection={Boolean(doc?.selection)}
@@ -3737,13 +4807,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   onSetLayerVisible={setLayerVisible}
                   onOpenSpaceDeck={() => openSpaceDeck(true)}
                   onAddBlank={addBlank}
-                />
+                  onSendToForm={() => { if (activeLayer) void sendLayerToForm(activeLayer); }}
+                />}
               </DockPanelContent>
             )}
 
+            <DockPanelContent panelId="campaign">
+              {studio && <Suspense fallback={<p>Loading Campaign…</p>}><CampaignPanel key={studio.activeDocumentState().id} studio={studio} selectedIds={selectedLayerIds} onChange={forceUpdate} onNotify={notify} onSave={downloadOrSave} onOpenType={()=>openStudioPanel("vector")} onRecolor={()=>executeStudioCommand("recolor")} onPrint={isNativeFilesystemAvailable()?()=>executeStudioCommand("export-print"):undefined} /></Suspense>}
+            </DockPanelContent>
             {(NATIVE_DESKTOP_BUILD || shouldMountLegacyInspector(desktop)) && <>
             <DockPanelContent panelId="channels">
-              <ChannelsPanel channelView={engineState?.channelView ?? "rgb"} onChange={(channel) => studio?.setChannelView(channel)} />
+              <ChannelsPanel channelView={engineState?.channelView ?? "rgb"} onChange={(channel) => studio?.setChannelView(channel)} onLoad={() => executeStudioCommand("select-channel")} canLoad={!!studio && !!doc?.layers.length}
+                channels={doc?.alphaChannels ?? []} draft={alphaDraft} onDraft={updateAlphaDraft} execute={executeStudioCommand} enabled={command => commandRegistry.enabled(command)} />
             </DockPanelContent>
 
             <DockPanelContent panelId="structure">
@@ -3799,11 +4874,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </DockPanelContent>
 
             <DockPanelContent panelId="selection">
-            {contextualPanel === "selection" && (
+            {doc && (
               <section className="glass-card mask-card" data-contextual-panel="selection">
                 <header><strong>Selection</strong>
-                  <button onClick={() => studio?.deselect()}>×</button>
+                  <button aria-label="Deselect" disabled={!doc.selection} onClick={() => executeStudioCommand("deselect")}>×</button>
                 </header>
+                {TOOL_REGISTRY[activeTool].options !== "selection" && (
                 <div className="mask-controls">
                   <label>
                     <span>Feather</span>
@@ -3833,6 +4909,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     <output>{selectionShift > 0 ? "+" : ""}{selectionShift}%</output>
                   </label>
                 </div>
+                )}
                 <div className="mask-actions">
                   <button onClick={() => studio?.selectAll()}>All</button>
                   <button onClick={() => studio?.deselect()}>None</button>
@@ -3844,6 +4921,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <button onClick={() => studio?.featherSelection(feather || 4)}>Feather</button>
                   <button onClick={() => studio?.refineSelection({ smooth: selectionSmooth, contrast: selectionContrast, shiftEdge: selectionShift })}>Refine edge</button>
                 </div>
+                <div className="mask-actions" aria-label="Selected pixel actions">
+                  {([ ["select-subject", "Subject"], ["copy-pixels", "Copy"], ["copy-merged", "Copy merged"], ["cut-pixels", "Cut"], ["paste-pixels", "Paste"], ["paste-in-place", "Paste in place"], ["selection-to-layer", "New layer from selection"], ["delete-pixels", "Delete pixels"] ] as const).map(([id, label]) => (
+                    <button key={id} disabled={!commandRegistry.enabled(id)} onClick={() => executeStudioCommand(id)} title={commandRegistry.get(id).shortcut || label}>{label}</button>
+                  ))}
+                </div>
                 <p style={{ padding: "0 12px", fontSize: 11, opacity: 0.65 }}>
                   Hold ⇧ to add · ⌥ to subtract · ⌘ (with wand) for non-contiguous
                 </p>
@@ -3852,14 +4934,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </DockPanelContent>
 
             <DockPanelContent panelId="mask">
-            {workspace === "mask" && (
+            {activeLayer && (
               <section className="glass-card mask-card" data-contextual-panel="mask">
                 <header><strong>Mask brush</strong>
                   <button onClick={() => activeLayerId && studio?.invertMask(activeLayerId)}>◑</button>
                 </header>
                 <div className="mask-segmented">
-                  <button className={activeTool === "mask-add" ? "active" : ""} onClick={() => setActiveTool("mask-add")}>Reveal</button>
-                  <button className={activeTool === "mask-remove" ? "active" : ""} onClick={() => setActiveTool("mask-remove")}>Hide</button>
+                  <button className={activeTool === "mask-add" ? "active" : ""} onClick={() => activateTool("mask-add", "mask")}>Reveal</button>
+                  <button className={activeTool === "mask-remove" ? "active" : ""} onClick={() => activateTool("mask-remove", "mask")}>Hide</button>
                 </div>
                 <div className="mask-controls">
                   <label><span>Brush</span><input type="range" min="4" max="400" value={brushSize} onChange={(e) => setBrushSize(Number(e.target.value))} /><output>{brushSize}</output></label>
@@ -3983,6 +5065,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             {activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
               <div className="contextual-panel-host" data-contextual-panel="pro-adjustment"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
                 <ProAdjustmentEditor
+                  key={`${activeDocumentId}:${activeLayer.id}`}
                   adjustment={activeLayer.proAdjustment}
                   onLive={(adjustment) => studio?.liveUpdateProAdjustment(activeLayer.id, adjustment)}
                   onCommit={(adjustment) => studio?.updateProAdjustment(activeLayer.id, adjustment)}
@@ -3992,7 +5075,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             )}
             </DockPanelContent>
             <DockPanelContent panelId="tone">
-            {workspace === "develop" && activeLayer?.kind !== "adjustment-curves" && activeLayer?.kind !== "adjustment-levels" && activeLayer?.kind !== "adjustment-hsl" && activeLayer?.kind !== "adjustment-pro" && (
+            {activeLayer?.kind === "adjustment-tone" && (
               <section className="glass-card tone-card" data-contextual-panel="tone">
                 <header>
                   <strong>{activeIsAdjustment ? "Develop stack" : "Add Tone"}</strong>
@@ -4030,7 +5113,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             </DockPanelContent>
 
             <DockPanelContent panelId="paint">
-            {(workspace === "edit" || workspace === "retouch") && (
+            {doc && (
               <section className="glass-card tone-card" data-contextual-panel="paint">
                 <header>
                   <strong>{modeTools[workspace].find(([tool]) => tool === activeTool)?.[2] ?? "Brush"}</strong>
@@ -4203,80 +5286,89 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
             </DockPanelContent>
             <DockPanelContent panelId="vector">
-            {workspace === "vector" && (
+            {doc && (
               <section className="glass-card tone-card" data-contextual-panel="vector">
                 <header>
                   <strong>Type & shape</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Fill color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
                 </header>
                 <div style={{ padding: "0 12px 8px" }}>
-                  <textarea
-                    value={textDraft}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setTextDraft(value);
-                      // Reflects every keystroke straight onto the canvas —
-                      // liveUpdateText mutates without touching undo history,
-                      // matching how a dragged slider or transform handle
-                      // behaves. Editing an existing layer used to require
-                      // typing blind into a disconnected field and clicking
-                      // "Update active text" to see anything change.
-                      if (activeLayer?.kind === "text" && activeLayer.text) {
-                        studio?.liveUpdateText(activeLayer.id, { text: value });
-                      }
-                    }}
-                    onBlur={() => {
-                      // One undo step for the whole edit, committed when you
-                      // leave the field — not one per keystroke.
-                      if (activeLayer?.kind === "text" && activeLayer.text) {
-                        studio?.updateText(activeLayer.id, { text: textDraft });
-                      }
-                    }}
-                    style={{ width: "100%", height: 56, background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 8, color: "inherit", padding: 8, fontSize: 12 }}
-                    placeholder="Text to add on click"
-                  />
-                  {activeLayer?.kind === "text" && activeLayer.text && (
-                    <>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 11 }}>
-                        <span>Font size</span>
-                        <input type="range" min="16" max="400" value={parseInt(activeLayer.text.font.match(/(\d+)px/)?.[1] || "96", 10)}
-                          onChange={(e) => {
-                            const size = Number(e.target.value);
-                            const font = activeLayer.text!.font.replace(/\d+px/, `${size}px`);
-                            studio?.liveUpdateText(activeLayer.id, { font });
-                          }}
-                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
-                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
-                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
-                      </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 11 }}>
-                        <span>Tracking</span>
-                        <input type="range" min="-100" max="600" step="10" value={activeLayer.text.tracking ?? 0}
-                          onChange={(e) => studio?.liveUpdateText(activeLayer.id, { tracking: Number(e.target.value) })}
-                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
-                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
-                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
-                        <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{activeLayer.text.tracking ?? 0}</small>
-                      </label>
-                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 11 }}>
-                        <span>Para space</span>
-                        <input type="range" min="0" max="3" step="0.1" value={activeLayer.text.paragraphSpacing ?? 0}
-                          onChange={(e) => studio?.liveUpdateText(activeLayer.id, { paragraphSpacing: Number(e.target.value) })}
-                          onPointerUp={() => studio?.updateText(activeLayer.id, {})}
-                          onKeyUp={() => studio?.updateText(activeLayer.id, {})}
-                          onBlur={() => studio?.updateText(activeLayer.id, {})} />
-                        <small style={{ opacity: 0.65, minWidth: 30, textAlign: "right" }}>{(activeLayer.text.paragraphSpacing ?? 0).toFixed(1)}</small>
-                      </label>
-                      {activeLayer.text.layout === "paragraph" && (
-                        <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 11 }}>
-                          <input type="checkbox" checked={activeLayer.text.justify ?? false}
-                            onChange={(e) => studio?.updateText(activeLayer.id, { justify: e.target.checked })} />
-                          <span>Justify</span>
-                        </label>
-                      )}
-                      <button onClick={() => activeLayer?.text && studio?.updateText(activeLayer.id, { text: textDraft })} style={{ marginTop: 4, fontSize: 11 }}>Update active text</button>
-                    </>
-                  )}
+                  {studio && activeLayer && (activeLayer.path || activeLayer.shape) && <Suspense fallback={<span>Loading vector controls…</span>}>
+                    <VectorConstructionPanel key={`${studio.activeDocumentState().id}:${activeLayer.id}`} studio={studio} layer={activeLayer} onSelect={setActiveLayerId} onNotify={notify} onSave={downloadOrSave} />
+                  </Suspense>}
+                  {studio && activeLayer?.lettering3d && <Suspense fallback={<p role="status">Loading 3D object editor…</p>}>
+                    <LetteringObjectPanel key={`${studio.activeDocumentState().id}:${activeLayer.id}`} studio={studio} layer={activeLayer} onExport={downloadOrSave} />
+                  </Suspense>}
+                  {studio && activeLayer?.mesh3d && <Suspense fallback={<p role="status">Loading mesh controls…</p>}>
+                    <FormMeshPanel key={`${studio.activeDocumentState().id}:${activeLayer.id}`} studio={studio} layer={activeLayer} onExport={downloadOrSave} />
+                  </Suspense>}
+                  {!activeLayer?.mesh3d && !activeLayer?.lettering3d && !activeLayer?.path && !activeLayer?.shape && <Suspense fallback={<div className="type-studio-loading">Loading typography…</div>}>
+                    <TypePanel
+                      outlineDisabledReason={TEXT_OUTLINE_COMMAND.disabledReason(activeLayer)}
+                      onCreateOutlines={async () => {
+                        if (!studio || !activeLayer) return;
+                        const layer = await TEXT_OUTLINE_COMMAND.execute(studio, activeLayer.id);
+                        setActiveLayerId(layer.id);
+                        notify("Editable outlines created; original text preserved");
+                      }}
+                      key={`${studio?.activeDocumentState().id}:${activeLayer?.id}`}
+                      text={activeLayer?.kind === "text" && activeLayer.text ? activeLayer.text : null}
+                      draft={textDraft}
+                      selection={textSelection}
+                      defaultColor={brushColor}
+                      onSelection={setTextSelection}
+                      onDraftChange={(value) => {
+                        setTextDraft(value);
+                        if (activeLayer?.kind === "text" && activeLayer.text) studio?.liveUpdateText(activeLayer.id, { text: value });
+                      }}
+                      onDraftCommit={() => {
+                        if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, { text: textDraft });
+                      }}
+                      onPatch={(patch) => {
+                        if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, patch);
+                      }}
+                      onLivePatch={(patch) => {
+                        if (activeLayer?.kind === "text" && activeLayer.text) studio?.liveUpdateText(activeLayer.id, patch);
+                      }}
+                      onCommitLive={() => {
+                        if (activeLayer?.kind === "text" && activeLayer.text) studio?.updateText(activeLayer.id, {});
+                      }}
+                      onExportForm={async (includeGlyphs) => {
+                        if (activeLayer?.kind !== "text" || !activeLayer.text) return;
+                        const { computeTextOutlines } = await import("../engine/text-shaping-client");
+                        const asset = includeGlyphs ? await formTextAssetWithOutlines(activeLayer, computeTextOutlines) : formTextAssetFromLayer(activeLayer);
+                        const fileName = `${activeLayer.name.replace(/[^a-z0-9_-]+/gi, "-") || "Luma-Text"}.lumaformtext`;
+                        const saved = await downloadOrSave(new Blob([serializeFormTextAsset(asset)], { type: "application/vnd.luma-form.text+json" }), fileName);
+                        if (saved) notify(includeGlyphs ? "Shaped glyph geometry and editable source ready for Form Studio" : "Text source ready for Form Studio · proxy preview, not glyph geometry");
+                      }}
+                      spatialStyle={activeLayer?.kind === "text" ? activeLayer.spatial ?? activeLayer.text?.spatial : undefined}
+                      onSpatialPatch={(patch) => {
+                        if (activeLayer?.kind === "text") studio?.updateLayerSpatial(activeLayer.id, patch);
+                      }}
+                      onSpatialLivePatch={(patch) => {
+                        if (activeLayer?.kind === "text") studio?.liveUpdateLayerSpatial(activeLayer.id, patch);
+                      }}
+                      onSpatialCommit={() => {
+                        if (activeLayer?.kind === "text") studio?.updateLayerSpatial(activeLayer.id, {});
+                      }}
+                      onMeshRender={(canvas) => {
+                        if (!studio || activeLayer?.kind !== "text") return;
+                        const rendered = studio.addTextMeshRender(activeLayer.id, canvas);
+                        setActiveLayerId(rendered.id);
+                        notify("3D render added; original text preserved");
+                      }}
+                      onMeshAsset={(canvas, asset) => {
+                        if (!studio || activeLayer?.kind !== "text") return;
+                        const object = studio.addLetteringObject(activeLayer.id, canvas, asset);
+                        setActiveLayerId(object.id);
+                        notify("Editable 3D object added; source text preserved");
+                      }}
+                      onMeshExport={(blob, extension) => {
+                        const name = activeLayer?.name.replace(/[^a-z0-9-]+/gi, "-") || "Luma-3D-Text";
+                        return downloadOrSave(blob, `${name}.${extension}`);
+                      }}
+                    />
+                  </Suspense>}
                   {activeLayer?.kind === "shape" && activeLayer.shape && (
                     <div style={{ display: "grid", gap: 7, marginTop: 8, paddingTop: 8, borderTop: "1px solid rgba(255,255,255,.1)", fontSize: 10 }}>
                       <label style={{ display: "grid", gridTemplateColumns: "72px 1fr", alignItems: "center", gap: 6 }}>
@@ -4307,7 +5399,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
             </DockPanelContent>
             <DockPanelContent panelId="transform">
-            {workspace === "transform" && (
+            {activeLayer?.kind === "group" && <p className="layer-selection-summary">Group transforms are not supported yet. Select a child layer to transform it.</p>}
+            {doc && activeLayer?.kind !== "group" && selectedLayerIds.length <= 1 && (
               <section className="glass-card tone-card" data-contextual-panel="transform">
                 <header><strong>Transform & geometry</strong><small>PRECISION</small></header>
                 <div style={{ display: "grid", gap: 8, padding: "8px 12px 12px", fontSize: 11 }}>
@@ -4321,7 +5414,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 6 }}>
                         {([[
                           "X", "tx", activeLayer.transform.tx, 1,
-                        ], ["Y", "ty", activeLayer.transform.ty, 1], ["Scale X", "sx", activeLayer.transform.sx, 0.01], ["Scale Y", "sy", activeLayer.transform.sy, 0.01]] as const).map(([label, key, value, step]) => (
+                        ], ["Y", "ty", activeLayer.transform.ty, 1], ["Scale X", "sx", activeLayer.transform.sx, 0.01], ["Scale Y", "sy", activeLayer.transform.sy, 0.01], ["Skew", "skewX", activeLayer.transform.skewX ?? 0, 0.01]] as const).map(([label, key, value, step]) => (
                           <label key={key} style={{ display: "grid", gap: 3 }}><span>{label}</span><input key={`${activeLayer.id}-${key}-${value}`} type="number" step={step} defaultValue={Math.round(value * 100) / 100} onBlur={(event) => {
                             const next = Number(event.target.value);
                             if (Number.isFinite(next)) studio?.updateTransform(activeLayer.id, { [key]: next });
@@ -4329,7 +5422,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                         ))}
                         <label style={{ display: "grid", gap: 3 }}><span>Rotation °</span><input key={`${activeLayer.id}-rotation-${activeLayer.transform.rotation}`} type="number" step="0.1" defaultValue={Math.round(activeLayer.transform.rotation * 180 / Math.PI * 10) / 10} onBlur={(event) => {
                           const degrees = Number(event.target.value);
-                          if (Number.isFinite(degrees)) studio?.updateTransform(activeLayer.id, { rotation: degrees * Math.PI / 180 });
+                          if (Number.isFinite(degrees) && doc) {
+                            const points = layerCorners(activeLayer, activeLayer.surface?.grid.width ?? activeLayer.bitmap?.width ?? doc.width, activeLayer.surface?.grid.height ?? activeLayer.bitmap?.height ?? doc.height);
+                            studio?.updateTransform(activeLayer.id, rotateLayerTransformAround(activeLayer.transform, degrees * Math.PI / 180 - activeLayer.transform.rotation, (points[0][0] + points[2][0]) / 2, (points[0][1] + points[2][1]) / 2));
+                          }
                         }} /></label>
                       </div>
                       <button onClick={() => studio?.resetTransform(activeLayer.id)}>Reset transform</button>
@@ -4341,7 +5437,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
             </DockPanelContent>
             <DockPanelContent panelId="measure">
-            {workspace === "measure" && (
+            {doc && (
               <MeasurePanel measurement={measurement} colorSamples={colorSamples} onClear={() => { setColorSamples([]); setMeasurement(null); }} />
             )}
 
@@ -4381,7 +5477,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               />
             </DockPanelContent>
             <DockPanelContent panelId="actions">
-              <ActionsPanel actions={studio?.actions.list() ?? []} recordingName={recordingName} onStart={startRecording} onStop={stopRecording} onPlay={playAction} />
+              <ActionsPanel actions={studio?.actions.list() ?? []} recordingName={recordingName} onStart={startRecording} onStop={stopRecording} onPlay={playAction}
+                onEdit={(index, action) => { studio?.editAction(index, action); setActionReport(null); forceUpdate(); }}
+                onUndoEdit={redo => { studio?.undoActionEdit(redo); setActionReport(null); forceUpdate(); }}
+                canUndoEdit={studio?.actions.canUndoEdit() ?? false} canRedoEdit={studio?.actions.canRedoEdit() ?? false}
+                report={actionReport?.documentId === activeDocumentId ? actionReport : null} />
             </DockPanelContent>
 
             <DockPanelContent panelId="history">
@@ -4405,6 +5505,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         </AppWorkspace>
         {desktop && (
           <StatusBarRegion>
+          <ShellErrorBoundary title="Status" onSave={() => { void saveProject(); }}>
           <Suspense fallback={null}>
             <DesktopStatusbar
               dimensions={doc ? `${doc.width.toLocaleString()} × ${doc.height.toLocaleString()} px` : "No document open"}
@@ -4414,14 +5515,16 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               exportRenderer={engineState?.exportRenderer ?? "canvas2d-rgba8"}
               tool={activeToolMeta?.[2] ?? "Tool"}
               shortcut={activeToolMeta ? resolveShortcut(activeToolMeta[0], activeToolMeta[3], workflowPreferences) : ""}
-              zoom={Math.round(view.zoom * 100)}
+              zoom={zoomPercent}
             />
           </Suspense>
+          </ShellErrorBoundary>
           </StatusBarRegion>
         )}
       </AppWindow>
 
       {showExportMenu && (
+        <ShellErrorBoundary title="Export" region="dialog" onDismiss={() => setShowExportMenu(false)}>
         <Suspense fallback={null}>
           <ExportPopover
             rasterFormat={exportFormat}
@@ -4434,6 +5537,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             onClose={() => setShowExportMenu(false)}
             onExportRaster={() => { setShowExportMenu(false); void exportPNG(); }}
             onExportPhotoshop={() => { setShowExportMenu(false); void exportPsd(); }}
+            printAvailable={Boolean(studio && isNativeFilesystemAvailable() && studio.doc.bitDepth === 8 && studio.doc.colorSpace === "srgb" && studio.doc.width * studio.doc.height <= 4_000_000)}
+            onExportPrint={() => { setShowExportMenu(false); runStudioCommand("export-print"); }}
+            onExportVector={(format) => {
+              if (!studio) return;
+              setShowExportMenu(false);
+              void studio.prepareVectorDelivery(format).then(setVectorTarget).catch(error => notify(error instanceof Error ? error.message : "Vector preflight failed"));
+            }}
             onToggleGL={() => {
               if (!glSupported) return;
               const next = !useGL;
@@ -4442,7 +5552,28 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             }}
           />
         </Suspense>
+        </ShellErrorBoundary>
       )}
+      {printTarget && <ShellErrorBoundary title="Print output" region="dialog" onDismiss={() => setPrintTarget(null)}>
+        <Suspense fallback={null}><PrintExportDialog documentName={printTarget.name} onClose={() => setPrintTarget(null)} onExport={async options => {
+          if (!studio || studio.activeDocumentState().id !== printTarget.id) throw new Error("The print document changed; reopen print export from the intended tab");
+          const blob = await studio.exportPrintPdf(options);
+          await downloadOrSave(blob, `${printTarget.name}-cmyk.pdf`);
+        }}/></Suspense>
+      </ShellErrorBoundary>}
+      {vectorTarget && <ShellErrorBoundary title="Vector delivery preflight" region="dialog" onDismiss={() => setVectorTarget(null)}>
+        <Suspense fallback={null}><VectorPreflightDialog report={vectorTarget.report} onClose={() => setVectorTarget(null)} onInspectLayer={id => {
+          try { vectorTarget.assertCurrent(); if (studio?.findLayer(id)) { setActiveLayerId(id); selectInspectorTab("properties"); } }
+          catch (error) { notify(error instanceof Error ? error.message : "Document changed"); }
+          setVectorTarget(null);
+        }} onExport={async () => {
+          if (!studio) throw new Error("The editor is not ready");
+          vectorTarget.assertCurrent();
+          const blob = await studio.exportVectorDocument(vectorTarget.report.format);
+          vectorTarget.assertCurrent();
+          await downloadOrSave(blob, `${vectorTarget.name}.${vectorTarget.report.format}`);
+        }}/></Suspense>
+      </ShellErrorBoundary>}
       {showWorkspaceSettings && (
         <div className="spatial-modal" onMouseDown={() => setShowWorkspaceSettings(false)}>
           <section
@@ -4593,10 +5724,26 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         </div>
       )}
 
+      {recolorSession && studio && (
+        <ShellErrorBoundary title="Recolor" region="dialog" onDismiss={() => { recolorSession.release(); setRecolorSession(null); }}>
+          <Suspense fallback={null}>
+            <RecolorDialog session={recolorSession}
+              onClose={() => { recolorSession.release(); setRecolorSession(null); }}
+              onApply={async (params, output, mode, progress) => {
+                const id = await studio.applyRecolor(recolorSession, params, output, mode, progress);
+                setActiveLayerId(id); forceUpdate(); recolorSession.release(); setRecolorSession(null);
+                notify(output === "selection" ? "Color range selected" : output.startsWith("mask") ? "Color mask applied" : "Recolor applied · undo available");
+              }} />
+          </Suspense>
+        </ShellErrorBoundary>
+      )}
+
       {styleLayer && studio && (
+        <ShellErrorBoundary title="Layer style" region="dialog" onDismiss={() => setStyleLayerId(null)}>
         <Suspense fallback={null}>
           <LayerStyleDialog layer={styleLayer} studio={studio} onClose={() => setStyleLayerId(null)} />
         </Suspense>
+        </ShellErrorBoundary>
       )}
 
       {showHistory && (
@@ -4736,13 +5883,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   <small>Apply a recorded action to a set of images, download as a ZIP</small>
                 </div>
               </div>
-              <button onClick={() => !batchProgress && setShowBatch(false)}>×</button>
+              <button aria-label="Close batch" disabled={!!batchProgress} onClick={() => setShowBatch(false)}>×</button>
             </header>
             <div className="batch-toolbar">
               <div>
                 <span style={{ fontSize: 12, opacity: 0.7, marginRight: 8 }}>Action:</span>
                 <select
                   value={selectedActionIdx ?? ""}
+                  disabled={!!batchProgress}
                   onChange={(e) => setSelectedActionIdx(e.target.value === "" ? null : Number(e.target.value))}
                   style={{ padding: "4px 8px", fontSize: 12, borderRadius: 6, background: "rgba(255,255,255,.06)", color: "inherit", border: "1px solid rgba(255,255,255,.14)" }}
                 >
@@ -4752,7 +5900,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   ))}
                 </select>
               </div>
-              <button onClick={() => batchInput.current?.click()}>＋ Add images</button>
+              <button disabled={!!batchProgress} onClick={() => batchInput.current?.click()}>＋ Add images</button>
             </div>
             <div className={`batch-grid ${batchFiles.length ? "" : "empty"}`}>
               {!batchFiles.length ? (
@@ -4763,11 +5911,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 <article key={i}>
                   <div>
                     <span>
-                      {batchProgress && batchProgress.i > i ? "✓" : batchProgress?.i === i ? "•" : `${i + 1}`}
+                      {batchItems[i]?.status === "succeeded" ? "✓" : batchItems[i]?.status === "failed" ? "!" : batchItems[i]?.status === "skipped" ? "–" : batchItems[i]?.status === "running" ? "•" : `${i + 1}`}
                     </span>
                   </div>
                   <strong>{f.name}</strong>
-                  <small>{(f.size / 1024).toFixed(0)} KB</small>
+                  <small title={batchItems[i]?.message}>{batchItems[i]?.status ?? `${(f.size / 1024).toFixed(0)} KB`}{batchItems[i]?.message ? ` · ${batchItems[i].message}` : ""}</small>
                 </article>
               ))}
             </div>
@@ -4778,8 +5926,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   : `${batchFiles.length} image${batchFiles.length === 1 ? "" : "s"}${selectedActionIdx != null ? " · action selected" : ""}`}
               </span>
               <div style={{ display: "flex", gap: 8 }}>
+                {batchProgress && <button onClick={() => batchAbortRef.current?.abort()}>Stop after current operation</button>}
                 {batchFiles.length > 0 && !batchProgress && (
-                  <button onClick={() => setBatchFiles([])} style={{ background: "rgba(255,255,255,.06)" }}>Clear</button>
+                  <button onClick={() => { setBatchFiles([]); setBatchItems({}); }} style={{ background: "rgba(255,255,255,.06)" }}>Clear</button>
                 )}
                 <button onClick={runBatchNow} disabled={!batchFiles.length || !!batchProgress}>
                   {batchProgress ? "Running…" : "Run & download ZIP ✦"}
@@ -4807,23 +5956,46 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         );
       })()}
       {pendingNativeClose && studio && (
-        <div className="spatial-modal" role="presentation">
+        <div className="spatial-modal" style={{ zIndex: 10000 }} role="presentation">
           <section ref={unsavedDialogRef} className="unsaved-document-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-quit-title">
             <header><strong id="unsaved-quit-title">Save before quitting Luma Studio?</strong></header>
             <p>{studio.dirtyDocuments().length} open document{studio.dirtyDocuments().length === 1 ? " has" : "s have"} unsaved changes. Quitting without saving permanently discards those edits.</p>
             <footer>
-              <button type="button" onClick={() => { setPendingNativeClose(false); void cancelNativeClose(); }}>Cancel</button>
-              <button type="button" className="danger" onClick={() => { setPendingNativeClose(false); void confirmNativeClose(); }}>Don’t Save</button>
-              <button type="button" className="primary" onClick={() => void saveAllAndCloseNative()}>Save All</button>
+              <button type="button" disabled={nativeCloseBusy} onClick={() => { if (nativeCloseBusyRef.current) return; setPendingNativeClose(false); void cancelNativeClose(); }}>Cancel</button>
+              <button type="button" disabled={nativeCloseBusy} className="danger" onClick={() => void discardAllAndCloseNative()}>Don’t Save</button>
+              <button type="button" disabled={nativeCloseBusy} className="primary" onClick={() => void saveAllAndCloseNative()}>{nativeCloseBusy ? "Finishing…" : "Save All"}</button>
             </footer>
           </section>
         </div>
       )}
+      {photoshopApproval && <ShellErrorBoundary title="Delivery preflight" region="dialog" onDismiss={() => { photoshopApproval.resolve(false); exportApprovalResolver.current = null; setPhotoshopApproval(null); }}><Suspense fallback={null}><ExportWarningDialog report={photoshopApproval.report} onChoose={proceed => { photoshopApproval.resolve(proceed); exportApprovalResolver.current = null; setPhotoshopApproval(null); }} onInspectLayer={id => {
+        photoshopApproval.resolve(false); exportApprovalResolver.current = null; setPhotoshopApproval(null);
+        if (studio?.activeDocumentState().id === photoshopApproval.documentId && studio.findLayer(id)) setActiveLayerId(id);
+      }} /></Suspense></ShellErrorBoundary>}
+      {showNewDocument && <ShellErrorBoundary title="New document" region="dialog" onDismiss={() => setShowNewDocument(false)}><Suspense fallback={null}><NewDocumentDialog onClose={() => setShowNewDocument(false)} onCreate={(width, height, name) => {
+        if (!studio) throw new Error("The editor is still starting");
+        studio.resetDocument(width, height, name);
+        const layer = studio.addBlankRaster("Layer 1");
+        setActiveLayerId(layer.id);
+        // useDocumentView fits the new ID; the outgoing render's setter belongs to the old tab.
+      }} /></Suspense></ShellErrorBoundary>}
+      {layerRenameTarget && <ShellErrorBoundary title="Rename layer" region="dialog" onDismiss={() => setLayerRenameTarget(null)}><Suspense fallback={null}><RenameLayerDialog initialName={layerRenameTarget.name} onClose={() => setLayerRenameTarget(null)} onRename={name => {
+        if (!studio || studio.activeDocumentState().id !== layerRenameTarget.documentId || !studio.findLayer(layerRenameTarget.layerId)) throw new Error("The selected layer is no longer active. Cancel and select it again.");
+        studio.setLayerProp(layerRenameTarget.layerId, "name", name, "Layer renamed");
+      }} /></Suspense></ShellErrorBoundary>}
+      {pdfChoice && <ShellErrorBoundary title="PDF import" region="dialog" onDismiss={() => { pdfChoice.resolve(null); setPdfChoice(null); }}><Suspense fallback={null}><PdfImportDialog name={pdfChoice.name} onChoose={page => { pdfChoice.resolve(page); setPdfChoice(null); }} /></Suspense></ShellErrorBoundary>}
+      {!startupReady && <div className="spatial-modal" style={{ zIndex: 10000 }} role="status" aria-label="Restoring workspace"><section className="unsaved-document-dialog"><header><strong>Restoring workspace…</strong></header><p>Preparing your documents before editing begins.</p></section></div>}
+      {nativeOpening && <div className="spatial-modal" style={{ zIndex: 10000 }} role="status"><section className="unsaved-document-dialog"><header><strong>Opening document…</strong></header><p>Files open in order. Your existing documents stay open.</p></section></div>}
+      {projectSaving && <div className="spatial-modal" style={{ zIndex: 10000 }}>
+        <section className="unsaved-document-dialog" role="alertdialog" aria-modal="true" aria-label="Saving project" tabIndex={-1}>
+          <header><strong>Saving project…</strong></header><p role="status">Writing your document and history. Editing resumes when the save finishes.</p>
+        </section>
+      </div>}
       {desktopUpdateInstalling && (
         <div className="spatial-modal" role="presentation">
           <section className="unsaved-document-dialog" role="alertdialog" aria-modal="true" aria-labelledby="desktop-update-title">
-            <header><strong id="desktop-update-title">Installing verified update…</strong></header>
-            <p>Your workspace has been checkpointed. Luma Studio will restart automatically when signature verification and installation finish.</p>
+            <header><strong id="desktop-update-title">{desktopUpdatePhase}</strong></header>
+            <p>Editing is paused. Luma will verify the download and checkpoint your unchanged workspace before installing and restarting. If any step fails, your documents stay open.</p>
             <footer><span aria-live="polite">Do not close the application.</span></footer>
           </section>
         </div>
@@ -4836,7 +6008,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         multiple
         onChange={(e) => {
           const files = Array.from(e.target.files ?? []);
-          if (files.length) setBatchFiles((existing) => [...existing, ...files]);
+          if (files.length) queueBatchFiles(files);
           e.target.value = "";
         }}
       />
@@ -4879,9 +6051,22 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           </div>
         </div>
       )}
-      <input ref={fileInput} className="visually-hidden" type="file" accept={`.luma,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
+      <input ref={fileInput} className="visually-hidden" type="file" accept={`.luma,.pdf,.lumaformtext,.lumaformmesh,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
       <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
       <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
+      <input ref={smartContentInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={async event => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        const target = smartContentTarget.current;
+        smartContentTarget.current = null;
+        if (!file || !target || !studio) return;
+        try {
+          const { replaceSmartContentFromFile } = await import("./smart-content-import");
+          await replaceSmartContentFromFile(studio, target, file);
+          notify("Contents replaced · fitted within original bounds; transform and styling preserved");
+          forceUpdate();
+        } catch (error) { notify(error instanceof Error ? error.message : "Content replacement failed"); }
+      }} />
       <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
       <input ref={focusImportInput} className="visually-hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
       <input ref={pluginInput} className="visually-hidden" type="file" accept=".luma-plugin,application/json" onChange={onPluginInstall} />
@@ -4893,7 +6078,12 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           </div>
         </div>
       )}
-      {toast && <div className="spatial-toast" role="status"><span>✓</span>{toast}</div>}
+      {toast && <div className="spatial-toast" role="status">{toast}</div>}
+      {projectSaveError && <section className="project-save-error" role="alert" aria-label="Project not saved">
+        <strong>Project not saved — keep this document open</strong>
+        <p>{projectSaveError}</p>
+        <button onClick={() => setProjectSaveError(null)}>Dismiss</button>
+      </section>}
     </AppShell>
   );
 }

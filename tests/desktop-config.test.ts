@@ -63,3 +63,12 @@ test("the CSP allows the origin the desktop app actually calls", () => {
     `connect-src must list ${DEFAULT_DEPLOY_ORIGIN}; got "${connect.trim()}"`,
   );
 });
+
+test("packaged lettering permits WebAssembly without enabling JavaScript eval", () => {
+  for (const path of ["../src-tauri/tauri.conf.json", "../src-tauri/tauri.dev.conf.json"]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    const script = /script-src ([^;"`\n]*)/.exec(source)?.[1] ?? "";
+    assert.ok(script.includes("'wasm-unsafe-eval'"), `${path} must permit the bundled shaper`);
+    assert.ok(!script.includes("'unsafe-eval'"), `${path} must not permit JavaScript eval`);
+  }
+});

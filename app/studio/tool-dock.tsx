@@ -5,6 +5,24 @@ import ToolPalette, { type ToolPaletteGroup } from "./tool-palette";
 import { CategoryIcon, ToolIcon } from "./studio-icons";
 import type { StudioCommand } from "../desktop/menu-model";
 import { DESKTOP_TOOL_RAIL } from "./desktop-presentation";
+import { ArrowLeftRight } from "lucide-react";
+
+const RAIL_FAMILIES: Record<string, readonly string[]> = {
+  move: ["move", "content-move", "ruler"],
+  brush: ["brush", "capture-brush", "pencil", "mixer"],
+  crop: ["crop", "perspective-crop", "straighten"],
+  "radial-warp": ["radial-warp", "perspective-warp"],
+  heal: ["heal", "clone", "spot-heal", "patch", "remove", "dodge", "burn", "blur-brush", "sharpen-brush", "smudge", "sponge", "liquify"],
+  "sel-lasso": ["sel-lasso", "sel-polygon", "sel-magnetic"],
+  "sel-ellipse": ["sel-rect", "sel-ellipse", "sel-wand", "sel-quick"],
+  gradient: ["gradient", "fill", "pattern"],
+  erase: ["erase", "mask-add", "mask-remove"],
+  text: ["text", "paragraph-text", "vertical-text", "path-text", "type-mask"],
+  pen: ["pen"],
+  "direct-select": ["direct-select", "path-select"],
+  frame: ["frame", "rect", "ellipse", "triangle", "polygon", "line", "custom-shape"],
+  "sel-sam": ["sel-sam"],
+};
 
 type CategoryId = "move" | "paint" | "select" | "retouch" | "create" | "ai";
 
@@ -27,7 +45,12 @@ export default function ToolDock({
   onSelect,
   onAiSelect,
   onCommand,
+  commandEnabled,
   compactDesktop = false,
+  foreground,
+  background,
+  onForegroundChange,
+  onSwapColors,
 }: {
   groups: ToolPaletteGroup[];
   activeWorkspace: string;
@@ -35,7 +58,12 @@ export default function ToolDock({
   onSelect: (tool: string, workspace: string) => void;
   onAiSelect: () => void;
   onCommand: (command: StudioCommand) => void;
+  commandEnabled: (command: StudioCommand) => boolean;
   compactDesktop?: boolean;
+  foreground?: string;
+  background?: string;
+  onForegroundChange?: (color: string) => void;
+  onSwapColors?: () => void;
 }) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [flyout, setFlyout] = useState<CategoryId | null>(null);
@@ -43,10 +71,11 @@ export default function ToolDock({
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tools = useMemo(() => groups.flatMap((group) => group.tools.map((tool) => ({ ...tool, workspace: group.id }))), [groups]);
   const activeCategory = categoryForTool(activeTool);
+  useEffect(() => () => { if (holdTimer.current) clearTimeout(holdTimer.current); }, []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (!event.defaultPrevented && !event.altKey && !event.shiftKey && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setLibraryOpen(true);
         setFlyout(null);
@@ -85,19 +114,32 @@ export default function ToolDock({
     <>
       <aside className="spatial-toolbar" aria-label="Primary tools">
         <div className="primary-tool-categories">
-          {compactDesktop ? DESKTOP_TOOL_RAIL.map((toolId) => {
-            const tool = tools.find((candidate) => candidate.id === toolId);
+          {compactDesktop ? DESKTOP_TOOL_RAIL.map((toolId, index) => {
+            const family = RAIL_FAMILIES[toolId] ?? [toolId];
+            const visibleToolId = family.includes(activeTool) ? activeTool : toolId;
+            const tool = tools.find((candidate) => candidate.id === visibleToolId);
             if (!tool) return null;
+            const category = categoryForTool(tool.id);
+            const openFamily = () => { if (category && family.length > 1) setFlyout(category); };
             return (
               <button
-                key={tool.id}
+                key={toolId}
                 className={activeTool === tool.id ? "active" : ""}
                 onClick={() => onSelect(tool.id, tool.workspace)}
+                onContextMenu={(event) => { event.preventDefault(); openFamily(); }}
+                onPointerDown={() => { stopHold(); holdTimer.current = setTimeout(openFamily, 480); }}
+                onPointerUp={stopHold}
+                onPointerLeave={stopHold}
+                onPointerCancel={stopHold}
+                onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); openFamily(); } }}
+                data-family-start={index === 4 || index === 9 || index === 13 ? "true" : undefined}
                 aria-label={tool.label}
                 aria-pressed={activeTool === tool.id}
-                title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}`}
+                aria-haspopup={family.length > 1 ? "menu" : undefined}
+                title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}${family.length > 1 ? " · Right-click for related tools" : ""}`}
               >
                 <ToolIcon id={tool.id} />
+                {family.length > 1 && <i className="tool-family-indicator" aria-hidden="true" />}
               </button>
             );
           }) : categories.map((category) => (
@@ -130,6 +172,10 @@ export default function ToolDock({
             <span>More</span>
           </button>
         </div>
+        {foreground && onForegroundChange && <div className="tool-rail-colors">
+          <input type="color" value={foreground} onChange={(event) => onForegroundChange(event.target.value)} aria-label="Foreground paint color" title="Foreground paint color" style={{ boxShadow: `3px 3px 0 ${background ?? "#ffffff"}` }} />
+          {onSwapColors && <button type="button" onClick={onSwapColors} aria-label="Swap foreground and background colors" title="Swap colors"><ArrowLeftRight /></button>}
+        </div>}
       </aside>
 
       {flyout && (
@@ -159,6 +205,7 @@ export default function ToolDock({
 
       {libraryOpen && (
         <ToolPalette
+          commandEnabled={commandEnabled}
           groups={groups}
           activeTool={activeTool}
           onSelect={(tool, workspace) => {

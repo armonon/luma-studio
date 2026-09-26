@@ -1,4 +1,5 @@
 import { hasLayerMask } from "../engine/layer-mask";
+import { vectorPathBounds } from "../engine/vector-path";
 import {
   documentPointToLayer,
   effectiveLayerVisible,
@@ -236,14 +237,7 @@ function localLayerBounds(doc: Document, layer: Layer): LayerBounds {
     if (width && height) return { x: 0, y: 0, width, height };
   }
   if (layer.shape) return { x: layer.shape.x, y: layer.shape.y, width: layer.shape.w, height: layer.shape.h };
-  if (layer.path?.anchors.length) {
-    const xs = layer.path.anchors.map((anchor) => anchor.x);
-    const ys = layer.path.anchors.map((anchor) => anchor.y);
-    const padding = Math.max(4, layer.path.strokeWidth / 2);
-    const x = Math.min(...xs) - padding;
-    const y = Math.min(...ys) - padding;
-    return { x, y, width: Math.max(1, Math.max(...xs) - x + padding), height: Math.max(1, Math.max(...ys) - y + padding) };
-  }
+  if (layer.path) return vectorPathBounds(layer.path);
   if (layer.text) {
     const fontSize = Number(layer.text.font.match(/(\d+(?:\.\d+)?)px/)?.[1] ?? 32);
     const lines = layer.text.text.split("\n");
@@ -326,7 +320,11 @@ export function hitTestEditableLayer(
     if (layer.kind === "group" || ADJUSTMENT_KINDS.has(layer.kind) || !effectiveLayerVisible(doc, layer)) continue;
     const bounds = layerVisualBounds(doc, layer.id);
     if (x < bounds.x || y < bounds.y || x > bounds.x + bounds.width || y > bounds.y + bounds.height) continue;
-    if (layer.bitmap) {
+    if (layer.surface && !layer.bitmap) {
+      const local = documentPointToLayer(layer.transform, x, y);
+      if (!local || local.x < 0 || local.y < 0 || local.x >= layer.surface.grid.width || local.y >= layer.surface.grid.height) continue;
+      if (layer.surface.readPixel(Math.floor(local.x), Math.floor(local.y))[3] === 0) continue;
+    } else if (layer.bitmap) {
       const local = documentPointToLayer(layer.transform, x, y);
       if (!local || local.x < 0 || local.y < 0 || local.x >= layer.bitmap.width || local.y >= layer.bitmap.height) continue;
       try {

@@ -81,3 +81,17 @@ test("untrusted project and plugin actions reject unknown or malformed steps", (
   assert.deepEqual(recorder.list().map((action) => action.name), ["Safe"]);
   assert.throws(() => recorder.install({ name: "Plugin", steps: [{ op: "unknown" }] } as never, "bad.plugin"), /malformed/);
 });
+
+test("action payloads reject malformed compound arguments, cycles and oversized nested data", () => {
+  for (const step of [
+    { op: "setTransform", transform: {} },
+    { op: "addShape", style: {} },
+    { op: "updateText", text: { text: "missing layout" } },
+    { op: "addProAdjustment", kind: "color-balance", params: { kind: "color-balance" } },
+    { op: "addProAdjustment", kind: "channel-mixer", params: { kind: "channel-mixer", matrix: [1] } },
+    { op: "clear", enabled: "yes" },
+  ]) assert.equal(isSafeAction({ name: "Unsafe", steps: [step] }), false);
+  const cycle: Record<string, unknown> = { op: "clear" }; cycle.self = cycle;
+  assert.equal(isSafeAction({ name: "Cycle", steps: [cycle] }), false);
+  assert.equal(isSafeAction({ name: "Large", steps: [{ op: "clear", extra: "x".repeat(8_000_001) }] }), false);
+});

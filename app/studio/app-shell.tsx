@@ -1,12 +1,13 @@
 "use client";
 
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
+import "./workspace.css";
 
 type RegionProps = ComponentPropsWithoutRef<"div"> & { children: ReactNode };
 
 /** Layout-only root. It deliberately knows nothing about documents or tools. */
 export function AppShell({ children }: { children: ReactNode }) {
-  return <main className="spatial-studio" data-app-shell="luma-studio">{children}</main>;
+  return <main className="spatial-studio" data-app-shell="luma-studio" data-ui="atelier">{children}</main>;
 }
 
 export function AppWindow({ children, ...props }: RegionProps) {

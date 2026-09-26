@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "scope": "Reviewed WebKit desktop-shell baselines; not installed macOS window/dialog qualification",
+  "reviewedAt": "2026-09-25",
+  "sourceSha256": "8ca31c02841c0202909adefa0018a58c612c87fe4f5a03348a113dc23f683ade",
+  "harnessSha256": "6722e10cc00194011e14d876f560766cf43c0945f55570187f04bfbf84285d49",
+  "captureReport": "artifacts/shell-matrix-rWNy4h/report.json",
+  "knownBoundaries": [
+    "The options row scrolls horizontally on smaller viewports; properties scroll vertically.",
+    "Save/recovery status is asynchronous and excluded from pixel comparison only; errors and durable recovery are asserted separately.",
+    "These are initial reviewed references, not independent professional-workflow fidelity evidence."
+  ],
+  "references": [
+    {
+      "state": "empty-document",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-empty-document-1920x1080.png"
+    },
+    {
+      "state": "empty-document",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-empty-document-1440x900.png"
+    },
+    {
+      "state": "empty-document",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-empty-document-1280x800.png"
+    },
+    {
+      "state": "brush-selected",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-brush-selected-1920x1080.png"
+    },
+    {
+      "state": "brush-selected",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-brush-selected-1440x900.png"
+    },
+    {
+      "state": "brush-selected",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-brush-selected-1280x800.png"
+    },
+    {
+      "state": "text-selected",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-text-selected-1920x1080.png"
+    },
+    {
+      "state": "text-selected",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-text-selected-1440x900.png"
+    },
+    {
+      "state": "text-selected",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-text-selected-1280x800.png"
+    },
+    {
+      "state": "transform-active",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-transform-active-1920x1080.png"
+    },
+    {
+      "state": "transform-active",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-transform-active-1440x900.png"
+    },
+    {
+      "state": "transform-active",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-transform-active-1280x800.png"
+    },
+    {
+      "state": "floating-panel",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-floating-panel-1920x1080.png"
+    },
+    {
+      "state": "floating-panel",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-floating-panel-1440x900.png"
+    },
+    {
+      "state": "floating-panel",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-floating-panel-1280x800.png"
+    },
+    {
+      "state": "collapsed-panel-rail",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-collapsed-panel-rail-1920x1080.png"
+    },
+    {
+      "state": "collapsed-panel-rail",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-collapsed-panel-rail-1440x900.png"
+    },
+    {
+      "state": "collapsed-panel-rail",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-collapsed-panel-rail-1280x800.png"
+    },
+    {
+      "state": "multiple-documents",
+      "width": 1920,
+      "height": 1080,
+      "file": "reference/shell-multiple-documents-1920x1080.png"
+    },
+    {
+      "state": "multiple-documents",
+      "width": 1440,
+      "height": 900,
+      "file": "reference/shell-multiple-documents-1440x900.png"
+    },
+    {
+      "state": "multiple-documents",
+      "width": 1280,
+      "height": 800,
+      "file": "reference/shell-multiple-documents-1280x800.png"
+    }
+  ]
+}

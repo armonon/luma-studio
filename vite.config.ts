@@ -45,6 +45,10 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    worker: { format: "es" as const },
+    // The SSR target is a Worker, not a Node canvas host. Honor packages'
+    // browser exclusions (notably Paper.js's optional jsdom/canvas adapters).
+    ssr: { resolve: { mainFields: ["browser", "module", "jsnext:main", "jsnext"] } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

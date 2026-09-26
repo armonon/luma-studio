@@ -14,13 +14,25 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
+# Reuse the updater's transport and signature primitives with bounded buffering.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+base64 = "0.22"
+minisign-verify = "0.2"
 # Remembers window size, position and maximised state between launches.
 tauri-plugin-window-state = "2"
 # The pro edition's imaging core. Linked here so the desktop binary carries
 # the native f32/parallel engine rather than driving the browser compositor.
 luma-core = { path = "../crates/luma-core" }
 rayon = "1"
+lcms2 = { version = "6.2.0", default-features = false, features = ["static"] }
 serde_json = "1"
+image = { version = "0.24.9", default-features = false, features = ["png", "tiff"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString"] }
 
 [features]
 # Enabled by `tauri dev`; keeps devtools out of release builds.

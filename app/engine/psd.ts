@@ -1,6 +1,13 @@
 // Preservation-first PSD/PSB import/export via ag-psd. Native Luma equivalents
 // remain editable; descriptors that Luma cannot edit are retained for round-trip
 // and surfaced through an explicit compatibility report.
+import { pathContours } from "./vector-path";
+import { DEFAULT_BLACK_WHITE_MIX, gradientMapStops } from "./pro-adjustments";
+import { decodePhotoshopRasterRows } from "./photoshop-channel-rows";
+import { assertPhotoshopAlphaExport, readPhotoshopAlphaChannels, writePhotoshopAlphaChannels } from "./psd-alpha-channels";
+import { getPhotoshopTileSource, registerPhotoshopTileSource, UnsupportedPhotoshopTileSource } from "./photoshop-tile-source";
+import { sourceBackedPhotoshopChannels, assertSourceBackedExportBudget } from "./photoshop-source-export";
+import type { PreparedSmartObject } from "./psd-smart-objects";
 
 import type {
   Psd,
@@ -14,7 +21,8 @@ import type {
   PixelData,
   LayerRawData,
 } from "ag-psd";
-import { readPsd, writeNative16BitRgbPsd, writePsd } from "./ag-psd-io";
+import { decodeLayerPixels, readPsd, writeNative16BitRgbPsd, writePsd } from "./ag-psd-io";
+import { exportHighDepthRgb, highDepthEligibility } from "./high-depth-psd";
 import {
   BlendMode,
   BLEND_LABELS,
@@ -37,6 +45,8 @@ import {
   createProAdjustmentLayer,
   createTextLayer,
   drawLayerContent,
+  paragraphCapHeight,
+  affineForLayerTransform,
   newCanvas,
   resolvedBlendIf,
   resolvedFillOpacity,
@@ -63,11 +73,17 @@ import {
   layerMaskSurface,
   setLayerMaskFromCanvas,
 } from "./layer-mask";
-import type { SparseAlphaSurface } from "./alpha-surface";
+import { SparseAlphaSurface } from "./alpha-surface";
 import type { PixelRect } from "./tile-store";
 import { PrecisionTileSurface } from "./tile-store";
 import { displaySrgbToWorking, workingToDisplaySrgb } from "./color";
 import { exceedsBrowserCanvas } from "./large-documents";
+import {
+  canvasFontForRun,
+  normalizeTextRuns,
+  resolvedDefaultTextStyle,
+  resolvedTextStyleAt,
+} from "./text-model";
 import {
   assertSafePhotoshopDecodeBudget,
   estimatePhotoshopFlattenedDecodeBytes,
@@ -227,7 +243,7 @@ function chokeToSpread(choke: { value: number } | undefined, size: { value: numb
 
 function contourFromPsd(contour: { curve: Array<{ x: number; y: number }> } | undefined) {
   if (!contour?.curve?.length) return undefined;
-  return contour.curve.map((point) => ({ x: point.x, y: point.y }));
+  return contour.curve.map((point) => ({ x: point.x / 255, y: point.y / 255 }));
 }
 
 /**
@@ -236,7 +252,7 @@ function contourFromPsd(contour: { curve: Array<{ x: number; y: number }> } | un
  */
 function contourToPsd(contour: CurvePoints | undefined) {
   if (!contour?.length) return {};
-  return { contour: { name: "Luma contour", curve: contour.map((point) => ({ x: point.x, y: point.y })) } };
+  return { contour: { name: "Luma contour", curve: contour.map((point) => ({ x: point.x * 255, y: point.y * 255 })) } };
 }
 
 const PSD_BEVEL_STYLE = {
@@ -349,7 +365,7 @@ function effectsFromPsd(layerId: string, source: PsdLayer["effects"]): LayerEffe
     const gradient = effect.gradient;
     const stops = gradient && gradient.type === "solid"
       ? gradient.colorStops.map((stop) => ({
-        offset: Math.max(0, Math.min(1, stop.location / 4096)),
+        offset: Math.max(0, Math.min(1, stop.location)),
         color: psdColorToCss(stop.color),
       }))
       : undefined;
@@ -451,12 +467,12 @@ function effectsToPsd(layer: Layer): Partial<LayerEffectsInfo> {
         type: "solid" as const,
         colorStops: resolvedGradientStops(effect).map((stop) => ({
           color: cssColorToPsd(stop.color),
-          location: Math.round(stop.offset * 4096),
-          midpoint: 50,
+          location: stop.offset,
+          midpoint: .5,
         })),
         opacityStops: [
-          { opacity: 1, location: 0, midpoint: 50 },
-          { opacity: 1, location: 4096, midpoint: 50 },
+          { opacity: 1, location: 0, midpoint: .5 },
+          { opacity: 1, location: 1, midpoint: .5 },
         ],
       },
     }))),
@@ -595,7 +611,12 @@ function precisionSurfaceFingerprint(surface: PrecisionTileSurface | undefined) 
     0x811c9dc5,
     `${surface.grid.width}x${surface.grid.height}:${surface.format}:${surface.colorSpace}:${surface.grid.tileSize}`,
   );
-  for (const { key, data } of surface.store.entries()) {
+  const source = surface.store.sourceState();
+  if (source) {
+    hash = hashText(hash, source.base.fingerprint);
+    for (const key of source.deleted.sort()) hash = hashText(hash, `deleted:${key}`);
+  }
+  for (const { key, data } of [...surface.store.editEntries()].sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true }))) {
     hash = hashText(hash, key);
     hash = hashBytes(hash, data);
   }
@@ -655,6 +676,7 @@ function documentStateFingerprint(doc: Document) {
     resolution: doc.resolution,
     guides: doc.guides.map(({ orientation, position }) => ({ orientation, position })),
     proofing: doc.proofing,
+    alphaChannels: doc.alphaChannels?.map(channel => ({ id: channel.id, name: channel.name, pixels: alphaSurfaceFingerprint(channel.surface) })),
   });
 }
 
@@ -704,29 +726,27 @@ function editablePathFromPsd(layer: PsdLayer) {
 }
 
 function canvasPoint(layer: Layer, x: number, y: number): [number, number] {
-  const t = layer.transform;
-  const cos = Math.cos(t.rotation);
-  const sin = Math.sin(t.rotation);
+  const t = affineForLayerTransform(layer.transform);
   return [
-    cos * t.sx * x - sin * t.sy * y + t.tx,
-    sin * t.sx * x + cos * t.sy * y + t.ty,
+    t.a * x + t.c * y + t.e,
+    t.b * x + t.d * y + t.f,
   ];
 }
 
 function pathToPsdMask(layer: Layer): LayerVectorMask | undefined {
   if (!layer.path || layer.path.anchors.length < 2) return undefined;
   return {
-    paths: [{
-      open: !layer.path.closed,
-      fillRule: "non-zero",
+    paths: pathContours(layer.path).filter(contour => contour.anchors.length >= 2).map(contour => ({
+      open: !contour.closed,
+      fillRule: layer.path!.fillRule === "evenodd" ? "even-odd" as const : "non-zero" as const,
       operation: "combine",
-      knots: layer.path.anchors.map((anchor) => {
+      knots: contour.anchors.map((anchor) => {
         const incoming = canvasPoint(layer, anchor.x + anchor.hIn.dx, anchor.y + anchor.hIn.dy);
         const point = canvasPoint(layer, anchor.x, anchor.y);
         const outgoing = canvasPoint(layer, anchor.x + anchor.hOut.dx, anchor.y + anchor.hOut.dy);
         return { linked: false, points: [...incoming, ...point, ...outgoing] };
       }),
-    }],
+    })),
   };
 }
 
@@ -829,15 +849,20 @@ function applyImportedMask(target: Layer, source: PsdLayer, doc: Pick<Document, 
     setLayerMaskFromCanvas(target, source.mask.canvas, doc.width, doc.height, left, top, defaultAlpha);
   } else if (source.mask.imageData) {
     const sourceData = source.mask.imageData;
-    const mask = newCanvas(sourceData.width, sourceData.height);
-    const context = mask.getContext("2d")!;
-    const image = context.createImageData(sourceData.width, sourceData.height);
-    for (let pixel = 0; pixel < sourceData.width * sourceData.height; pixel += 1) {
-      const alpha = Math.round(Math.max(0, Math.min(1, normalizedPixelValue(sourceData.data[pixel * 4], doc.bitDepth))) * 255);
-      image.data.set([255, 255, 255, alpha], pixel * 4);
+    const surface = new SparseAlphaSurface(doc.width, doc.height, { defaultAlpha });
+    for (const address of surface.grid.tilesIntersecting({ x: left, y: top, width: sourceData.width, height: sourceData.height })) {
+      const alpha = surface.readTile(address.key);
+      const x0 = Math.max(left, address.x), y0 = Math.max(top, address.y);
+      const x1 = Math.min(left + sourceData.width, address.x + address.width);
+      const y1 = Math.min(top + sourceData.height, address.y + address.height);
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const sample = sourceData.data[((y - top) * sourceData.width + x - left) * 4];
+        alpha[(y - address.y) * address.width + x - address.x] = Math.round(Math.max(0, Math.min(1, normalizedPixelValue(sample, doc.bitDepth))) * 255);
+      }
+      surface.writeTile(address.key, alpha);
     }
-    context.putImageData(image, 0, 0);
-    setLayerMaskFromCanvas(target, mask, doc.width, doc.height, left, top, defaultAlpha);
+    target.mask = undefined;
+    target.maskSurface = surface;
   }
 }
 
@@ -882,7 +907,7 @@ function precisionSurfaceFromPsdPixelsInBounds(
 
 function drawPrecisionPreview(target: HTMLCanvasElement, surface: PrecisionTileSurface) {
   const context = target.getContext("2d")!;
-  for (const { key } of surface.store.entries()) {
+  for (const key of surface.store.keys()) {
     const tile = surface.grid.parseKey(key);
     const preview = surface.tileToRgba8(key);
     const image = context.createImageData(preview.width, preview.height);
@@ -910,19 +935,88 @@ function importedTextStyle(layer: PsdLayer): TextStyle {
   // apart is what lets both survive the trip in.
   const align = firstParagraph.justification ?? "left";
   const lastLine = align.startsWith("justify-") ? align.slice("justify-".length) : align;
+  const box = text.shapeType === "box" ? text.boxBounds : undefined;
+  if (text.shapeType === "box" && (!box || box.length !== 4 || !box.every(Number.isFinite) ||
+    box[2] <= box[0] || box[3] <= box[1] || box[2] - box[0] > 100_000 || box[3] - box[1] > 100_000)) {
+    throw new Error(`${layer.name || "Text"}: the Photoshop paragraph frame is invalid or exceeds 100,000 pixels`);
+  }
+  let paragraphOffset = 0;
+  const paragraphRuns = text.paragraphStyleRuns?.length ? text.paragraphStyleRuns : [{ length: text.text.length, style: firstParagraph }];
+  const paragraphs = paragraphRuns.map(source => {
+    const paragraph = { ...(text.paragraphStyle ?? {}), ...source.style };
+    const start = paragraphOffset; paragraphOffset += source.length;
+    const justification = paragraph.justification ?? "left";
+    return { start, end: Math.min(text.text.length, paragraphOffset), style: {
+      align: (justification.startsWith("justify") ? "justify" : justification === "center" ? "center" : justification === "right" ? "right" : "left") as "left" | "center" | "right" | "justify",
+      firstLineIndent: paragraph.firstLineIndent ?? 0, startIndent: paragraph.startIndent ?? 0,
+      endIndent: paragraph.endIndent ?? 0, spaceBefore: paragraph.spaceBefore ?? 0,
+      spaceAfter: paragraph.spaceAfter ?? 0,
+    } };
+  }).filter(run => run.end > run.start);
+  let runOffset = 0;
+  const runs = (text.styleRuns ?? []).map((source) => {
+    const sourceStyle = { ...(text.style ?? {}), ...source.style };
+    const start = runOffset;
+    runOffset += source.length;
+    return {
+      start,
+      end: Math.min(text.text.length, runOffset),
+      style: {
+        fontFamily: sourceStyle.font?.name ?? family,
+        fontSize: sourceStyle.fontSize ?? size,
+        fontWeight: sourceStyle.fauxBold ? 700 : 400,
+        fontStyle: sourceStyle.fauxItalic ? "italic" as const : "normal" as const,
+        fontStretch: (sourceStyle.horizontalScale ?? 1) * 100,
+        color: psdColorToCss(sourceStyle.fillColor),
+        tracking: sourceStyle.tracking ?? 0,
+        baselineShift: sourceStyle.baselineShift ?? 0,
+        decoration: sourceStyle.underline ? "underline" as const : sourceStyle.strikethrough ? "line-through" as const : "none" as const,
+        features: { liga: sourceStyle.ligatures !== false, kern: sourceStyle.autoKerning !== false },
+        axes: {
+          wght: sourceStyle.fauxBold ? 700 : 400,
+          opsz: sourceStyle.fontSize ?? size,
+        },
+      },
+    };
+  }).filter((run) => run.end > run.start);
   return {
+    schemaVersion: 2,
     text: text.text,
     font: `${italic}${weight} ${size}px ${family}, sans-serif`,
     color: psdColorToCss(firstStyle.fillColor),
     align: lastLine === "right" ? "right" : lastLine === "center" ? "center" : "left",
-    lineHeight: firstStyle.leading ? firstStyle.leading / size : 1.2,
+    // Photoshop retains a manual placeholder (sometimes 0.01) even while
+    // automatic leading is enabled. Only the selected mode is authoritative.
+    lineHeight: firstStyle.autoLeading ? firstParagraph.autoLeading ?? 1.2
+      : firstStyle.leading ? firstStyle.leading / size : 1.2,
     // Photoshop measures tracking in thousandths of an em, which is the unit
     // TextStyle.tracking already uses, so it carries across unconverted.
     tracking: firstStyle.tracking,
     paragraphSpacing: firstParagraph.spaceAfter ? firstParagraph.spaceAfter / size : undefined,
     justify: align.startsWith("justify") || undefined,
-    x: 0,
-    y: 0,
+    x: box ? box[0] + (lastLine === "center" ? (box[2] - box[0]) / 2 : lastLine === "right" ? box[2] - box[0] : 0) : 0,
+    y: box?.[1] ?? 0,
+    ...(box ? { layout: "paragraph" as const, frameOrigin: "top" as const, boxWidth: box[2] - box[0], boxHeight: box[3] - box[1] } : {}),
+    ...(box || text.paragraphStyleRuns?.length || paragraphs.some(run => run.style.firstLineIndent || run.style.startIndent || run.style.endIndent || run.style.spaceBefore)
+      ? { paragraphs } : {}),
+    direction: "auto",
+    writingMode: text.orientation === "vertical" ? "vertical-rl" : "horizontal-tb",
+    defaultStyle: {
+      fontFamily: family,
+      fontSize: size,
+      fontWeight: firstStyle.fauxBold ? 700 : 400,
+      fontStyle: firstStyle.fauxItalic ? "italic" : "normal",
+      fontStretch: (firstStyle.horizontalScale ?? 1) * 100,
+      color: psdColorToCss(firstStyle.fillColor),
+      tracking: firstStyle.tracking ?? 0,
+      baselineShift: firstStyle.baselineShift ?? 0,
+      decoration: firstStyle.underline ? "underline" : firstStyle.strikethrough ? "line-through" : "none",
+      features: { liga: firstStyle.ligatures !== false, kern: firstStyle.autoKerning !== false },
+      // Photoshop horizontalScale stretches geometry; mapping it to a font
+      // variation axis as well would apply width twice during outlining.
+      axes: { wght: firstStyle.fauxBold ? 700 : 400, opsz: size },
+    },
+    runs: runs.length > 1 ? runs : undefined,
   };
 }
 
@@ -972,6 +1066,8 @@ function importedAdjustment(layer: PsdLayer) {
       amount: 1,
       tint: psdColorToCss(adjustment.tintColor),
       tintAmount: adjustment.useTint ? 1 : 0,
+      colorMix: [adjustment.reds ?? 40, adjustment.yellows ?? 60, adjustment.greens ?? 40,
+        adjustment.cyans ?? 60, adjustment.blues ?? 20, adjustment.magentas ?? 80].map((v) => Math.max(-200, Math.min(300, v))) as [number, number, number, number, number, number],
     });
   }
   if (adjustment.type === "color balance") {
@@ -1020,6 +1116,7 @@ function importedAdjustment(layer: PsdLayer) {
       highlight: psdColorToCss(stops.at(-1)?.color),
       reverse: adjustment.reverse ?? false,
       smoothness: Math.max(0, Math.min(1, (adjustment.smoothness ?? 4096) / 4096)),
+      ...(stops.length >= 2 && stops.length <= 16 ? { stops: stops.map((s) => ({ position: Math.max(0, Math.min(1, s.location / 4096)), color: psdColorToCss(s.color) })) } : {}),
     });
   }
   if (adjustment.type === "threshold") {
@@ -1037,17 +1134,40 @@ function importedAdjustment(layer: PsdLayer) {
 export type PhotoshopImportOptions = {
   /** Auto preserves layers when bounded and otherwise opens the composite safely. */
   mode?: "auto" | "layered" | "flattened";
+  /** Override automatic source-backed selection for qualification. */
+  sourceBacked?: boolean;
 };
+
+function displayImageData(context: CanvasRenderingContext2D, pixels: PixelData): ImageData {
+  if (typeof ImageData !== "undefined") {
+    const data = pixels.data;
+    return new ImageData(new Uint8ClampedArray(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength), pixels.width, pixels.height);
+  }
+  // DOM-optional canvas adapters may expose createImageData but no constructor.
+  const image = context.createImageData(pixels.width, pixels.height);
+  image.data.set(pixels.data as Uint8ClampedArray);
+  return image;
+}
 
 export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOptions = {}): Promise<Document> {
   const inputHeader = inspectPhotoshopInputHeader(buffer);
   const requestedMode = options.mode ?? "auto";
-  const importMode = requestedMode === "auto"
+  const sourceBacked = options.sourceBacked === true;
+  const sourceEligible = inputHeader.depth === 8 && inputHeader.colorMode === 3 && inputHeader.layers > 0 && inputHeader.layers <= 4096 && inputHeader.largestLayerPixels !== undefined && buffer.byteLength + 192 * 1024 * 1024 <= 512 * 1024 * 1024;
+  if (sourceBacked && !sourceEligible) throw new Error("Photoshop source-backed import exceeds its format or memory boundary");
+  const importMode = sourceBacked ? "layered" : requestedMode === "auto"
     ? planPhotoshopImport(inputHeader, buffer.byteLength).mode
     : requestedMode;
-  if (importMode === "layered") {
+  if (options.sourceBacked === undefined && requestedMode === "auto" && importMode === "flattened" && sourceEligible) {
+    try { return await importPsd(buffer, { mode: "layered", sourceBacked: true }); }
+    catch (error) {
+      if (!(error instanceof UnsupportedPhotoshopTileSource)) throw error;
+      return importPsd(buffer, { mode: "flattened" });
+    }
+  }
+  if (importMode === "layered" && !sourceBacked) {
     assertSafePhotoshopDecodeBudget(inputHeader, buffer.byteLength);
-  } else {
+  } else if (importMode !== "layered") {
     const estimated = estimatePhotoshopFlattenedDecodeBytes(inputHeader, buffer.byteLength);
     if (!Number.isSafeInteger(estimated) || estimated > PHOTOSHOP_DECODE_MEMORY_CEILING) {
       throw new Error(
@@ -1057,6 +1177,7 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     }
   }
   const flattenedFallback = importMode === "flattened" && inputHeader.layers > 0;
+  const serialPixels = inputHeader.depth === 8 && inputHeader.colorMode === 3 && inputHeader.largestLayerPixels !== undefined && !flattenedFallback;
   const header = inspectPhotoshopHeader(buffer);
   if (header.channels < 1 || header.channels > 56 || header.width < 1 || header.height < 1 ||
       header.width > 300_000 || header.height > 300_000 || ![1, 8, 16, 32].includes(header.bitsPerChannel) ||
@@ -1068,28 +1189,35 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
   const originalSource = new Uint8Array(buffer.slice(0));
   let psd: Psd;
   try {
-    const decode = (skipCompositeImageData: boolean, skipLayerImageData = false) => readPsd(buffer.slice(0), {
+    const decode = (skipCompositeImageData: boolean, skipLayerImageData = false) => readPsd(header.bitsPerChannel <= 8 ? originalSource.buffer : buffer.slice(0), {
       skipLayerImageData,
       skipCompositeImageData,
+      skipThumbnail: sourceBacked,
       // Preserve embedded smart-object bytes for editable imports. A bounded
       // composite fallback keeps the complete original container instead, so
       // decoding duplicate linked payloads would only spend memory on content
       // that is not exposed as an editable layer.
       skipLinkedFilesData: flattenedFallback,
-      totalMemoryLimit: PHOTOSHOP_DECODE_MEMORY_CEILING,
+      totalMemoryLimit: sourceBacked ? 64 * 1024 * 1024 : PHOTOSHOP_DECODE_MEMORY_CEILING,
       throwForMissingFeatures: false,
       logMissingFeatures: false,
       useImageData: true,
+      useRawData: serialPixels && !skipLayerImageData,
     });
-    psd = flattenedFallback ? decode(false, true) : decode(true);
+    const compositeOnly = inputHeader.layers === 0;
+    psd = flattenedFallback || compositeOnly ? decode(false, true) : decode(true);
     // A flattened PSD has no layer records; its only artwork is the composite.
     // Decode that payload only for this case so layered documents keep the
     // lower-memory path and do not hold a redundant full-document image.
-    if (!flattenedFallback && !(psd.children?.length)) psd = decode(false);
+    if (!flattenedFallback && !compositeOnly && !(psd.children?.length) && !psd.imageData && !psd.canvas) psd = decode(false, true);
   } catch (error) {
     throw new PhotoshopDecodeError(header, error);
   }
   const importedIssues: PhotoshopCompatibilityIssue[] = [];
+  if (sourceBacked) importedIssues.push({
+    code: "RGB8_SOURCE_BACKED_MASTER", severity: "info",
+    message: "Raster layers decode tiles on demand from the shared compressed source. Local edits use bounded tile history; source bytes remain in memory. Unsupported dense operations fail safely.",
+  });
   if (header.container === "psb") {
     importedIssues.push({
       code: "PSB_IMPORTED",
@@ -1101,7 +1229,7 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     importedIssues.push({
       code: "LAYERED_COMPOSITE_FALLBACK",
       severity: "warning",
-      message: `The editable ${inputHeader.layers}-layer stack would exceed Luma's safe memory ceiling, so this document opened from its flattened composite. The original source remains preserved until the preview is edited.`,
+      message: `The editable ${inputHeader.layers}-record stack would exceed Luma's import or native-project restore memory ceiling, so this document opened from its flattened composite. The original source remains preserved until the preview is edited.`,
     });
   }
   if (![8, 16, 32].includes(header.bitsPerChannel)) {
@@ -1144,19 +1272,33 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     selection: null,
   };
 
+  const resources = extractPhotoshopImageResources(buffer);
+  if (psd.imageResources?.alphaChannelNames?.length) {
+    try {
+      doc.alphaChannels = readPhotoshopAlphaChannels(originalSource.buffer as ArrayBuffer, psd.imageResources.alphaChannelNames);
+      if (header.bitsPerChannel !== 8) importedIssues.push({ code: "ALPHA_CHANNEL_PRECISION_8", severity: "warning", message: "Saved alpha channels are editable at 8-bit mask precision; native image layer samples retain their original depth." });
+      if (resources.some(resource => resource.id === 1007 || resource.id === 1077)) importedIssues.push({ code: "ALPHA_DISPLAY_DESCRIPTORS_PRESERVED", severity: "warning", message: "Channel pixels are editable, but spot-ink/display descriptors remain original-source metadata only. Newly written PSD/PSB channels are ordinary alpha, not spot separations." });
+    } catch (error) {
+      importedIssues.push({ code: "ALPHA_CHANNELS_SOURCE_ONLY", severity: "warning", message: `Named alpha channels remain in the preserved original source only: ${error instanceof Error ? error.message : "unsupported data"}. New PSD/PSB output cannot retain those channels; save the .luma master.` });
+    }
+  }
   setPhotoshopDocumentMetadata(doc, {
     header,
     importMode: flattenedFallback ? "flattened" : "layered",
     originalSource,
     originalDocumentFingerprint: documentStateFingerprint(doc),
     imageResources: psd.imageResources,
+    engineData: psd.engineData,
     linkedFiles: psd.linkedFiles,
-    rawImageResources: extractPhotoshopImageResources(buffer),
+    rawImageResources: resources,
     importedIssues,
   });
 
   let sourceIndex = 0;
+  if (sourceBacked) registerPhotoshopTileSource(originalSource, psd.children ?? []);
   const sourceIndexByLayerId = new Map<string, number>();
+  // Views into the retained immutable source; no decoded RGBA or duplicate bytes.
+  const originalTextPixels = new WeakMap<PsdLayer, PsdLayer["rawData"]>();
   const capture = (
     target: Layer,
     source: PsdLayer,
@@ -1165,8 +1307,18 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     const currentSourceIndex = sourceIndex++;
     target.photoshop = { sourceIndex: currentSourceIndex };
     sourceIndexByLayerId.set(target.id, currentSourceIndex);
+    // Pixels are owned by Luma's bitmap/precision surfaces and the immutable
+    // original container. Retaining decoder pixels here doubles the live image
+    // working set, and group children would retain the entire decoder tree.
+    const descriptor = { ...source };
+    delete descriptor.canvas; delete descriptor.imageData; delete descriptor.rawData; delete descriptor.children;
+    if (originalTextPixels.has(source)) descriptor.rawData = originalTextPixels.get(source);
+    if (descriptor.mask && !descriptor.mask.disabled && hasLayerMask(target)) {
+      descriptor.mask = { ...descriptor.mask };
+      delete descriptor.mask.canvas; delete descriptor.mask.imageData;
+    }
     setPhotoshopLayerMetadata(target, {
-      source,
+      source: descriptor,
       originalText: source.text?.text,
       originalTextFingerprint: target.text ? textFingerprint(target) : undefined,
       originalPathFingerprint: pathFingerprint(target),
@@ -1177,9 +1329,46 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
       originalParentSourceIndex: target.parentId ? sourceIndexByLayerId.get(target.parentId) : undefined,
       preservation,
     });
+    // Release this decoder plane before moving to the next source layer.
+    delete source.imageData; delete source.canvas;
+    if (source.mask && !source.mask.disabled && hasLayerMask(target)) {
+      delete source.mask.imageData; delete source.mask.canvas;
+    }
   };
 
+  let decodedLayerPixels = 0;
   const visit = (layer: PsdLayer, parentId?: string) => {
+    if (serialPixels && layer.text && !layer.mask && !layer.realMask && layer.rawData) originalTextPixels.set(layer, layer.rawData);
+    const adjustment = importedAdjustment(layer);
+    const editablePath = editablePathFromPsd(layer);
+    let lazySurface: PrecisionTileSurface | undefined;
+    if (sourceBacked) {
+      // Masks retain their separate bounded decoder until sparse source masks
+      // can be qualified. Never silently allocate them under the source budget.
+      if (layer.mask || layer.realMask) throw new UnsupportedPhotoshopTileSource("Source-backed Photoshop masks are not yet qualified");
+      if (!(layer.children || adjustment || layer.text || editablePath) && (layer.right ?? 0) > (layer.left ?? 0) && (layer.bottom ?? 0) > (layer.top ?? 0)) {
+        const base = getPhotoshopTileSource(originalSource, sourceIndex);
+        lazySurface = new PrecisionTileSurface(base.grid.width, base.grid.height, "rgba32f", "srgb");
+        lazySurface.store.attachSource(base);
+      }
+    }
+    if (serialPixels && layer.rawData) {
+      if (layer.rawData.bitsPerChannel !== 8 || layer.rawData.colorMode !== 3) throw new Error("Photoshop channel format changed after admission");
+      const area = (bounds: PsdLayer | NonNullable<PsdLayer["mask"]>) => {
+        const width = (bounds.right ?? 0) - (bounds.left ?? 0);
+        const height = (bounds.bottom ?? 0) - (bounds.top ?? 0);
+        if (width < 0 || height < 0 || exceedsBrowserCanvas(Math.max(1, width), Math.max(1, height))) throw new Error("Unsafe Photoshop layer bounds");
+        return width * height;
+      };
+      const pixels = area(layer) + (layer.mask ? area(layer.mask) : 0) + (layer.realMask ? area(layer.realMask) : 0);
+      decodedLayerPixels += pixels;
+      if (!Number.isSafeInteger(decodedLayerPixels) || pixels > inputHeader.largestLayerPixels! || decodedLayerPixels > inputHeader.layerPixels!) throw new Error("Photoshop layer exceeds admitted decode bounds");
+      const semantic = Boolean(layer.children || adjustment || layer.text || editablePath);
+      const streamed = semantic || lazySurface ? null : decodePhotoshopRasterRows(layer);
+      try { decodeLayerPixels(layer, semantic || Boolean(streamed) || Boolean(lazySurface)); }
+      catch (error) { if (streamed) { streamed.width = 1; streamed.height = 1; } throw error; }
+      if (streamed) layer.canvas = streamed;
+    }
     if (Array.isArray(layer.children)) {
       const group = createGroupLayer(layer.name || "Group");
       applyImportedLayerMetadata(group, layer, parentId);
@@ -1189,7 +1378,6 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
       doc.layers.unshift(group);
       return;
     }
-    const adjustment = importedAdjustment(layer);
     if (adjustment) {
       applyImportedLayerMetadata(adjustment, layer, parentId);
       applyImportedMask(adjustment, layer, doc);
@@ -1201,11 +1389,15 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
       const textLayer = createTextLayer(layer.name || "Text", importedTextStyle(layer));
       applyImportedLayerMetadata(textLayer, layer, parentId);
       const matrix = layer.text.transform ?? [1, 0, 0, 1, 0, 0];
+      const [a, b, c, d] = matrix;
+      const scaleX = Math.hypot(a, b);
+      const determinant = a * d - b * c;
       textLayer.transform = {
         tx: matrix[4] ?? 0,
         ty: matrix[5] ?? 0,
-        sx: Math.hypot(matrix[0] ?? 1, matrix[1] ?? 0),
-        sy: Math.hypot(matrix[2] ?? 0, matrix[3] ?? 1),
+        sx: scaleX,
+        sy: scaleX > 1e-12 ? determinant / scaleX : Math.hypot(c, d),
+        skewX: Math.abs(determinant) > 1e-12 ? (a * c + b * d) / determinant : 0,
         rotation: Math.atan2(matrix[1] ?? 0, matrix[0] ?? 1),
       };
       applyImportedMask(textLayer, layer, doc);
@@ -1213,7 +1405,6 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
       doc.layers.unshift(textLayer);
       return;
     }
-    const editablePath = editablePathFromPsd(layer);
     if (editablePath) {
       const pathLayer = createPathLayer(layer.name || "Vector path", editablePath);
       applyImportedLayerMetadata(pathLayer, layer, parentId);
@@ -1228,18 +1419,19 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     const pixelData = layer.imageData;
     const localWidth = Math.max(1, pixelData?.width ?? src?.width ?? (layer.right ?? left) - left);
     const localHeight = Math.max(1, pixelData?.height ?? src?.height ?? (layer.bottom ?? top) - top);
-    const canvas = newCanvas(localWidth, localHeight);
-    const ctx = canvas.getContext("2d")!;
-    let precisionSurface: PrecisionTileSurface | undefined;
+    // A row-decoded canvas is already the owned display master. Transfer it,
+    // rather than draw into a second equally sized native backing store.
+    const canvas = lazySurface ? undefined : !pixelData && src && doc.bitDepth === 8 ? src : newCanvas(localWidth, localHeight);
+    const ctx = canvas?.getContext("2d");
+    let precisionSurface: PrecisionTileSurface | undefined = lazySurface;
     if (pixelData && doc.bitDepth > 8) {
       precisionSurface = precisionSurfaceFromPsdPixelsInBounds(pixelData, doc, localWidth, localHeight, 0, 0);
-      drawPrecisionPreview(canvas, precisionSurface);
+      drawPrecisionPreview(canvas!, precisionSurface);
     } else if (pixelData) {
-      const image = ctx.createImageData(pixelData.width, pixelData.height);
-      image.data.set(pixelData.data as Uint8ClampedArray);
-      ctx.putImageData(image, 0, 0);
-    } else if (src) {
-      ctx.drawImage(src, 0, 0);
+      const image = displayImageData(ctx!, pixelData);
+      ctx!.putImageData(image, 0, 0);
+    } else if (src && src !== canvas) {
+      ctx!.drawImage(src, 0, 0);
     }
     const l: Layer = createRasterLayer(layer.name || "Layer", canvas);
     if (precisionSurface) l.surface = precisionSurface;
@@ -1282,8 +1474,7 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
       precisionSurface = precisionSurfaceFromPsdPixels(pixelData, doc, 0, 0);
       drawPrecisionPreview(canvas, precisionSurface);
     } else if (pixelData) {
-      const image = context.createImageData(pixelData.width, pixelData.height);
-      image.data.set(pixelData.data as Uint8ClampedArray);
+      const image = displayImageData(context, pixelData);
       context.putImageData(image, 0, 0);
     } else if (psd.canvas) {
       context.drawImage(psd.canvas, 0, 0);
@@ -1307,6 +1498,8 @@ export async function importPsd(buffer: ArrayBuffer, options: PhotoshopImportOpt
     const metadata = getPhotoshopLayerMetadata(layer);
     if (metadata) setPhotoshopLayerMetadata(layer, { ...metadata, originalStackPosition: index });
   }
+  const importedMetadata = getPhotoshopDocumentMetadata(doc);
+  if (importedMetadata) importedMetadata.originalLayerCount = doc.layers.length;
   return doc;
 }
 
@@ -1521,7 +1714,9 @@ function adjustmentLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
         opacity: Math.max(0, Math.min(1, layer.opacity * adjustment.amount)),
         adjustment: {
           type: "black & white",
-          reds: 40, yellows: 60, greens: 40, cyans: 60, blues: 20, magentas: 80,
+          reds: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[0], yellows: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[1],
+          greens: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[2], cyans: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[3],
+          blues: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[4], magentas: (adjustment.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[5],
           useTint: adjustment.tintAmount > 0,
           tintColor: cssColorToPsd(adjustment.tint),
         },
@@ -1566,10 +1761,7 @@ function adjustmentLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
         gradientType: "solid",
         reverse: adjustment.reverse,
         smoothness: Math.round(adjustment.smoothness * 4096),
-        colorStops: [
-          { color: cssColorToPsd(adjustment.shadow), location: 0, midpoint: 50 },
-          { color: cssColorToPsd(adjustment.highlight), location: 4096, midpoint: 50 },
-        ],
+        colorStops: gradientMapStops(adjustment).map((stop) => ({ color: cssColorToPsd(stop.color), location: Math.round(stop.position * 4096), midpoint: 50 })),
         opacityStops: [
           { opacity: 1, location: 0, midpoint: 50 },
           { opacity: 1, location: 4096, midpoint: 50 },
@@ -1593,43 +1785,85 @@ function adjustmentLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
   return [];
 }
 
-function textLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
+function preservedTextPixels(doc: Document, layer: Layer, container: PhotoshopContainer) {
+  const metadata = getPhotoshopLayerMetadata(layer), source = metadata?.source, raw = source?.rawData;
+  if (!source || !raw || raw.bitsPerChannel !== 8 || raw.colorMode !== 3 || raw.large !== (container === "psb") ||
+      (source.right ?? 0) <= (source.left ?? 0) || (source.bottom ?? 0) <= (source.top ?? 0) ||
+      doc.bitDepth !== 8 || doc.colorSpace !== "srgb" || metadata.originalTextFingerprint !== textFingerprint(layer) ||
+      source.mask || source.realMask || hasLayerMask(layer) || layer.vectorMask || layer.spatial?.enabled ||
+      layer.filters?.length || layer.tone || layer.curves || layer.levels || layer.hsl ||
+      metadata.originalEffectsFingerprint !== effectsFingerprint(layer) ||
+      !raw.channels.length || raw.channels.some(channel => ![-1, 0, 1, 2].includes(channel.id))) return undefined;
+  return { rawData: raw, left: source.left, top: source.top, right: source.right, bottom: source.bottom };
+}
+
+function textLayersToPsd(doc: Document, layer: Layer, container: PhotoshopContainer): PsdLayer[] {
   if (!layer.text) return [];
   const style = layer.text;
-  const font = parseCanvasFont(style.font);
+  const baseRun = resolvedDefaultTextStyle(style);
+  const font = parseCanvasFont(canvasFontForRun(baseRun));
   const t = layer.transform;
-  const cos = Math.cos(t.rotation);
-  const sin = Math.sin(t.rotation);
-  const a = cos * t.sx;
-  const b = sin * t.sx;
-  const c = -sin * t.sy;
-  const d = cos * t.sy;
+  const { a, b, c, d } = affineForLayerTransform(t);
   const tx = t.tx + a * style.x + c * style.y;
   const ty = t.ty + b * style.x + d * style.y;
-  const rasterized = flattenLayerBitmap(doc, layer);
+  const pixels = preservedTextPixels(doc, layer, container);
+  const rasterized = pixels ? null : flattenLayerBitmap(doc, layer);
   const metadata = getPhotoshopLayerMetadata(layer);
   const originalText = metadata?.source.text;
   const textUnchanged = metadata?.originalTextFingerprint === textFingerprint(layer);
+  const psdRunStyle = (offset: number) => {
+    const run = resolvedTextStyleAt(style, offset);
+    const runFont = parseCanvasFont(canvasFontForRun(run));
+    return {
+      font: { name: runFont.name },
+      fontSize: run.fontSize,
+      fauxBold: run.fontWeight >= 700,
+      fauxItalic: run.fontStyle !== "normal",
+      horizontalScale: run.fontStretch / 100,
+      autoLeading: false,
+      leading: run.fontSize * style.lineHeight,
+      fillColor: cssColorToPsd(run.color),
+      ...(run.tracking ? { tracking: run.tracking } : {}),
+      ...(run.baselineShift ? { baselineShift: run.baselineShift } : {}),
+      ...(run.decoration === "underline" ? { underline: true } : {}),
+      ...(run.decoration === "line-through" ? { strikethrough: true } : {}),
+      ligatures: run.features.liga !== false,
+      autoKerning: run.features.kern !== false,
+    };
+  };
+  const normalizedRuns = normalizeTextRuns(style.runs, style.text.length);
+  const runBoundaries = [...new Set([0, style.text.length, ...normalizedRuns.flatMap((run) => [run.start, run.end])])].sort((a, b) => a - b);
+  const generatedStyleRuns = runBoundaries.slice(0, -1).map((start, index) => ({
+    length: runBoundaries[index + 1] - start,
+    style: psdRunStyle(start),
+  })).filter((run) => run.length > 0);
+  let paragraphStart = 0;
+  const generatedParagraphRuns = style.text.split("\n").map((paragraph, index, all) => {
+    const start = paragraphStart, end = start + paragraph.length;
+    const override = style.paragraphs?.find(run => run.start <= start && run.end >= end)?.style;
+    const length = paragraph.length + (index < all.length - 1 ? 1 : 0);
+    paragraphStart += length;
+    return { length, style: {
+      justification: override?.align === "justify" ? psdJustification({ ...style, justify: true }) : override?.align ?? psdJustification(style),
+      firstLineIndent: override?.firstLineIndent ?? 0, startIndent: override?.startIndent ?? 0,
+      endIndent: override?.endIndent ?? 0, spaceBefore: override?.spaceBefore ?? 0,
+      spaceAfter: override?.spaceAfter ?? (style.paragraphSpacing ?? 0) * font.size,
+    } };
+  }).filter(run => run.length > 0);
+  const frameLeft = style.align === "center" ? -(style.boxWidth ?? 0) / 2 : style.align === "right" ? -(style.boxWidth ?? 0) : 0;
+  const frameTop = style.layout === "paragraph" && style.frameOrigin !== "top" ? -paragraphCapHeight(newCanvas(1, 1).getContext("2d")!, style) : 0;
   const simpleText: LayerTextData = textUnchanged && originalText ? { ...originalText } : {
     text: style.text,
     transform: [a, b, c, d, tx, ty],
-    style: {
-      font: { name: font.name },
-      fontSize: font.size,
-      fauxBold: font.bold,
-      fauxItalic: font.italic,
-      leading: font.size * style.lineHeight,
-      fillColor: cssColorToPsd(style.color),
-      ...(style.tracking ? { tracking: style.tracking } : {}),
-    },
+    style: psdRunStyle(0),
+    ...(generatedStyleRuns.length > 1 ? { styleRuns: generatedStyleRuns } : {}),
     paragraphStyle: {
       justification: psdJustification(style),
       ...(style.paragraphSpacing ? { spaceAfter: style.paragraphSpacing * font.size } : {}),
     },
-    // Existing rich runs are valid only while the complete Luma text model is
-    // unchanged. Once edited, emit a valid single-style text layer rather than
-    // writing stale run lengths that Photoshop could misinterpret.
-    shapeType: "point",
+    ...(style.paragraphs?.length ? { paragraphStyleRuns: generatedParagraphRuns } : {}),
+    shapeType: style.layout === "paragraph" ? "box" : "point",
+    ...(style.layout === "paragraph" ? { boxBounds: [frameLeft, frameTop, frameLeft + style.boxWidth!, frameTop + style.boxHeight!] } : {}),
   };
   return resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0).map((pass) => ({
     ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
@@ -1638,10 +1872,12 @@ function textLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
     text: simpleText,
     left: rasterized?.left ?? 0,
     top: rasterized?.top ?? 0,
+    ...pixels,
   }));
 }
 
 function vectorLayersToPsd(doc: Document, layer: Layer): PsdLayer[] {
+  if (layer.path?.appearance) throw new Error(`${layer.name}: appearance stacks require SVG or raster delivery; PSD stack conversion is not yet supported`);
   const rasterized = flattenLayerBitmap(doc, layer);
   const metadata = getPhotoshopLayerMetadata(layer);
   const originalVector = metadata?.source;
@@ -1678,6 +1914,10 @@ export type PhotoshopExportOptions = {
   /** Auto selects PSB only when PSD's 30,000px limit requires it. */
   format?: "auto" | "source" | PhotoshopContainer;
   compress?: boolean;
+  /** Owned by the guarded asynchronous export pipeline; never persisted. */
+  preparedSmartObjects?: ReadonlyMap<string, PreparedSmartObject>;
+  /** Clean merged pixels, without editor overlays or soft-proof simulation. */
+  mergedPreview?: HTMLCanvasElement;
 };
 
 export type PhotoshopCompatibilityReport = {
@@ -1740,13 +1980,15 @@ function native16BitEligibility(doc: Document): Native16BitEligibility {
     return { eligible: false, reason: "the precision master does not match the document geometry or color space" };
   }
   const transform = layer.transform;
-  if (transform.tx !== 0 || transform.ty !== 0 || transform.sx !== 1 || transform.sy !== 1 || transform.rotation !== 0) {
+  if (transform.tx !== 0 || transform.ty !== 0 || transform.sx !== 1 || transform.sy !== 1 || transform.rotation !== 0 || (transform.skewX ?? 0) !== 0) {
     return { eligible: false, reason: "the raster layer has a transform that requires high-depth resampling" };
   }
   const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
   if (!layer.visible || layer.opacity !== 1 || resolvedFillOpacity(layer) !== 1 || passes.length !== 1 ||
       passes[0].mode !== "source-over" || passes[0].opacity !== 1 || layer.clipping || layer.blendIf ||
-      hasLayerMask(layer) || layer.filters?.some((filter) => filter.enabled) || layer.effects?.some((effect) => effect.enabled)) {
+      hasLayerMask(layer) || layer.vectorMask || layer.spatial?.enabled || layer.raw || layer.parentId ||
+      layer.blendChannels || (layer.knockout ?? "none") !== "none" ||
+      layer.filters?.some((filter) => filter.enabled) || layer.effects?.some((effect) => effect.enabled)) {
     return { eligible: false, reason: "the layer requires high-depth compositing, masking, or effects" };
   }
   const source = getPhotoshopLayerMetadata(layer)?.source;
@@ -1792,6 +2034,9 @@ function canReturnOriginalPhotoshopSource(doc: Document, container: PhotoshopCon
   const seenSourceIndices = new Set<number>();
   for (const [stackPosition, layer] of doc.layers.entries()) {
     const layerMetadata = getPhotoshopLayerMetadata(layer);
+    // Embedded native edits can change layer structure without changing the
+    // rendered preview. Never return stale original Photoshop source bytes.
+    if (layer.smartSource) return false;
     const sourceLayerIndex = layer.photoshop?.sourceIndex;
     if (!layerMetadata || sourceLayerIndex === undefined || seenSourceIndices.has(sourceLayerIndex)) return false;
     seenSourceIndices.add(sourceLayerIndex);
@@ -1921,20 +2166,25 @@ export function photoshopCompatibilityReport(
     });
     return { container, canExport: true, issues };
   }
+  if (doc.alphaChannels?.length) {
+    try {
+      assertPhotoshopAlphaExport(doc);
+      issues.push({ code: "SAVED_ALPHA_CHANNELS_EXPORTED", severity: "info", message: "Saved alpha channels will be written as named Photoshop alpha planes. Luma's editable mask precision is 8-bit, including in high-depth containers." });
+    } catch (error) { issues.push({ code: "ALPHA_CHANNEL_EXPORT_BOUND", severity: "error", message: error instanceof Error ? error.message : "Alpha export exceeds its safe boundary" }); }
+  }
   const native16 = native16BitEligibility(doc);
-  if (native16.eligible) {
+  const expandedNative = native16.eligible ? native16 : highDepthEligibility(doc);
+  if (expandedNative.eligible) {
     issues.push({
-      code: "OUTPUT_16_BIT_NATIVE",
+      code: doc.bitDepth === 32 ? "OUTPUT_32_BIT_NATIVE" : "OUTPUT_16_BIT_NATIVE",
       severity: "info",
-      message: "The sRGB precision master will be written as native planar 16-bit RGB layer and composite channels.",
+      message: `The supported raster stack will be written as native ${doc.bitDepth}-bit RGB layers and composite samples. Native high-depth support remains bounded; this is not general Photoshop descriptor parity.`,
     });
   } else if (doc.bitDepth !== 8) {
     issues.push({
       code: "OUTPUT_DEPTH_CONVERTED_TO_8_BIT",
       severity: "warning",
-      message: doc.bitDepth === 16
-        ? `Native 16-bit output is gated because ${native16.reason}; this document will be compatibility-converted to 8-bit RGB.`
-        : `Native 32-bit Photoshop writing is not supported; this ${doc.bitDepth}-bit document will be compatibility-converted to 8-bit RGB.`,
+      message: `Native ${doc.bitDepth}-bit output is gated because ${expandedNative.reason}; this document will be compatibility-converted to 8-bit RGB.`,
     });
   }
   if (doc.colorSpace !== "srgb") {
@@ -1944,15 +2194,26 @@ export function photoshopCompatibilityReport(
       message: `${doc.colorSpace} pixels are exported through the 8-bit RGB compatibility mirror; an ICC profile is not embedded by the current writer.`,
     });
   }
+  if (!expandedNative.eligible && !options.mergedPreview) issues.push({ code: "COMPOSITE_PREVIEW_UNAVAILABLE", severity: "warning", message: "A merged compatibility preview is not generated on this export path. Open the editable layers; composite-only readers may display an empty image. The desktop export pipeline supplies previews for supported documents up to 4 MP." });
   for (const layer of doc.layers) {
     const metadata = getPhotoshopLayerMetadata(layer);
-    if (layer.kind === "smart-object" && !metadata?.source.placedLayer) {
+    const prepared = options.preparedSmartObjects?.get(layer.id);
+    if (layer.vectorMask) issues.push({ code: "EDITABLE_VECTOR_MASK_NOT_EXPORTED", severity: "error", layerId: layer.id,
+      message: `${layer.name}: this editable vector mask cannot yet be preserved by the Photoshop writer. Save the Luma master or export a flattened image; no masked content has been discarded.` });
+    if (prepared && (prepared.source !== layer.smartSource || prepared.bitmap !== layer.bitmap)) throw new Error("Smart Object contents changed during Photoshop preparation");
+    if (layer.path?.appearance) issues.push({ code: "VECTOR_APPEARANCE_UNSUPPORTED", severity: "error", layerId: layer.id, message: `${layer.name}: use SVG or raster export for vector appearance stacks; PSD conversion is not supported.` });
+    if (layer.path?.symbolId) issues.push({ code: "SYMBOL_LINKS_EXPANDED", severity: "warning", layerId: layer.id, message: `${layer.name}: geometry is preserved, but linked-instance behavior requires the .luma project.` });
+    if (layer.kind === "smart-object" && prepared) {
+      issues.push({ code: "NATIVE_SMART_OBJECT_EMBEDDED", severity: "info", layerId: layer.id, message: `${layer.name}'s editable contents are embedded as a layered PSB with affine placement.` }, ...prepared.issues);
+    } else if (layer.kind === "smart-object" && !metadata?.source.placedLayer) {
       issues.push({
         code: "SMART_OBJECT_PREVIEW_ONLY",
         severity: "warning",
         layerId: layer.id,
         message: `${layer.name} has no Photoshop placed-layer payload and will export as its raster preview.`,
       });
+    } else if (layer.kind === "smart-object" && metadata?.source.placedLayer && layer.smartSource) {
+      issues.push({ code: "SMART_CONTENT_REQUIRES_PREPARATION", severity: "error", layerId: layer.id, message: `${layer.name}'s edited contents require the guarded asynchronous Photoshop exporter. Its original embedded payload must not overwrite the edits.` });
     } else if (layer.kind === "smart-object" && metadata?.source.placedLayer) {
       issues.push({
         code: "SMART_OBJECT_PAYLOAD_PRESERVED",
@@ -1969,13 +2230,26 @@ export function photoshopCompatibilityReport(
         message: `${layer.name}'s Luma smart filters are visible in its compatibility preview but are not translated into Photoshop smart-filter descriptors.`,
       });
     }
+    if (layer.kind === "text" && metadata?.source.text && !preservedTextPixels(doc, layer, container)) {
+      issues.push({ code: "IMPORTED_TEXT_PREVIEW_REGENERATED", severity: "warning", layerId: layer.id,
+        message: `${layer.name}: editable text is retained, but its rendered preview is rebuilt by Luma. Font appearance, line layout and text effects may differ from the original Photoshop rendering. Check the exported copy in the receiving application before delivery.` });
+    }
+    if (layer.text?.layout === "paragraph") {
+      if (![layer.text.boxWidth, layer.text.boxHeight].every(value => typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 100_000)) {
+        issues.push({ code: "TEXT_FRAME_INVALID", severity: "error", layerId: layer.id, message: `${layer.name}: paragraph export requires a finite, positive frame width and height up to 100,000 pixels.` });
+      } else if (metadata?.originalTextFingerprint !== textFingerprint(layer)) {
+        issues.push({ code: "PARAGRAPH_LAYOUT_REQUIRES_REVIEW", severity: "warning", layerId: layer.id, message: `${layer.name}: the text story and frame remain editable. Photoshop recomposes paragraph baselines, wrapping and justification; their visual fidelity is not qualified. Review the receiving application's rendering before delivery.` });
+      }
+    }
     if (layer.kind === "text" && metadata?.source.text?.styleRuns?.length
       && metadata.originalTextFingerprint !== textFingerprint(layer)) {
       issues.push({
-        code: "RICH_TEXT_RUNS_REPLACED",
-        severity: "warning",
+        code: layer.text?.runs?.length ? "RICH_TEXT_RUNS_REBUILT" : "RICH_TEXT_RUNS_REPLACED",
+        severity: layer.text?.runs?.length ? "info" : "warning",
         layerId: layer.id,
-        message: `${layer.name} was edited in Luma, so its Photoshop character and paragraph runs are replaced by one valid editable style.`,
+        message: layer.text?.runs?.length
+          ? `${layer.name}'s edited character runs are rebuilt as editable Photoshop text styles.`
+          : `${layer.name} was edited without character ranges, so its Photoshop runs are replaced by one valid editable style.`,
       });
     }
     if (resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0).length > 1) {
@@ -1984,6 +2258,13 @@ export function photoshopCompatibilityReport(
         severity: "info",
         layerId: layer.id,
         message: `${layer.name}'s Luma blend stack is exported as ordered Photoshop layers.`,
+      });
+    }
+    if (layer.surface?.store.sourceState()) {
+      const t = layer.transform;
+      if (hasLayerMask(layer) || layer.spatial || t.sx !== 1 || t.sy !== 1 || t.rotation !== 0 || (t.skewX ?? 0) || !Number.isInteger(t.tx) || !Number.isInteger(t.ty)) issues.push({
+        code: "SOURCE_BACKED_EXPORT_REQUIRES_PROJECT", severity: "error", layerId: layer.id,
+        message: `${layer.name} has source-backed pixels with masks or a transform that the bounded Photoshop writer cannot yet encode. Save the editable Luma project instead.`,
       });
     }
     if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.surface && !layer.bitmap &&
@@ -2015,13 +2296,21 @@ export function exportPhotoshopDocument(
   if (report.issues.some((issue) => issue.code === "ORIGINAL_SOURCE_PASSTHROUGH") && preservedSource) {
     const bytes = preservedSource.slice();
     return {
-      buffer: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
+      buffer: bytes.buffer as ArrayBuffer,
       report,
     };
   }
   const native16 = native16BitEligibility(doc);
+  if (!native16.eligible && highDepthEligibility(doc).eligible) {
+    const preserved = getPhotoshopDocumentMetadata(doc);
+    const written = exportHighDepthRgb(doc, report.container);
+    return { buffer: writePhotoshopAlphaChannels(mergePhotoshopImageResources(written, preserved?.rawImageResources ?? [], {
+      includeIccProfile: preserved?.header.colorMode === 3 && doc.colorSpace === "srgb",
+    }), doc), report };
+  }
   // One Luma blend stack exports as repeated PSD layers, preserving the same
   // bottom-to-top pass order and per-pass opacity in Photoshop.
+  let sourceExportBytes = 0;
   const serializeLayer = (layer: Layer): PsdLayer[] => {
     if (layer.kind.startsWith("adjustment-")) return adjustmentLayersToPsd(doc, layer).reverse();
     if (layer.kind === "group") {
@@ -2035,13 +2324,30 @@ export function exportPhotoshopDocument(
         opened: true,
       }];
     }
-    if (layer.kind === "text") return textLayersToPsd(doc, layer).reverse();
+    if (layer.kind === "text") return textLayersToPsd(doc, layer, report.container).reverse();
     if (layer.kind === "shape" || layer.kind === "path") return vectorLayersToPsd(doc, layer).reverse();
+    if (layer.surface?.store.sourceState()) {
+      const t = layer.transform;
+      // No surprise dense rasterization under the source-backed admission.
+      if (hasLayerMask(layer) || layer.spatial || t.sx !== 1 || t.sy !== 1 || t.rotation !== 0 || (t.skewX ?? 0) || !Number.isInteger(t.tx) || !Number.isInteger(t.ty)) throw new Error("Source-backed Photoshop export currently requires an unmasked raster at its original scale and rotation; save the editable Luma project instead");
+      const rawData = sourceBackedPhotoshopChannels(layer.surface, report.container === "psb", bytes => {
+        if (sourceExportBytes + bytes > 384 * 1024 * 1024) throw new Error("Photoshop edited-channel export exceeds its memory ceiling; save the Luma project instead");
+        sourceExportBytes += bytes;
+      });
+      const passes = resolvedBlendPasses(layer).filter(pass => pass.enabled && pass.opacity > 0);
+      return passes.map(pass => ({
+        ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
+        name: passes.length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
+        left: t.tx, top: t.ty, right: t.tx + layer.surface!.grid.width, bottom: t.ty + layer.surface!.grid.height,
+        canvas: undefined, imageData: undefined, rawData,
+      })).reverse();
+    }
     const rasterized = flattenLayerBitmap(doc, layer);
     if (!rasterized) return [];
     const passes = resolvedBlendPasses(layer).filter((pass) => pass.enabled && pass.opacity > 0);
     return passes.map((pass) => ({
       ...psdLayerMetadata(doc, layer, pass.mode, layer.opacity * pass.opacity),
+      ...(options.preparedSmartObjects?.has(layer.id) ? { placedLayer: options.preparedSmartObjects.get(layer.id)!.placedLayer } : {}),
       name: passes.length > 1 ? `${layer.name} · ${BLEND_LABELS[pass.mode]}` : layer.name,
       canvas: rasterized.canvas,
       left: rasterized.left,
@@ -2080,13 +2386,28 @@ export function exportPhotoshopDocument(
     .reverse();
   const preserved = getPhotoshopDocumentMetadata(doc);
   const originalResources = preserved?.imageResources;
+  // Txt2 addresses text by the original layer/index mapping. Never reuse it
+  // after text, geometry, stack, or blend-pass expansion changes.
+  const preserveTextEngine = !!preserved?.engineData && preserved.originalLayerCount === doc.layers.length &&
+    preserved.originalDocumentFingerprint === documentStateFingerprint(doc) &&
+    doc.layers.every((layer, index) => {
+      const metadata = getPhotoshopLayerMetadata(layer);
+      return metadata?.originalStackPosition === index &&
+        !!metadata.source.text === (layer.kind === "text") &&
+        metadata.originalParentSourceIndex === (layer.parentId ? doc.layers.find(parent => parent.id === layer.parentId)?.photoshop?.sourceIndex : undefined) &&
+        resolvedBlendPasses(layer).filter(pass => pass.enabled && pass.opacity > 0).length === 1 &&
+        (layer.kind !== "text" || !!preservedTextPixels(doc, layer, report.container));
+    });
+  if (options.mergedPreview && (options.mergedPreview.width !== doc.width || options.mergedPreview.height !== doc.height)) throw new Error("Photoshop composite dimensions do not match the document");
   const psd: Psd = {
     width: doc.width,
     height: doc.height,
     bitsPerChannel: native16RawData ? 16 : 8,
     colorMode: 3, // RGB
+    engineData: preserveTextEngine ? preserved?.engineData : undefined,
     children,
-    linkedFiles: preserved?.linkedFiles,
+    canvas: native16RawData ? undefined : options.mergedPreview,
+    linkedFiles: [...(preserved?.linkedFiles ?? []), ...Array.from(options.preparedSmartObjects?.values() ?? [], object => object.file)],
     imageResources: {
       ...originalResources,
       resolutionInfo: {
@@ -2106,18 +2427,51 @@ export function exportPhotoshopDocument(
   const writeOptions = {
     psb: report.container === "psb",
     compress: options.compress,
-    invalidateTextLayers: true,
+    invalidateTextLayers: !preserveTextEngine,
     noBackground: true,
   };
-  const written = native16Channels
-    ? writeNative16BitRgbPsd(psd, native16Channels, writeOptions)
-    : writePsd(psd, writeOptions);
-  const buffer = mergePhotoshopImageResources(written, preserved?.rawImageResources ?? [], {
-    // An RGB source profile still describes the unconverted channel values.
-    // Never attach a CMYK/Lab source profile to the RGB compatibility output.
-    includeIccProfile: preserved?.header.colorMode === 3 && doc.colorSpace === "srgb",
-  });
-  return { buffer, report };
+  try {
+    if (doc.layers.some(layer => layer.surface?.store.sourceState())) {
+      let encodedBytes = 0;
+      const count = (layers: PsdLayer[]) => { for (const layer of layers) {
+        if (layer.rawData) for (const channel of layer.rawData.channels) encodedBytes += channel.data?.byteLength ?? 0;
+        else if (layer.canvas) encodedBytes += layer.canvas.width * layer.canvas.height * 5;
+        else if (layer.imageData) encodedBytes += layer.imageData.data.byteLength * 1.25;
+        if (layer.children) count(layer.children);
+      } };
+      count(children);
+      for (const file of preserved?.linkedFiles ?? []) encodedBytes += file.data?.byteLength ?? 0;
+      assertSourceBackedExportBudget(doc.width, doc.height, encodedBytes, preservedSource?.length ?? 0, sourceExportBytes);
+    }
+    const written = native16Channels
+      ? writeNative16BitRgbPsd(psd, native16Channels, writeOptions)
+      : writePsd(psd, writeOptions);
+    const buffer = mergePhotoshopImageResources(written, preserved?.rawImageResources ?? [], {
+      // An RGB source profile still describes the unconverted channel values.
+      // Never attach a CMYK/Lab source profile to the RGB compatibility output.
+      includeIccProfile: preserved?.header.colorMode === 3 && doc.colorSpace === "srgb",
+    });
+    return { buffer: writePhotoshopAlphaChannels(buffer, doc), report };
+  } finally {
+    // Non-transformed bitmap layers borrow their existing pixels read-only.
+    // Release only export-owned rasterizations; never resize a document bitmap.
+    const borrowed = new Set(doc.layers.map(layer => layer.bitmap).filter(Boolean));
+    // Do not leave
+    // a duplicate native backing-store stack resident until the host next runs
+    // GC (particularly when the exported file is immediately reopened). Masks
+    // and linked assets may alias preservation metadata and are not touched.
+    const released = new Set<HTMLCanvasElement>();
+    const release = (layers: PsdLayer[]) => {
+      for (const layer of layers) {
+        if (layer.canvas && !borrowed.has(layer.canvas) && !released.has(layer.canvas)) {
+          released.add(layer.canvas);
+          layer.canvas.width = 1; layer.canvas.height = 1;
+        }
+        if (layer.children) release(layer.children);
+      }
+    };
+    release(children);
+  }
 }
 
 export function exportPsd(doc: Document, options: PhotoshopExportOptions = {}): ArrayBuffer {
@@ -2131,12 +2485,10 @@ function transformedRasterBounds(doc: Document, layer: Layer) {
   const width = layer.bitmap?.width ?? layer.surface?.grid.width ?? 0;
   const height = layer.bitmap?.height ?? layer.surface?.grid.height ?? 0;
   if (!width || !height) return null;
-  const { sx, sy, rotation, tx, ty } = layer.transform;
-  const cosine = Math.cos(rotation);
-  const sine = Math.sin(rotation);
+  const matrix = affineForLayerTransform(layer.transform);
   const transform = (x: number, y: number) => ({
-    x: cosine * sx * x - sine * sy * y + tx,
-    y: sine * sx * x + cosine * sy * y + ty,
+    x: matrix.a * x + matrix.c * y + matrix.e,
+    y: matrix.b * x + matrix.d * y + matrix.f,
   });
   const corners = [transform(0, 0), transform(width, 0), transform(width, height), transform(0, height)];
   const left = Math.floor(Math.min(...corners.map((corner) => corner.x)));
@@ -2156,6 +2508,12 @@ function transformedRasterBounds(doc: Document, layer: Layer) {
 // so export no longer recreates one document-sized canvas for every layer.
 function flattenLayerBitmap(doc: Document, layer: Layer): { canvas: HTMLCanvasElement; left: number; top: number } | null {
   if ((layer.kind === "raster" || layer.kind === "smart-object") && !layer.bitmap && !layer.surface) return null;
+  const t = layer.transform;
+  if ((layer.kind === "raster" || layer.kind === "smart-object") && layer.bitmap && !layer.surface && !layer.spatial &&
+      t.sx === 1 && t.sy === 1 && t.rotation === 0 && !(t.skewX ?? 0) &&
+      Number.isInteger(t.tx) && Number.isInteger(t.ty)) {
+    return { canvas: layer.bitmap, left: t.tx, top: t.ty };
+  }
   const bounds = transformedRasterBounds(doc, layer);
   if (!bounds) return null;
   const c = newCanvas(bounds.width, bounds.height);
@@ -2163,6 +2521,30 @@ function flattenLayerBitmap(doc: Document, layer: Layer): { canvas: HTMLCanvasEl
   const projection = { a: 1, b: 0, c: 0, d: 1, e: -bounds.left, f: -bounds.top };
   if (layer.surface) drawLayerContentManaged(ctx, layer, projection);
   else drawLayerContent(ctx, layer, projection);
+  if (layer.text) {
+    // Text descriptors stay editable and retain their absolute transform. Its
+    // fallback bitmap must not turn a few glyphs into another document-sized
+    // layer on export/reopen. Scan bounded strips, then discard the padding.
+    let left = c.width, top = c.height, right = -1, bottom = -1;
+    for (let y = 0; y < c.height; y += 32) {
+      const rows = Math.min(32, c.height - y);
+      const data = ctx.getImageData(0, y, c.width, rows).data;
+      for (let row = 0; row < rows; row++) for (let x = 0; x < c.width; x++) {
+        if (data[(row * c.width + x) * 4 + 3]) {
+          left = Math.min(left, x); right = Math.max(right, x);
+          top = Math.min(top, y + row); bottom = Math.max(bottom, y + row);
+        }
+      }
+    }
+    if (right < left) { left = 0; top = 0; right = 0; bottom = 0; }
+    const width = right - left + 1, height = bottom - top + 1;
+    if (width !== c.width || height !== c.height) {
+      const cropped = newCanvas(width, height);
+      cropped.getContext("2d")!.drawImage(c, left, top, width, height, 0, 0, width, height);
+      c.width = 1; c.height = 1;
+      return { canvas: cropped, left: bounds.left + left, top: bounds.top + top };
+    }
+  }
   // The mask is deliberately NOT applied here. Photoshop stores a layer's
   // pixels unmasked and the mask as a separate channel (psdMask above), so
   // baking it into the pixels too would apply it twice — a 50% mask would

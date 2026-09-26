@@ -4,7 +4,7 @@ import "./canvas-harness.ts";
 import type { Psd } from "ag-psd";
 import { readPsd, writePsd } from "../app/engine/ag-psd-io.ts";
 import { exportPsd, importPsd } from "../app/engine/psd.ts";
-import { newCanvas } from "../app/engine/document.ts";
+import { createDocument, createTextLayer, newCanvas } from "../app/engine/document.ts";
 import { renderClean } from "../app/engine/renderer.ts";
 import { layerMaskSurface, setLayerMaskFromCanvas } from "../app/engine/layer-mask.ts";
 import { Studio } from "../app/engine/studio.ts";
@@ -72,4 +72,22 @@ test("a soft layer mask survives a PSD round trip, applied exactly once", async 
     Math.abs(after - before) <= 2,
     `mask coverage must survive the round trip: ${before} -> ${after}`,
   );
+});
+
+test("editable text exports a cropped preview rather than another document-sized bitmap", async () => {
+  const doc = createDocument(800, 600);
+  const layer = createTextLayer("Editable title", { text: "Luma", x: 120, y: 130, font: "30px sans-serif", color: "#ffffff", align: "left", lineHeight: 1.2 });
+  doc.layers = [layer];
+  const exported = exportPsd(doc);
+  const source = readPsd(exported).children![0];
+  assert.equal(source.text?.text, "Luma");
+  assert.ok(source.canvas!.width < 400);
+  assert.ok(source.canvas!.height < 200);
+  assert.ok(source.left! > 0 && source.top! > 0);
+  const before = newCanvas(800, 600), after = newCanvas(800, 600);
+  renderClean(doc, before);
+  const reopened = await importPsd(exported);
+  assert.equal(reopened.layers[0].kind, "text");
+  renderClean(reopened, after);
+  assert.deepEqual(after.getContext("2d")!.getImageData(0, 0, 800, 600).data, before.getContext("2d")!.getImageData(0, 0, 800, 600).data);
 });

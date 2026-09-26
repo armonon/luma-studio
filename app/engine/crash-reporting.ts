@@ -16,7 +16,7 @@ function safeEndpoint(value: string | null | undefined) {
   if (!value) return null;
   try {
     const endpoint = new URL(value);
-    return endpoint.protocol === "https:" ? endpoint.toString() : null;
+    return endpoint.protocol === "https:" && !endpoint.username && !endpoint.password && !endpoint.hash ? endpoint.toString() : null;
   } catch {
     return null;
   }
@@ -40,6 +40,7 @@ function sanitizedEvent(event: DiagnosticEvent): DiagnosticEvent {
 export class RemoteCrashReporter {
   readonly endpoint: string | null;
   private readonly sent: Set<string>;
+  private readonly inFlight = new Set<string>();
   private readonly storage: StorageLike | null;
   private readonly storageKey: string;
 
@@ -53,8 +54,8 @@ export class RemoteCrashReporter {
   get enabled() { return !!this.endpoint; }
 
   async report(event: DiagnosticEvent) {
-    if (!this.endpoint || this.sent.has(event.id) || (event.kind !== "crash" && event.kind !== "rejection")) return false;
-    this.sent.add(event.id);
+    if (!this.endpoint || this.sent.has(event.id) || this.inFlight.has(event.id) || this.inFlight.size >= 2 || (event.kind !== "crash" && event.kind !== "rejection")) return false;
+    this.inFlight.add(event.id);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.options.timeoutMs ?? 4000);
     try {
@@ -68,17 +69,17 @@ export class RemoteCrashReporter {
           event: sanitizedEvent(event),
         }),
         credentials: "omit",
+        redirect: "error",
         referrerPolicy: "no-referrer",
         keepalive: true,
         signal: controller.signal,
       });
       if (response.ok) this.rememberReceipt(event.id);
-      else this.sent.delete(event.id);
       return response.ok;
     } catch {
-      this.sent.delete(event.id);
       return false;
     } finally {
+      this.inFlight.delete(event.id);
       clearTimeout(timer);
     }
   }
@@ -98,10 +99,10 @@ export class RemoteCrashReporter {
   }
 
   private rememberReceipt(id: string) {
+    this.sent.add(id);
+    while (this.sent.size > 100) this.sent.delete(this.sent.values().next().value!);
     try {
-      const ids = [...this.sent].filter((candidate) => candidate !== id).slice(-99);
-      ids.push(id);
-      this.storage?.setItem(this.storageKey, JSON.stringify(ids));
+      this.storage?.setItem(this.storageKey, JSON.stringify([...this.sent]));
     } catch {
       // Private/locked storage must not make reporting fatal.
     }

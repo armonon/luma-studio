@@ -7,6 +7,7 @@ export const DEFAULT_ALPHA_SCRATCH_CEILING = 64 * 1024 * 1024;
 const RECORD_OVERHEAD_BYTES = 48;
 
 export type AlphaCombineMode = "replace" | "add" | "subtract" | "intersect";
+export type AlphaCalculation = "multiply" | "screen" | "difference" | "add" | "subtract";
 export type AlphaTileRecord = number | Uint8Array;
 export type AlphaTilePatch = {
   key: string;
@@ -112,7 +113,7 @@ export class SparseAlphaSurface {
   get revision() { return this._revision; }
 
   bindMemoryBudget(budget: ResidentMemoryBudget, label = "alpha surface") {
-    if (this.residentMemoryBudget === budget && this.residentMemoryAccount) return;
+    if (this.residentMemoryBudget === budget && this.residentMemoryAccount?.active()) return;
     this.residentMemoryAccount?.release();
     this.residentMemoryBudget = budget;
     this.residentMemoryAccount = budget.register(this, label, this.residentBytes);
@@ -299,6 +300,48 @@ export class SparseAlphaSurface {
     return result;
   }
 
+  /** Resample sparse mask edits into another document coordinate system.
+   * Unlike selection translation, the implicit mask value extends beyond the
+   * old canvas. Reveal-all therefore remains reveal-all after canvas growth.
+   * Admission happens before building a tile list or allocating pixel buffers.
+   */
+  remapped(width: number, height: number, scale: number, dx: number, dy: number, maximumBytes = DEFAULT_ALPHA_SCRATCH_CEILING) {
+    if (![width, height].every(n => Number.isSafeInteger(n) && n > 0) ||
+        ![scale, dx, dy, maximumBytes].every(Number.isFinite) || scale <= 0 || maximumBytes < 0) throw new Error("Invalid sparse mask mapping");
+    const result = new SparseAlphaSurface(width, height, { tileSize: this.tileSize, defaultAlpha: this.defaultAlpha,
+      memoryCeiling: this.memoryCeiling, recordCeiling: this.recordCeiling });
+    const candidates = new Map<string, TileAddress>();
+    let bytes = 0;
+    for (const key of this.records.keys()) {
+      const source = this.grid.parseKey(key), size = this.tileSize;
+      const left = Math.max(0, Math.floor((source.x * scale + dx - scale - 1) / size));
+      const top = Math.max(0, Math.floor((source.y * scale + dy - scale - 1) / size));
+      const right = Math.min(result.grid.columns, Math.ceil(((source.x + source.width) * scale + dx + scale + 1) / size));
+      const bottom = Math.min(result.grid.rows, Math.ceil(((source.y + source.height) * scale + dy + scale + 1) / size));
+      for (let row = top; row < bottom; row++) for (let col = left; col < right; col++) {
+        const key = `${col}:${row}`;
+        if (candidates.has(key)) continue;
+        const address = result.grid.address(col, row);
+        bytes += address.width * address.height + RECORD_OVERHEAD_BYTES;
+        if (bytes > Math.min(maximumBytes, this.memoryCeiling) || candidates.size >= this.recordCeiling)
+          throw new AlphaMemoryLimitError("Sparse mask remap exceeds the admitted tile budget; no document was changed");
+        candidates.set(key, address);
+      }
+    }
+    const sample = (x: number, y: number) => x < 0 || y < 0 || x >= this.width || y >= this.height ? this.defaultAlpha : this.sample(x, y);
+    for (const address of candidates.values()) {
+      const alpha = new Uint8Array(address.width * address.height);
+      for (let row = 0; row < address.height; row++) for (let col = 0; col < address.width; col++) {
+        const x = (address.x + col + .5 - dx) / scale - .5, y = (address.y + row + .5 - dy) / scale - .5;
+        const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+        alpha[row * address.width + col] = clampByte((sample(x0, y0) * (1 - fx) + sample(x0 + 1, y0) * fx) * (1 - fy) +
+          (sample(x0, y0 + 1) * (1 - fx) + sample(x0 + 1, y0 + 1) * fx) * fy);
+      }
+      result.writeTile(address.key, alpha);
+    }
+    return result;
+  }
+
   cropped(x: number, y: number, width: number, height: number) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 ||
         !Number.isFinite(x) || !Number.isFinite(y)) throw new Error("Invalid alpha crop");
@@ -452,6 +495,26 @@ export class SparseAlphaSurface {
       const incoming = source.readTile(key);
       const output = new Uint8Array(current.length);
       for (let index = 0; index < output.length; index += 1) output[index] = combineAlpha(current[index], incoming[index], mode);
+      result.writeTile(key, output);
+    }
+    return result;
+  }
+
+  /** Channel math visits stored tiles only, including inverted/default-filled planes. */
+  calculated(source: SparseAlphaSurface, mode: AlphaCalculation, opacity = 1) {
+    if (source.width !== this.width || source.height !== this.height || source.tileSize !== this.tileSize) throw new Error("Channel dimensions must match");
+    if (!["multiply", "screen", "difference", "add", "subtract"].includes(mode) || !Number.isFinite(opacity) || opacity < 0 || opacity > 1) throw new Error("Invalid channel calculation");
+    const calculate = (a: number, b: number) => {
+      const mixed = mode === "multiply" ? a * b / 255 : mode === "screen" ? 255 - (255 - a) * (255 - b) / 255
+        : mode === "difference" ? Math.abs(a - b) : mode === "add" ? Math.min(255, a + b) : Math.max(0, a - b);
+      return clampByte(a + (mixed - a) * opacity);
+    };
+    const result = new SparseAlphaSurface(this.width, this.height, { tileSize: this.tileSize,
+      defaultAlpha: calculate(this.defaultAlpha, source.defaultAlpha),
+      memoryCeiling: Math.min(this.memoryCeiling, source.memoryCeiling), recordCeiling: Math.min(this.recordCeiling, source.recordCeiling) });
+    for (const key of new Set([...this.records.keys(), ...source.records.keys()])) {
+      const a = this.readTile(key), b = source.readTile(key), output = new Uint8Array(a.length);
+      for (let i = 0; i < output.length; i++) output[i] = calculate(a[i], b[i]);
       result.writeTile(key, output);
     }
     return result;

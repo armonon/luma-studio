@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
+import { encodeFixturePng, decodeFixturePng } from "./lossless-png-fixture.ts";
 import { initializeCanvas, readPsd, writePsd, type Psd } from "ag-psd";
 import {
   createCurvesLayer,
@@ -49,6 +50,7 @@ class TestCanvasContext {
   setTransform() {}
   beginPath() {}
   moveTo() {}
+  lineTo() {}
   bezierCurveTo() {}
   closePath() {}
   ellipse() {}
@@ -56,6 +58,11 @@ class TestCanvasContext {
   fill() {}
   stroke() {}
   fillText() {}
+  // This suite checks descriptors, not typography pixels. Real rendering is
+  // exercised by canvas-harness tests and the independent Photoshop fixture.
+  measureText(text: string) { return { width: text.length * 8, actualBoundingBoxAscent: 12, actualBoundingBoxDescent: 4 }; }
+  translate() {}
+  scale() {}
   fillRect() {}
 
   drawImage(source: TestCanvas | { pixels?: ArrayLike<number> }) {
@@ -88,13 +95,8 @@ class TestCanvas {
   get height() { return this.storedHeight; }
   set height(value: number) { this.storedHeight = value; this.resize(); }
   getContext(kind: string) { return kind === "2d" ? this.context : null; }
-  toBlob(callback: (blob: Blob) => void, type = "image/png") {
-    const bytes = new TextEncoder().encode(JSON.stringify({
-      width: this.width,
-      height: this.height,
-      pixels: [...this.pixels],
-      type,
-    }));
+  toBlob(callback: (blob: Blob) => void) {
+    const bytes = encodeFixturePng(this.width, this.height, this.pixels);
     callback(bytes as unknown as Blob);
   }
   private resize() { this.pixels = new Uint8ClampedArray(this.width * this.height * 4); }
@@ -109,7 +111,7 @@ globalThis.document = {
   },
 } as unknown as Document;
 globalThis.createImageBitmap = (async (blob: Blob) => {
-  const decoded = JSON.parse(await blob.text()) as { width: number; height: number; pixels: number[] };
+  const decoded = await decodeFixturePng(blob);
   return { ...decoded, close() {} };
 }) as unknown as typeof createImageBitmap;
 initializeCanvas(
@@ -290,7 +292,7 @@ test("Photoshop source mode is byte-for-byte for untouched files and disengages 
   assert.notDeepEqual(new Uint8Array(edited.buffer), new Uint8Array(sourceBytes));
 });
 
-test("editing imported rich text emits valid single-style text and an explicit warning", async () => {
+test("editing imported rich text rebuilds valid editable Photoshop style runs", async () => {
   const source: Psd = {
     width: 80,
     height: 60,
@@ -310,11 +312,13 @@ test("editing imported rich text emits valid single-style text and an explicit w
   const layer = imported.layers.find((candidate) => candidate.kind === "text")!;
   layer.text!.text = "Changed";
   const report = photoshopCompatibilityReport(imported);
-  assert.ok(report.issues.some((issue) => issue.code === "RICH_TEXT_RUNS_REPLACED" && issue.layerId === layer.id));
+  assert.ok(report.issues.some((issue) => issue.code === "RICH_TEXT_RUNS_REBUILT" && issue.layerId === layer.id));
   const encoded = exportPsd(imported);
   const decoded = readPsd(encoded, { skipLayerImageData: true, skipCompositeImageData: true });
   assert.equal(decoded.children?.[0].text?.text, "Changed");
-  assert.equal(decoded.children?.[0].text?.styleRuns, undefined);
+  const runs = decoded.children?.[0].text?.styleRuns ?? [];
+  assert.ok(runs.length >= 2);
+  assert.equal(runs.reduce((length, run) => length + run.length, 0), "Changed".length);
 });
 
 test("Luma paths export as editable Photoshop vector masks with fill and stroke", async () => {
@@ -891,4 +895,3 @@ test("color lookup is reported as unexportable rather than dropped in silence", 
   assert.equal(issue.severity, "warning");
   assert.ok(photoshopCompatibilityReport(doc).canExport, "the rest of the document still exports");
 });
-

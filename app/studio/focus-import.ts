@@ -7,6 +7,7 @@ import { exceedsBrowserCanvas } from "@/app/engine/large-documents";
 export function mimeForFileName(fileName: string) {
   const extension = fileName.split(".").pop()?.toLowerCase();
   if (extension === "png") return "image/png";
+  if (extension === "svg") return "image/svg+xml";
   if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
   if (extension === "webp") return "image/webp";
   if (extension === "gif") return "image/gif";
@@ -49,6 +50,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 }
 
 export async function addImageFileAsLayer(studio: Studio, file: File) {
+  const targetDocumentId = studio.activeDocumentState().id;
   if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(file.name)) {
     throw new Error(`${file.name} is not a supported image layer`);
   }
@@ -63,6 +65,9 @@ export async function addImageFileAsLayer(studio: Studio, file: File) {
       throw new Error(`${file.name} is too large to decode as one image; import a tiled Luma/PSB document instead`);
     }
     const name = file.name.replace(/\.[^/.]+$/, "") || "Imported Layer";
+    if (studio.activeDocumentState().id !== targetDocumentId) {
+      throw new Error("The active document changed while decoding. Return to the intended document and add the image again.");
+    }
     const layer = studio.addRasterFromImage(name, image, {
       originalName: file.name,
       format: file.type || "image",
@@ -76,6 +81,11 @@ export async function addImageFileAsLayer(studio: Studio, file: File) {
 }
 
 export async function clipboardImageFile() {
+  const { hasNativeImageClipboard, readNativeImageClipboard } = await import("./selection-clipboard-events");
+  if (hasNativeImageClipboard()) {
+    const result = await readNativeImageClipboard("", false);
+    return result === "internal" ? null : result;
+  }
   if (!navigator.clipboard?.read) throw new Error("Clipboard images are unavailable here");
   const items = await navigator.clipboard.read();
   for (const item of items) {

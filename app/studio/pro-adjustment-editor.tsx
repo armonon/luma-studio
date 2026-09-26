@@ -1,9 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { MAX_CUBE_BYTES, parseCubeLut } from "@/app/engine/cube-lut";
 import {
   PRO_ADJUSTMENT_LABELS,
   defaultProAdjustment,
+  BLACK_WHITE_BANDS,
+  DEFAULT_BLACK_WHITE_MIX,
+  gradientMapStops,
+  type BlackWhiteMix,
   type ProAdjustmentParams,
   type RgbOffset,
 } from "@/app/engine/pro-adjustments";
@@ -39,13 +44,21 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
   const [mixerOutput, setMixerOutput] = useState<0 | 1 | 2>(0);
   const [draft, setDraft] = useState(adjustment);
   const [editing, setEditing] = useState(false);
+  const editInProgress = useRef(false);
+  const [lutError, setLutError] = useState("");
+  const [loadingLut, setLoadingLut] = useState(false);
+  const loadGeneration = useRef(0);
+  const latestAdjustment = useRef(adjustment);
+  useEffect(() => { latestAdjustment.current = adjustment; }, [adjustment]);
+  useEffect(() => () => { loadGeneration.current++; }, []);
   const current = editing ? draft : adjustment;
   const lastValue = useRef(adjustment);
   const update = (patch: Record<string, unknown>) => {
-    const next = { ...(editing ? lastValue.current : adjustment), ...patch } as ProAdjustmentParams;
+    const next = { ...(editInProgress.current ? lastValue.current : adjustment), ...patch } as ProAdjustmentParams;
     lastValue.current = next;
     setDraft(next);
     setEditing(true);
+    editInProgress.current = true;
     return next;
   };
   const live = (patch: Record<string, unknown>) => {
@@ -59,19 +72,34 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
   // and the event object itself would be committed as the adjustment params.
   // layer-editors.tsx:192 has always done it this way; this file did not.
   const commit = () => {
+    if (!editInProgress.current) return;
     onCommit(lastValue.current);
     setEditing(false);
+    editInProgress.current = false;
+  };
+  const reset = () => {
+    loadGeneration.current++;
+    setLoadingLut(false);
+    setLutError("");
+    lastValue.current = defaultProAdjustment(adjustment.kind);
+    setDraft(lastValue.current);
+    setEditing(false);
+    editInProgress.current = false;
+    onReset();
   };
 
   return <section className="glass-card tone-card pro-adjustment-card">
     <header>
       <strong>{PRO_ADJUSTMENT_LABELS[current.kind]}</strong>
-      <button type="button" onClick={onReset} aria-label="Reset adjustment">↺</button>
+      <button type="button" onClick={reset} aria-label="Reset adjustment">↺</button>
     </header>
     <div className="tone-controls">
       {current.kind === "black-white" && <>
         <Range label="Monochrome" value={current.amount * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ amount: value / 100 })} onCommit={commit} />
+        {BLACK_WHITE_BANDS.map((label, index) => <Range key={label} label={label}
+          value={(current.colorMix ?? DEFAULT_BLACK_WHITE_MIX)[index]} min={-200} max={300} step={1} suffix="%"
+          onLive={(value) => { const colorMix = [...(current.colorMix ?? DEFAULT_BLACK_WHITE_MIX)] as BlackWhiteMix; colorMix[index] = value; live({ colorMix }); }} onCommit={commit} />)}
         <Range label="Tint" value={current.tintAmount * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ tintAmount: value / 100 })} onCommit={commit} />
         <label><span>Tint color</span><input type="color" value={current.tint}
@@ -115,15 +143,44 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
 
       {current.kind === "color-lookup" && <>
         <label><span>Look</span><select value={current.preset} onChange={(event) => {
-          const next = update({ preset: event.target.value }); onLive(next); commit();
+          loadGeneration.current++; setLoadingLut(false);
+          const next = update({ preset: event.target.value, lut: undefined }); onLive(next); commit();
         }}><option value="cinematic">Cinematic</option><option value="teal-orange">Teal & Orange</option><option value="film">Film</option><option value="chrome">Chrome</option></select><output>LUT</output></label>
         <Range label="Intensity" value={current.intensity * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ intensity: value / 100 })} onCommit={commit} />
+        <label><span>Import .cube</span><input type="file" accept=".cube" disabled={loadingLut} aria-label="Import 3D Cube LUT" onChange={async (event) => {
+          const file = event.target.files?.[0]; event.target.value = "";
+          if (!file) return;
+          const generation = ++loadGeneration.current;
+          setLutError(""); setLoadingLut(true);
+          try {
+            if (file.size > MAX_CUBE_BYTES) throw new Error("LUT exceeds the 4 MiB limit");
+            const lut = parseCubeLut(await file.text());
+            if (generation !== loadGeneration.current) return;
+            if (latestAdjustment.current !== adjustment) throw new Error("The adjustment changed while loading. Import the LUT again.");
+            const next = update({ lut }); onLive(next); commit();
+          } catch (error) {
+            if (generation === loadGeneration.current) setLutError(error instanceof Error ? error.message : "LUT import failed");
+          } finally { if (generation === loadGeneration.current) setLoadingLut(false); }
+        }} /><output>{loadingLut ? "Loading…" : current.lut ? `${current.lut.size}³` : "2–33³"}</output></label>
+        {current.lut && <p title={current.lut.title}>{current.lut.title}</p>}
+        {lutError && <p role="alert">{lutError}</p>}
       </>}
 
       {current.kind === "gradient-map" && <>
-        <label><span>Shadows</span><input type="color" value={current.shadow} onChange={(event) => live({ shadow: event.target.value })} onBlur={() => commit()} /><output>{current.shadow}</output></label>
-        <label><span>Highlights</span><input type="color" value={current.highlight} onChange={(event) => live({ highlight: event.target.value })} onBlur={() => commit()} /><output>{current.highlight}</output></label>
+        {gradientMapStops(current).map((stop, index, stops) => <div key={index}>
+          <label><span>Stop {index + 1}</span><input type="color" aria-label={`Stop ${index + 1} color`} value={stop.color}
+            onChange={(event) => live({ stops: stops.map((s, i) => i === index ? { ...s, color: event.target.value } : s) })} onBlur={commit} />
+            <button type="button" aria-label={`Remove stop ${index + 1}`} disabled={stops.length <= 2} onClick={() => { live({ stops: stops.filter((_, i) => i !== index) }); commit(); }}>−</button></label>
+          <Range label={`Stop ${index + 1} position`} value={stop.position * 100} min={(stops[index - 1]?.position ?? 0) * 100} max={(stops[index + 1]?.position ?? 1) * 100} step={1} suffix="%"
+            onLive={(value) => live({ stops: stops.map((s, i) => i === index ? { ...s, position: value / 100 } : s) })} onCommit={commit} />
+        </div>)}
+        <button type="button" disabled={gradientMapStops(current).length >= 16} onClick={() => {
+          const stops = gradientMapStops(current);
+          let gap = 1;
+          for (let i = 2; i < stops.length; i++) if (stops[i].position - stops[i - 1].position > stops[gap].position - stops[gap - 1].position) gap = i;
+          live({ stops: [...stops, { position: (stops[gap].position + stops[gap - 1].position) / 2, color: "#808080" }].sort((a, b) => a.position - b.position) }); commit();
+        }}>Add color stop</button>
         <Range label="Smooth" value={current.smoothness * 100} min={0} max={100} step={1} suffix="%"
           onLive={(value) => live({ smoothness: value / 100 })} onCommit={commit} />
         <label><span>Reverse</span><input type="checkbox" checked={current.reverse} onChange={(event) => {
@@ -155,7 +212,7 @@ export default function ProAdjustmentEditor({ adjustment, onLive, onCommit, onRe
       {current.kind === "invert" && <p style={{ padding: "4px 12px 10px", margin: 0, opacity: .65, fontSize: 11 }}>Colors are inverted nondestructively.</p>}
     </div>
     <footer style={{ padding: "4px 12px 10px" }}>
-      <button type="button" onClick={() => { const next = defaultProAdjustment(current.kind); onLive(next); commit(); }}>Reset</button>
+      <button type="button" onClick={reset}>Reset</button>
     </footer>
   </section>;
 }

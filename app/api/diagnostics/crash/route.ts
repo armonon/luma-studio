@@ -1,4 +1,5 @@
 import { sanitizeDiagnosticValue } from "@/app/engine/diagnostics";
+import { readBoundedText, UploadLimitError, UploadTimeoutError } from "@/app/engine/bounded-upload";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,13 @@ const DESKTOP_ORIGINS = new Set([
 
 type RateWindow = { resetAt: number; used: number };
 const rateWindows = new Map<string, RateWindow>();
+let inFlight = 0;
+const MAX_IN_FLIGHT = 4;
+
+function allowedOrigin(request: Request) {
+  const origin = request.headers.get("origin");
+  return !origin || origin === new URL(request.url).origin || DESKTOP_ORIGINS.has(origin);
+}
 
 function respond(request: Request, body: BodyInit | null, init: ResponseInit) {
   const headers = new Headers(init.headers);
@@ -133,11 +141,11 @@ function sanitizedPayload(value: unknown) {
 export function resetCrashIngestRateLimitsForTests() {
   rateWindows.clear();
   globalWindow = { resetAt: 0, used: 0 };
+  inFlight = 0;
 }
 
 export function OPTIONS(request: Request) {
-  const origin = request.headers.get("origin");
-  if (origin && !DESKTOP_ORIGINS.has(origin)) return json(request, { error: "Origin not allowed" }, 403);
+  if (!allowedOrigin(request)) return json(request, { error: "Origin not allowed" }, 403);
   return respond(request, null, {
     status: 204,
     headers: {
@@ -149,24 +157,28 @@ export function OPTIONS(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const origin = request.headers.get("origin");
-  if (origin && !DESKTOP_ORIGINS.has(origin)) return json(request, { error: "Origin not allowed" }, 403);
+  if (!allowedOrigin(request)) return json(request, { error: "Origin not allowed" }, 403);
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return json(request, { error: "Crash report is too large" }, 413);
 
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_BODY_BYTES) return json(request, { error: "Crash report is too large" }, 413);
-  let payload;
-  try { payload = sanitizedPayload(JSON.parse(text)); } catch (error) {
-    return json(request, { error: error instanceof Error ? error.message : "Invalid crash report" }, 400);
-  }
-
   const now = Date.now();
-  const retryAfter = acquireGlobal(now) || acquire(clientKey(request), now);
+  const retryAfter = inFlight >= MAX_IN_FLIGHT ? 2 : acquireGlobal(now) || acquire(clientKey(request), now);
   if (retryAfter) return respond(request, JSON.stringify({ error: "Crash report rate limit reached" }), {
     status: 429,
     headers: { "content-type": "application/json", "retry-after": String(retryAfter) },
   });
+  inFlight++;
+  try {
+  let text: string;
+  try { text = await readBoundedText(request, MAX_BODY_BYTES); }
+  catch (error) {
+    return json(request, { error: error instanceof UploadLimitError ? "Crash report is too large" : "Invalid or interrupted crash report" },
+      error instanceof UploadLimitError ? 413 : error instanceof UploadTimeoutError ? 408 : 400);
+  }
+  let payload;
+  try { payload = sanitizedPayload(JSON.parse(text)); } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : "Invalid crash report" }, 400);
+  }
 
   const destination = webhookUrl();
   if (!destination) return json(request, { error: "Crash collection is not configured" }, 503);
@@ -181,10 +193,12 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({ ...payload, receiptId, receivedAt: new Date().toISOString() }),
       signal: AbortSignal.timeout(4000),
+      redirect: "error",
     });
   } catch {
     return json(request, { error: "Crash collector unavailable" }, 502);
   }
   if (!upstream.ok) return json(request, { error: "Crash collector rejected the report" }, 502);
   return json(request, { accepted: true, receiptId }, 202);
+  } finally { inFlight--; }
 }

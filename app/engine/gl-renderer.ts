@@ -19,6 +19,7 @@ import { composeLayerWithEffects, effectNeedsBackdrop } from "./layer-effects";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
 import { ADJUST_FS, BLIT_FS, COMPOSITE_FS, CURVES_FS, GL_BLEND_ORDER, HSL_FS, LEVELS_FS, READBACK_FS, VS } from "./gl-shaders";
 import { hasLayerMask, layerMaskRegionCanvas } from "./layer-mask";
+import { fontResourceRevision } from "./bundled-fonts";
 
 // A single-doc-size WebGL2 float compositor.
 // Design: ping-pong RGBA16F FBOs `A`/`B`. Bottom-up over layers, each pass
@@ -365,7 +366,7 @@ function readCompositeBackdrop(
 function canUploadPrecisionDirect(layer: Layer, doc: Document) {
   const t = layer.transform;
   return !!layer.surface && layer.surface.grid.width === doc.width && layer.surface.grid.height === doc.height &&
-    t.tx === 0 && t.ty === 0 && t.sx === 1 && t.sy === 1 && t.rotation === 0 &&
+    t.tx === 0 && t.ty === 0 && t.sx === 1 && t.sy === 1 && t.rotation === 0 && !(t.skewX ?? 0) &&
     !layer.filters?.length && !layer.effects?.length && !layer.clipping && resolvedFillOpacity(layer) === 1;
 }
 
@@ -380,7 +381,7 @@ function uploadPrecisionTex(
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, doc.width, doc.height, 0, gl.RGBA, gl.FLOAT, null);
-  for (const { key } of surface.store.entries()) {
+  for (const key of surface.store.keys()) {
     const address = surface.grid.parseKey(key);
     const pixels = surface.tileToFloat32Display(key, true, true);
     gl.texSubImage2D(
@@ -478,7 +479,7 @@ export function rasterizeLayer(
 // bitmap, shape, text, or transform changed since the last render.
 function layerVersion(layer: Layer): string {
   const t = layer.transform;
-  const tKey = `${t.tx.toFixed(2)}|${t.ty.toFixed(2)}|${t.sx.toFixed(4)}|${t.sy.toFixed(4)}|${t.rotation.toFixed(4)}`;
+  const tKey = `${t.tx}|${t.ty}|${t.sx}|${t.sy}|${t.rotation}|${t.skewX ?? 0}`;
   const filterKey = layer.filters?.map((filter) => `${filter.id}:${filter.enabled ? 1 : 0}:${filter.opacity}:${filter.kind}:${JSON.stringify(filter.params)}`).join("|") ?? "";
   // Serialize the whole effect, not a hand-picked subset: listing fields by
   // hand meant stroke width and bevel angle were left out, so editing them
@@ -491,7 +492,7 @@ function layerVersion(layer: Layer): string {
   }
   if (layer.kind === "text" && layer.text) {
     const s = layer.text;
-    return `text:${s.text}|${s.font}|${s.color}|${s.align}|${s.x}|${s.y}|${s.lineHeight}|${s.layout ?? "point"}|${s.boxWidth ?? ""}|${s.boxHeight ?? ""}|${JSON.stringify(s.path ?? null)}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
+    return `text:${fontResourceRevision()}:${JSON.stringify(s)}:${JSON.stringify(layer.spatial ?? null)}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   if (layer.kind === "shape" && layer.shape) {
     const sh = layer.shape;
@@ -499,10 +500,7 @@ function layerVersion(layer: Layer): string {
   }
   if (layer.kind === "path" && layer.path) {
     const p = layer.path;
-    const anchorsKey = p.anchors
-      .map((a) => `${a.x.toFixed(1)},${a.y.toFixed(1)}|${a.hIn.dx.toFixed(1)},${a.hIn.dy.toFixed(1)}|${a.hOut.dx.toFixed(1)},${a.hOut.dy.toFixed(1)}`)
-      .join(";");
-    return `path:${p.closed ? 1 : 0}|${p.fill}|${p.stroke}|${p.strokeWidth}|${anchorsKey}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
+    return `path:${JSON.stringify(p)}|${tKey}:${filterKey}:${effectKey}:${fillKey}`;
   }
   return `unknown:${tKey}:${fillKey}`;
 }
@@ -712,6 +710,7 @@ export function isLinearCompositing() { return linearCompositing; }
  * effect needs beyond its own layer cannot be honoured here.
  */
 export function glCanRenderDocument(doc: Document): boolean {
+  if (doc.layers.some(layer => layer.surface?.store.sourceState())) return false;
   // The professional adjustment pack is tile-rendered by the exact CPU path
   // until its shared formulas are compiled to a single GPU program. Falling
   // back is preferable to treating an unknown adjustment as transparent.

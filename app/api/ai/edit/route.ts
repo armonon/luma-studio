@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { readBoundedFormData, UploadLimitError } from "@/app/engine/bounded-upload";
 import {
   buildAiEditPrompt,
   createAiEditProvenance,
@@ -11,6 +12,9 @@ const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const AI_RATE_WINDOW_MS = 10 * 60 * 1000;
 const AI_RATE_LIMIT = 12;
 const AI_CONCURRENCY_LIMIT = 2;
+const MAX_REQUEST_BYTES = 151 * 1024 * 1024;
+const AI_PROCESS_CONCURRENCY_LIMIT = 2;
+let processInFlight = 0;
 // Keep the deployed default on the current GPT Image editing model while
 // retaining an escape hatch for pinned or account-specific deployments.
 const MODEL = process.env.AI_IMAGE_MODEL || "gpt-image-2";
@@ -28,15 +32,20 @@ export function acquireAiEditPermit(identity: string, now = Date.now()):
   | { allowed: true; remaining: number; resetAt: number; release: () => void }
   | { allowed: false; reason: "rate" | "concurrency"; retryAfter: number; resetAt: number } {
   let bucket = aiRateWindows.get(identity);
-  if (!bucket || now >= bucket.resetAt) {
+  if (!bucket && aiRateWindows.size >= 10_000) {
+    for (const [key, entry] of aiRateWindows) if (entry.inFlight === 0 && now >= entry.resetAt) aiRateWindows.delete(key);
+    if (aiRateWindows.size >= 10_000) return { allowed: false, reason: "concurrency", retryAfter: 60, resetAt: now + 60_000 };
+  }
+  if (!bucket || (now >= bucket.resetAt && bucket.inFlight === 0)) {
     bucket = { resetAt: now + AI_RATE_WINDOW_MS, used: 0, inFlight: 0 };
     aiRateWindows.set(identity, bucket);
   }
   const retryAfter = Math.max(1, Math.ceil((bucket.resetAt - now) / 1000));
   if (bucket.used >= AI_RATE_LIMIT) return { allowed: false, reason: "rate", retryAfter, resetAt: bucket.resetAt };
-  if (bucket.inFlight >= AI_CONCURRENCY_LIMIT) return { allowed: false, reason: "concurrency", retryAfter: 2, resetAt: bucket.resetAt };
+  if (bucket.inFlight >= AI_CONCURRENCY_LIMIT || processInFlight >= AI_PROCESS_CONCURRENCY_LIMIT) return { allowed: false, reason: "concurrency", retryAfter: 2, resetAt: bucket.resetAt };
   bucket.used++;
   bucket.inFlight++;
+  processInFlight++;
   let released = false;
   return {
     allowed: true,
@@ -46,12 +55,14 @@ export function acquireAiEditPermit(identity: string, now = Date.now()):
       if (released) return;
       released = true;
       bucket!.inFlight = Math.max(0, bucket!.inFlight - 1);
+      processInFlight = Math.max(0, processInFlight - 1);
     },
   };
 }
 
 export function resetAiEditRateLimitsForTests() {
   aiRateWindows.clear();
+  processInFlight = 0;
 }
 
 function error(message: string, status: number) {
@@ -116,7 +127,17 @@ export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return fail("Generative editing is not configured on this deployment.", 503);
 
-  const incoming = await request.formData();
+  const permit = acquireAiEditPermit(user.email.toLowerCase());
+  if (!permit.allowed) {
+    return respond(Response.json(
+      { error: permit.reason === "concurrency" ? "Image edit capacity is busy. Try again shortly." : "Image edit rate limit reached. Try again later." },
+      { status: 429, headers: { "retry-after": String(permit.retryAfter), "cache-control": "no-store" } },
+    ));
+  }
+  try {
+  let incoming: FormData;
+  try { incoming = await readBoundedFormData(request, MAX_REQUEST_BYTES); }
+  catch (cause) { return fail(cause instanceof UploadLimitError ? cause.message : "Invalid or interrupted multipart upload.", cause instanceof UploadLimitError ? 413 : 400); }
   const image = incoming.get("image");
   const mask = incoming.get("mask");
   const reference = incoming.get("reference");
@@ -178,14 +199,6 @@ export async function POST(request: Request) {
   body.append("size", config.size);
   body.append("output_format", "png");
 
-  const permit = acquireAiEditPermit(user.email.toLowerCase());
-  if (!permit.allowed) {
-    return respond(Response.json(
-      { error: permit.reason === "concurrency" ? "Two image edits are already running. Try again shortly." : "Image edit rate limit reached. Try again later." },
-      { status: 429, headers: { "retry-after": String(permit.retryAfter), "cache-control": "no-store" } },
-    ));
-  }
-  try {
     const upstream = await fetch("https://api.openai.com/v1/images/edits", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },

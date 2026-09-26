@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { Layer } from "@/app/engine/document";
 import {
   resolvedBlendIf,
@@ -9,25 +9,14 @@ import {
 } from "@/app/engine/document";
 import { isNeutralBlendIf } from "@/app/engine/blend";
 import { virtualRange } from "./large-project-ui";
+import { ChevronDown, ChevronRight, Eye, EyeOff, X } from "lucide-react";
+import type { LayerSelectionModifiers } from "../engine/layer-selection";
+import LayerThumbnail from "./layer-thumbnail";
 
 const ROW_HEIGHT = 46;
 
-function layerGlyph(layer: Layer) {
-  if (layer.kind === "group") return "▾";
-  if (layer.kind === "smart-object") return "◇";
-  if (layer.kind === "adjustment-tone") return "◐";
-  if (layer.kind === "adjustment-curves") return "∿";
-  if (layer.kind === "adjustment-levels") return "▦";
-  if (layer.kind === "adjustment-hsl") return "◉";
-  if (layer.kind === "adjustment-pro") return "✦";
-  if (layer.kind === "text") return "T";
-  if (layer.kind === "shape") return "▭";
-  if (layer.kind === "path") return "✎";
-  return "▨";
-}
-
 function layerDetails(layer: Layer) {
-  const parts: string[] = [layer.kind];
+  const parts: string[] = [layer.kind.replace("adjustment-", "").replaceAll("-", " ")];
   if (layer.maskSurface || layer.mask) parts.push("mask");
   const fx = (layer.filters?.length ?? 0) + (layer.effects?.length ?? 0);
   if (fx) parts.push(`fx ${fx}`);
@@ -40,8 +29,9 @@ function layerDetails(layer: Layer) {
 }
 
 export default function VirtualLayerStack({
-  layers,
+  layers: allLayers,
   activeLayerId,
+  selectedLayerIds,
   draggedLayerId,
   onDragStart,
   onDragEnd,
@@ -51,14 +41,20 @@ export default function VirtualLayerStack({
   onRename,
   onToggleVisible,
   onDelete,
+  canDelete,
+  onContextMenu,
+  onDeleteSelection,
 }: {
   layers: Layer[];
   activeLayerId: string | null;
+  selectedLayerIds: string[];
   draggedLayerId: string | null;
   onDragStart: (id: string) => void;
   onDragEnd: () => void;
   onDrop: (sourceId: string, targetIndex: number) => void;
-  onSelect: (layer: Layer) => void;
+  onSelect: (layer: Layer, modifiers: LayerSelectionModifiers) => void;
+  onContextMenu: (layer: Layer, point: { x: number; y: number }) => void;
+  onDeleteSelection: () => void;
   onOpenStyle: (layer: Layer) => void;
   onRename: (layer: Layer) => void;
   onToggleVisible: (layer: Layer) => void;
@@ -74,16 +70,28 @@ export default function VirtualLayerStack({
    * always-reachable per-row action does not depend on that layout surviving.
    */
   onDelete: (layer: Layer) => void;
+  canDelete: (layer: Layer) => boolean;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const hierarchy = new Map(allLayers.map(layer => [layer.id, layer]));
+  const ancestors = (layer: Layer) => {
+    const ids: string[] = [];
+    let parent = layer.parentId;
+    while (parent && !ids.includes(parent)) { ids.push(parent); parent = hierarchy.get(parent)?.parentId; }
+    return ids;
+  };
+  const layers = allLayers.filter(layer => !ancestors(layer).some(id => collapsed.has(id)));
+  const select = (layer: Layer, event: LayerSelectionModifiers) => onSelect(layer, { shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, orderedIds: layers.map(item => item.id) });
   const [viewportHeight, setViewportHeight] = useState(360);
   const [scrollTop, setScrollTop] = useState(0);
-  const range = useMemo(() => virtualRange({
+  const range = virtualRange({
     itemCount: layers.length,
     itemHeight: ROW_HEIGHT,
     viewportHeight,
     scrollTop,
-  }), [layers.length, viewportHeight, scrollTop]);
+  });
+  const activeRowIndex = layers.findIndex(layer => layer.id === activeLayerId);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -101,13 +109,17 @@ export default function VirtualLayerStack({
 
   useEffect(() => {
     const host = hostRef.current;
-    const index = layers.findIndex((layer) => layer.id === activeLayerId);
+    const index = activeRowIndex;
     if (!host || index < 0) return;
     const top = index * ROW_HEIGHT;
     const bottom = top + ROW_HEIGHT;
     if (top < host.scrollTop) host.scrollTop = top;
     else if (bottom > host.scrollTop + host.clientHeight) host.scrollTop = bottom - host.clientHeight;
-  }, [activeLayerId, layers]);
+    if (host.contains(document.activeElement) && document.activeElement?.getAttribute("role") === "option") {
+      const frame = requestAnimationFrame(() => host.querySelector<HTMLElement>('[data-primary="true"]')?.focus({ preventScroll: true }));
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [activeLayerId, activeRowIndex]);
 
   return (
     <div
@@ -115,6 +127,7 @@ export default function VirtualLayerStack({
       className="layer-stack virtual-layer-stack"
       role="listbox"
       aria-label="Document layers"
+      aria-multiselectable="true"
       onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       data-layer-count={layers.length}
     >
@@ -125,30 +138,47 @@ export default function VirtualLayerStack({
             return (
               <div
                 key={layer.id}
-                className={`spatial-layer ${activeLayerId === layer.id ? "active" : ""}`}
+                className={`spatial-layer ${selectedLayerIds.includes(layer.id) ? "active" : ""}`}
                 role="option"
-                aria-selected={activeLayerId === layer.id}
-                tabIndex={activeLayerId === layer.id ? 0 : -1}
-                style={{ height: ROW_HEIGHT, top: localIndex * ROW_HEIGHT, "--layer-indent": layer.parentId ? "12px" : "0px" } as CSSProperties}
+                aria-selected={selectedLayerIds.includes(layer.id)}
+                data-primary={activeLayerId === layer.id}
+                tabIndex={activeLayerId === layer.id || (!activeLayerId && targetIndex === 0) ? 0 : -1}
+                style={{ height: ROW_HEIGHT, top: localIndex * ROW_HEIGHT, paddingLeft: 7 + Math.min(ancestors(layer).length, 5) * 12, ...(layer.kind === "group" ? { gridTemplateColumns: "16px 34px minmax(0, 1fr) auto" } : {}) } as CSSProperties}
                 title={layer.ai
                   ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}`
                   : layer.name}
-                draggable
+                draggable={selectedLayerIds.length <= 1}
                 onDragStart={() => onDragStart(layer.id)}
                 onDragEnd={onDragEnd}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={() => {
-                  if (draggedLayerId && draggedLayerId !== layer.id) onDrop(draggedLayerId, targetIndex);
+                  if (draggedLayerId && draggedLayerId !== layer.id) onDrop(draggedLayerId, allLayers.indexOf(layer));
                 }}
-                onClick={() => onSelect(layer)}
+                onClick={event => select(layer, event)}
+                onContextMenu={event => { event.preventDefault(); event.currentTarget.focus(); onContextMenu(layer, { x: event.clientX, y: event.clientY }); }}
                 onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
+                  if (event.key === "Delete" || event.key === "Backspace") { event.preventDefault(); event.stopPropagation(); onDeleteSelection(); return; }
+                  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+                    event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(layer, { x: rect.left + 30, y: rect.bottom }); return;
+                  }
+                  if (["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const index = event.key === "Home" ? 0 : event.key === "End" ? layers.length - 1
+                      : Math.max(0, Math.min(layers.length - 1, targetIndex + (event.key === "ArrowDown" ? 1 : -1)));
+                    if (layers[index]) select(layers[index], event);
+                    return;
+                  }
                   if (event.key !== "Enter" && event.key !== " ") return;
                   event.preventDefault();
-                  onSelect(layer);
+                  event.stopPropagation();
+                  select(layer, event);
                 }}
                 onDoubleClick={() => onOpenStyle(layer)}
               >
-                <span className={`spatial-layer-thumb kind-${layer.kind}`}>{layerGlyph(layer)}</span>
+                {layer.kind === "group" && <button type="button" className="layer-group-toggle" aria-label={`${collapsed.has(layer.id) ? "Expand" : "Collapse"} ${layer.name}`} aria-expanded={!collapsed.has(layer.id)} onClick={event => { event.stopPropagation(); setCollapsed(current => { const next = new Set(current); if (next.has(layer.id)) next.delete(layer.id); else next.add(layer.id); return next; }); }}>{collapsed.has(layer.id) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</button>}
+                <LayerThumbnail layer={layer} />
                 <span className="layer-name">
                   <strong
                     title="Double-click to rename"
@@ -168,16 +198,17 @@ export default function VirtualLayerStack({
                     title={layer.visible ? "Hide layer" : "Show layer"}
                     onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}
                   >
-                    {layer.visible ? "◉" : "○"}
+                    {layer.visible ? <Eye /> : <EyeOff />}
                   </button>
                   <button
                     type="button"
                     className="spatial-layer-delete"
+                    disabled={!canDelete(layer)}
                     aria-label={`Delete ${layer.name}`}
                     title="Delete layer"
                     onClick={(event) => { event.stopPropagation(); onDelete(layer); }}
                   >
-                    ×
+                    <X />
                   </button>
                 </span>
               </div>

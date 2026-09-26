@@ -18,16 +18,21 @@ export type StudioCommand =
   // Application
   | "check-for-updates"
   // File
+  | "new-document"
+  | "close-document"
   | "open"
   | "save"
   | "save-as"
   | "export"
+  | "export-print"
   | "batch"
   // Edit
   | "undo"
   | "redo"
   | "history"
+  | "copy-pixels" | "copy-merged" | "cut-pixels" | "paste-pixels" | "paste-in-place" | "delete-pixels" | "selection-to-layer"
   | "copy-layer-style"
+  | "define-custom-shape"
   | "paste-layer-style"
   // Image
   | "document-properties"
@@ -37,15 +42,21 @@ export type StudioCommand =
   | "deselect"
   | "invert-selection"
   | "select-subject"
+  | "select-channel"
+  | "channel-save" | "channel-load" | "channel-update" | "channel-rename" | "channel-delete" | "channel-invert" | "channel-calculate"
   // Layer
   | "new-layer"
   | "duplicate-layer"
   | "group-layer"
+  | "ungroup-layers" | "merge-layers" | "rename-layer" | "toggle-layer-lock" | "toggle-layer-visibility"
   | "delete-layer"
   | "convert-smart-object"
+  | "replace-smart-content"
+  | "edit-smart-content" | "apply-smart-content"
   | "bring-forward"
   | "send-backward"
   | "layer-style"
+  | "recolor"
   | "curves"
   | "levels"
   | "hsl"
@@ -61,11 +72,21 @@ export type StudioCommand =
   | "zoom-fit"
   | "zoom-actual"
   | "toggle-guides"
+  | "toggle-rulers"
   // Window
+  | "panel-properties"
+  | "panel-selection"
+  | "panel-mask"
+  | "panel-raw"
+  | "panel-paint"
+  | "panel-vector"
+  | "panel-transform"
+  | "panel-measure"
   | "panel-layers"
   | "panel-document"
   | "panel-channels"
   | "panel-comps"
+  | "panel-campaign"
   | "panel-assets"
   | "panel-neural"
   | "panel-actions"
@@ -114,14 +135,16 @@ export const DESKTOP_MENU: MenuSection[] = [
   {
     label: "File",
     items: [
+      { kind: "command", id: "new-document", label: "New…", accelerator: "CmdOrCtrl+N" },
       { kind: "command", id: "open", label: "Open…", accelerator: "CmdOrCtrl+O" },
       { kind: "command", id: "save", label: "Save", accelerator: "CmdOrCtrl+S" },
       { kind: "command", id: "save-as", label: "Save As…", accelerator: "CmdOrCtrl+Shift+S" },
       { kind: "separator" },
-      { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+E" },
+      { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+Shift+E" },
+      { kind: "command", id: "export-print", label: "CMYK Print PDF…" },
       { kind: "command", id: "batch", label: "Batch Process…" },
       { kind: "separator" },
-      { kind: "predefined", role: "close-window" },
+      { kind: "command", id: "close-document", label: "Close Document", accelerator: "CmdOrCtrl+W" },
     ],
   },
   {
@@ -131,12 +154,21 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "redo", label: "Redo", accelerator: "CmdOrCtrl+Shift+Z" },
       { kind: "separator" },
       // The text roles are what make copy and paste work inside the studio's
-      // own inputs; the studio never sees them.
+      // own inputs; canvas clipboard events route to pixel commands instead.
       { kind: "predefined", role: "cut" },
       { kind: "predefined", role: "copy" },
       { kind: "predefined", role: "paste" },
       { kind: "separator" },
+      { kind: "command", id: "copy-pixels", label: "Copy Selected Pixels" },
+      { kind: "command", id: "copy-merged", label: "Copy Merged", accelerator: "CmdOrCtrl+Shift+C" },
+      { kind: "command", id: "cut-pixels", label: "Cut Selected Pixels" },
+      { kind: "command", id: "paste-pixels", label: "Paste Pixels as Layer" },
+      { kind: "command", id: "paste-in-place", label: "Paste in Place", accelerator: "CmdOrCtrl+Shift+V" },
+      { kind: "command", id: "delete-pixels", label: "Delete Selected Pixels" },
+      { kind: "command", id: "selection-to-layer", label: "Layer via Copy", accelerator: "CmdOrCtrl+Alt+J" },
+      { kind: "separator" },
       { kind: "command", id: "copy-layer-style", label: "Copy Layer Style" },
+      { kind: "command", id: "define-custom-shape", label: "Define Custom Shape" },
       { kind: "command", id: "paste-layer-style", label: "Paste Layer Style" },
       { kind: "separator" },
       { kind: "command", id: "history", label: "Version History…" },
@@ -155,14 +187,23 @@ export const DESKTOP_MENU: MenuSection[] = [
     items: [
       { kind: "command", id: "new-layer", label: "New Layer", accelerator: "CmdOrCtrl+Shift+N" },
       { kind: "command", id: "duplicate-layer", label: "Duplicate Layer", accelerator: "CmdOrCtrl+J" },
-      { kind: "command", id: "group-layer", label: "Group Layer", accelerator: "CmdOrCtrl+G" },
+      { kind: "command", id: "group-layer", label: "Group Selected Layers", accelerator: "CmdOrCtrl+G" },
+      { kind: "command", id: "ungroup-layers", label: "Ungroup Selected Layers", accelerator: "CmdOrCtrl+Shift+G" },
+      { kind: "command", id: "merge-layers", label: "Merge Selected Layers", accelerator: "CmdOrCtrl+E" },
+      { kind: "command", id: "rename-layer", label: "Rename Layer…" },
+      { kind: "command", id: "toggle-layer-lock", label: "Lock / Unlock Selected Layers" },
+      { kind: "command", id: "toggle-layer-visibility", label: "Show / Hide Selected Layers" },
       { kind: "command", id: "delete-layer", label: "Delete Layer" },
       { kind: "command", id: "convert-smart-object", label: "Convert to Smart Object" },
+      { kind: "command", id: "replace-smart-content", label: "Replace Raster Contents…" },
+      { kind: "command", id: "edit-smart-content", label: "Edit Smart Contents…" },
+      { kind: "command", id: "apply-smart-content", label: "Apply Contents to Parent" },
       { kind: "separator" },
       { kind: "command", id: "bring-forward", label: "Bring Forward", accelerator: "CmdOrCtrl+]" },
       { kind: "command", id: "send-backward", label: "Send Backward", accelerator: "CmdOrCtrl+[" },
       { kind: "separator" },
       { kind: "command", id: "layer-style", label: "Layer Style…" },
+      { kind: "command", id: "recolor", label: "Recolor…", accelerator: "CmdOrCtrl+Alt+R" },
       { kind: "separator" },
       { kind: "command", id: "curves", label: "New Curves Adjustment" },
       { kind: "command", id: "levels", label: "New Levels Adjustment" },
@@ -177,6 +218,14 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "invert-selection", label: "Inverse", accelerator: "CmdOrCtrl+Shift+I" },
       { kind: "separator" },
       { kind: "command", id: "select-subject", label: "Subject" },
+      { kind: "command", id: "select-channel", label: "Load Composite Channel", accelerator: "CmdOrCtrl+Alt+2" },
+      { kind: "command", id: "channel-save", label: "Save Selection as Alpha Channel", accelerator: "CmdOrCtrl+Shift+Alt+2" },
+      { kind: "command", id: "channel-load", label: "Load Saved Alpha Channel" },
+      { kind: "command", id: "channel-update", label: "Replace Alpha with Selection" },
+      { kind: "command", id: "channel-rename", label: "Rename Alpha Channel" },
+      { kind: "command", id: "channel-invert", label: "Invert Alpha Channel" },
+      { kind: "command", id: "channel-calculate", label: "Calculate Alpha Channels" },
+      { kind: "command", id: "channel-delete", label: "Delete Alpha Channel" },
     ],
   },
   {
@@ -200,6 +249,7 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "zoom-actual", label: "Actual Size", accelerator: "CmdOrCtrl+1" },
       { kind: "separator" },
       { kind: "command", id: "toggle-guides", label: "Show Guides" },
+      { kind: "command", id: "toggle-rulers", label: "Show Rulers", accelerator: "CmdOrCtrl+R" },
       { kind: "separator" },
       { kind: "predefined", role: "fullscreen" },
       { kind: "predefined", role: "minimize" },
@@ -209,9 +259,18 @@ export const DESKTOP_MENU: MenuSection[] = [
     label: "Window",
     items: [
       { kind: "command", id: "panel-layers", label: "Layers" },
+      { kind: "command", id: "panel-properties", label: "Properties" },
+      { kind: "command", id: "panel-selection", label: "Selection" },
+      { kind: "command", id: "panel-mask", label: "Masks" },
+      { kind: "command", id: "panel-raw", label: "RAW Develop" },
+      { kind: "command", id: "panel-paint", label: "Brushes" },
+      { kind: "command", id: "panel-vector", label: "Type & Vector" },
+      { kind: "command", id: "panel-transform", label: "Transform" },
+      { kind: "command", id: "panel-measure", label: "Measure" },
       { kind: "command", id: "panel-document", label: "Document & Color" },
       { kind: "command", id: "panel-channels", label: "Channels" },
       { kind: "command", id: "panel-comps", label: "Layer Comps & Artboards" },
+      { kind: "command", id: "panel-campaign", label: "Campaign", accelerator: "CmdOrCtrl+Alt+K" },
       { kind: "command", id: "panel-assets", label: "Plugins & Assets" },
       { kind: "command", id: "panel-neural", label: "Neural Lab" },
       { kind: "command", id: "panel-actions", label: "Actions" },

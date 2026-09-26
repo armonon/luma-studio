@@ -82,9 +82,9 @@ export function filterRegionForSelection(
   layer: Layer,
   padding = 0,
 ): FilterRegion | null {
-  if (!layer.bitmap) return null;
-  const width = layer.bitmap.width;
-  const height = layer.bitmap.height;
+  const width = layer.bitmap?.width ?? layer.surface?.grid.width;
+  const height = layer.bitmap?.height ?? layer.surface?.grid.height;
+  if (!width || !height) return null;
   if (!doc.selection) return { x: 0, y: 0, width, height };
   const bounds = doc.selection.bounds;
   if (bounds.w <= 0 || bounds.h <= 0) return null;
@@ -106,6 +106,27 @@ export function filterRegionForSelection(
   const maxY = Math.min(height, Math.ceil(snapNearInteger(Math.max(...corners.map((point) => point.y))) + influence));
   if (maxX <= minX || maxY <= minY) return null;
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+function selectionSamplingRect(layer: Layer, region: FilterRegion) {
+  const forward = affineForLayerTransform(layer.transform);
+  const corners = [
+    transformPoint(forward, region.x, region.y),
+    transformPoint(forward, region.x + region.width, region.y),
+    transformPoint(forward, region.x, region.y + region.height),
+    transformPoint(forward, region.x + region.width, region.y + region.height),
+  ];
+  const x = Math.floor(Math.min(...corners.map(point => point.x))) - 1;
+  const y = Math.floor(Math.min(...corners.map(point => point.y))) - 1;
+  return { x, y, width: Math.ceil(Math.max(...corners.map(point => point.x))) + 1 - x,
+    height: Math.ceil(Math.max(...corners.map(point => point.y))) + 1 - y };
+}
+
+/** Includes blur halo, convolution buffers and the transformed selection scratch. */
+export function destructiveFilterScratchBytes(doc: Document, layer: Layer, region: FilterRegion) {
+  const selection = doc.selection ? selectionSamplingRect(layer, region) : null;
+  return region.width * region.height * 48 + (region.width + region.height + 2) * 64
+    + (selection ? selection.width * selection.height * 16 : 0);
 }
 
 // Apply an ImageData transform to `layer.bitmap`, constrained to `doc.selection`
@@ -131,18 +152,7 @@ function applyPixelFilter(
     const localSelectionContext = localSelection.getContext("2d")!;
     const inverse = inverseAffineForLayerTransform(layer.transform);
     if (!inverse) return;
-    const forward = affineForLayerTransform(layer.transform);
-    const corners = [
-      transformPoint(forward, region.x, region.y),
-      transformPoint(forward, region.x + region.width, region.y),
-      transformPoint(forward, region.x, region.y + region.height),
-      transformPoint(forward, region.x + region.width, region.y + region.height),
-    ];
-    const minX = Math.floor(Math.min(...corners.map((point) => point.x))) - 1;
-    const minY = Math.floor(Math.min(...corners.map((point) => point.y))) - 1;
-    const maxX = Math.ceil(Math.max(...corners.map((point) => point.x))) + 1;
-    const maxY = Math.ceil(Math.max(...corners.map((point) => point.y))) + 1;
-    const selectionRect = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    const selectionRect = selectionSamplingRect(layer, region);
     const selection = selectionRegionCanvas(doc, selectionRect);
     if (!selection) return;
     localSelectionContext.setTransform(

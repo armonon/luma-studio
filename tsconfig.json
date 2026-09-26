@@ -32,5 +32,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "src-tauri/target", "crates/**/target", "dist-desktop", "dist", ".wrangler"]
 }

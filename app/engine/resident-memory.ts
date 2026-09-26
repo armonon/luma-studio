@@ -12,6 +12,8 @@ type RecordEntry = {
 };
 
 export type ResidentMemoryAccount = {
+  active(): boolean;
+  assertCapacity(bytes: number): void;
   resize(bytes: number): void;
   release(): void;
 };
@@ -43,9 +45,10 @@ export class ResidentMemoryBudget {
   register(owner: object, label: string, initialBytes = 0): ResidentMemoryAccount {
     assertBytes(initialBytes, "initialBytes");
     const existing = this.ownerTokens.get(owner);
-    const token = existing ?? Symbol(label);
+    const token = existing && this.records.has(existing) ? existing : Symbol(label);
     if (!existing || !this.records.has(token)) {
       this.ownerTokens.set(owner, token);
+      this.finalizer?.unregister(owner);
       this.records.set(token, { owner: new WeakRef(owner), label, bytes: initialBytes });
       this.residentBytes += initialBytes;
       this.peakResidentBytes = Math.max(this.peakResidentBytes, this.residentBytes);
@@ -55,6 +58,17 @@ export class ResidentMemoryBudget {
     }
     let released = false;
     return {
+      active: () => !released && this.records.has(token),
+      assertCapacity: (bytes) => {
+        assertBytes(bytes, "resident bytes");
+        const record = this.records.get(token);
+        if (released || !record) throw new Error(`Resident-memory account ${label} has been released`);
+        this.sweep();
+        if (bytes > record.bytes && this.residentBytes - record.bytes + bytes > this.ceilingBytes) {
+          this.rejectedAdmissions += 1;
+          throw new ResidentMemoryLimitError("The edit exceeds the shared resident pixel memory ceiling");
+        }
+      },
       resize: (bytes) => {
         if (released) throw new Error(`Resident-memory account ${label} has been released`);
         this.resizeToken(token, bytes, false);
@@ -62,7 +76,7 @@ export class ResidentMemoryBudget {
       release: () => {
         if (released) return;
         released = true;
-        this.finalizer?.unregister(owner);
+        if (this.ownerTokens.get(owner) === token) this.finalizer?.unregister(owner);
         this.releaseToken(token);
       },
     };

@@ -6,6 +6,7 @@ export const FILE_INPUT_LIMITS = {
 } as const;
 
 export const PHOTOSHOP_DECODE_MEMORY_CEILING = 2 * 1024 * 1024 * 1024;
+export const PROJECT_DECODE_MEMORY_CEILING = 512 * 1024 * 1024;
 
 export type PhotoshopImportPlan = {
   mode: "layered" | "flattened";
@@ -30,13 +31,24 @@ export type PhotoshopHeader = {
   depth: number;
   colorMode: number;
   layers: number;
+  /** Validated local layer/mask bounds; absent when only a header is available. */
+  layerPixels?: number;
+  largestLayerPixels?: number;
+  bitmapPixels?: number;
+  largestBitmapPixels?: number;
 };
 
 export function estimatePhotoshopDecodeBytes(header: PhotoshopHeader, sourceBytes: number) {
   const sampleBytes = header.depth === 32 ? 4 : header.depth === 16 ? 2 : 1;
   const pixels = header.width * header.height;
-  const decodedPlanes = pixels * 4 * sampleBytes * Math.max(1, header.layers);
+  const decodedPlanes = (header.layerPixels ?? pixels * Math.max(1, header.layers)) * 4 * sampleBytes;
   const documentPlane = pixels * 4 * sampleBytes;
+  if (header.depth === 8 && header.layerPixels !== undefined && header.largestLayerPixels !== undefined) {
+    // RGB8 channel decoding is serial. Retained layer canvases and conversion
+    // overhead, plus only the largest layer's decode scratch, not a second
+    // decoded stack. Keep source, document scratch and fixed reserves unchanged.
+    return decodedPlanes * 2 + header.largestLayerPixels * 4 * 2 + documentPlane * 3 + sourceBytes * 3 + 256 * 1024 * 1024;
+  }
   // ag-psd materializes raw channels, ImageData and a canvas backing store,
   // while Luma creates its local bitmap/surface master. Real 4,800×6,000
   // corpus files measured close to four decoded-plane working sets plus three
@@ -65,7 +77,7 @@ export function planPhotoshopImport(
   ceiling = PHOTOSHOP_DECODE_MEMORY_CEILING,
 ): PhotoshopImportPlan {
   const layeredEstimatedBytes = estimatePhotoshopDecodeBytes(header, sourceBytes);
-  if (Number.isSafeInteger(layeredEstimatedBytes) && layeredEstimatedBytes <= ceiling) {
+  if (Number.isSafeInteger(layeredEstimatedBytes) && layeredEstimatedBytes <= ceiling && estimatePhotoshopProjectRestoreBytes(header, sourceBytes) <= PROJECT_DECODE_MEMORY_CEILING) {
     return { mode: "layered", estimatedBytes: layeredEstimatedBytes, layeredEstimatedBytes };
   }
   const estimatedBytes = estimatePhotoshopFlattenedDecodeBytes(header, sourceBytes);
@@ -79,12 +91,24 @@ export function planPhotoshopImport(
   return { mode: "flattened", estimatedBytes, layeredEstimatedBytes };
 }
 
+/** Do not auto-open a newly admitted layer stack that cannot fit native restore. */
+export function estimatePhotoshopProjectRestoreBytes(header: PhotoshopHeader, sourceBytes: number) {
+  if (header.bitmapPixels === undefined || header.largestBitmapPixels === undefined) return 0;
+  // Include a retained canvas stack, one serial decoder image, the immutable
+  // original, metadata parser reserve and encoded PNG scratch. Masks restore
+  // through sparse alpha tiles rather than document-sized RGBA decoder planes.
+  return (header.bitmapPixels + header.largestBitmapPixels) * 4 + sourceBytes + 80 * 1024 * 1024;
+}
+
 export function assertSafePhotoshopDecodeBudget(
   header: PhotoshopHeader,
   sourceBytes: number,
   ceiling = PHOTOSHOP_DECODE_MEMORY_CEILING,
 ) {
   const estimated = estimatePhotoshopDecodeBytes(header, sourceBytes);
+  if (estimatePhotoshopProjectRestoreBytes(header, sourceBytes) > PROJECT_DECODE_MEMORY_CEILING) {
+    throw new Error("The editable Photoshop stack exceeds the native project restore memory ceiling; use a flattened preview until disk-backed layer storage is available.");
+  }
   if (!Number.isSafeInteger(estimated) || estimated > ceiling) {
     throw new Error(
       `Photoshop decode would require approximately ${Math.ceil(estimated / 1024 / 1024)} MB; `
@@ -264,6 +288,7 @@ export function inspectPhotoshopHeader(source: ArrayBuffer | Uint8Array): Photos
   const lengthBytes = version === 1 ? 4 : 8;
   const layerAndMask = skipPhotoshopSection(view, offset, lengthBytes);
   let layers = 0;
+  let geometry: { layerPixels: number; largestLayerPixels: number; bitmapPixels: number; largestBitmapPixels: number } | undefined;
   if (layerAndMask.length) {
     const layerInfoLength = photoshopSectionLength(view, layerAndMask.dataOffset, lengthBytes);
     if (layerInfoLength) {
@@ -271,9 +296,94 @@ export function inspectPhotoshopHeader(source: ArrayBuffer | Uint8Array): Photos
       const countOffset = layerAndMask.dataOffset + lengthBytes;
       if (countOffset + 2 > layerAndMask.next) throw new Error("Truncated Photoshop layer table");
       layers = Math.abs(view.getInt16(countOffset, false));
+      if (layers && colorMode === 3) {
+        geometry = inspectLayerPixels(view, countOffset + 2, countOffset + layerInfoLength, layers, lengthBytes);
+      }
+    }
+    // Native Photoshop high-depth files commonly keep the conventional table
+    // empty and store their actual layers in Lr16/Lr32. Treating them as flat
+    // skipped every layer's pixels and also undercounted decode admission.
+    let tagOffset = layerAndMask.dataOffset + lengthBytes + layerInfoLength;
+    if (tagOffset + 4 <= layerAndMask.next) {
+      const globalMask = skipPhotoshopSection(view, tagOffset, 4);
+      if (globalMask.next > layerAndMask.next) throw new Error("Malformed Photoshop global mask");
+      tagOffset = globalMask.next;
+      let nativeTableSeen = false;
+      const largeKeys = new Set(["LMsk", "Lr16", "Lr32", "Layr", "Mt16", "Mt32", "Mtrn", "Alph", "FMsk", "lnk2", "FEid", "FXid", "PxSD"]);
+      while (tagOffset + 12 <= layerAndMask.next) {
+        const signature = String.fromCharCode(...bytes.subarray(tagOffset, tagOffset + 4));
+        if (signature !== "8BIM" && signature !== "8B64") throw new Error("Invalid Photoshop global layer tag");
+        const key = String.fromCharCode(...bytes.subarray(tagOffset + 4, tagOffset + 8));
+        // Modern Photoshop also writes 8B64 for keys outside the historical
+        // PSB list (for example cinf and lnkE). Honor the signature first;
+        // otherwise the low word of the length is mistaken for the next tag.
+        const tagLengthBytes = signature === "8B64" || version === 2 && largeKeys.has(key) ? 8 : 4;
+        const block = skipPhotoshopSection(view, tagOffset + 8, tagLengthBytes);
+        if (block.next > layerAndMask.next) throw new Error("Malformed Photoshop global layer tag length");
+        if (key === "Lr16" || key === "Lr32") {
+          if (nativeTableSeen || layers || depth !== Number(key.slice(2)) || block.length < 2) throw new Error("Ambiguous or malformed Photoshop high-depth layer table");
+          nativeTableSeen = true;
+          layers = Math.abs(view.getInt16(block.dataOffset, false));
+          if (layers) geometry = inspectLayerPixels(view, block.dataOffset + 2, block.next, layers, lengthBytes);
+        }
+        tagOffset = block.dataOffset + Math.ceil(block.length / 4) * 4;
+      }
     }
   }
-  return { container: version === 1 ? "psd" : "psb", channels, width, height, depth, colorMode, layers };
+  return { container: version === 1 ? "psd" : "psb", channels, width, height, depth, colorMode, layers,
+    ...geometry };
+}
+
+/** Walk fixed records without asking the codec to allocate channels or descriptors. */
+function inspectLayerPixels(view: DataView, start: number, end: number, count: number, lengthBytes: 4 | 8) {
+  let offset = start, pixels = 0, largestLayerPixels = 0, channelBytes = 0, bitmapPixels = 0, largestBitmapPixels = 0;
+  const requireBytes = (at: number, length: number, boundary = end) => {
+    if (!Number.isSafeInteger(at + length) || at < start || length < 0 || at + length > boundary) throw new Error("Malformed Photoshop layer record");
+  };
+  const area = (at: number, boundary = end) => {
+    requireBytes(at, 16, boundary);
+    const width = view.getInt32(at + 12) - view.getInt32(at + 4);
+    const height = view.getInt32(at + 8) - view.getInt32(at);
+    if (width < 0 || height < 0 || width > 300_000 || height > 300_000) throw new Error("Invalid Photoshop layer or mask bounds");
+    return width * height;
+  };
+  for (let index = 0; index < count; index++) {
+    requireBytes(offset, 18);
+    const layerArea = area(offset);
+    const channels = view.getUint16(offset + 16);
+    if (channels > 56) throw new Error("Unsafe Photoshop layer channel count");
+    offset += 18;
+    requireBytes(offset, channels * (2 + lengthBytes) + 16);
+    for (let channel = 0; channel < channels; channel++) {
+      channelBytes += photoshopSectionLength(view, offset + 2, lengthBytes);
+      offset += 2 + lengthBytes;
+    }
+    // Blend signature/key, opacity, clipping, flags and filler, then extra data.
+    const extraBytes = view.getUint32(offset + 12);
+    offset += 16;
+    requireBytes(offset, extraBytes);
+    const extraEnd = offset + extraBytes;
+    requireBytes(offset, 4, extraEnd);
+    const maskBytes = view.getUint32(offset);
+    const maskStart = offset + 4;
+    requireBytes(maskStart, maskBytes, extraEnd);
+    let maskArea = 0;
+    if (maskBytes) {
+      if (maskBytes < 18) throw new Error("Truncated Photoshop mask bounds");
+      maskArea += area(maskStart, extraEnd);
+      // Match the codec's secondary-mask layout (flags/color then rectangle).
+      if (maskBytes >= 36) maskArea += area(maskStart + 20, extraEnd);
+    }
+    const layerPixels = layerArea * Math.max(1, Math.ceil(channels / 4)) + maskArea;
+    pixels += layerPixels;
+    bitmapPixels += layerArea;
+    largestBitmapPixels = Math.max(largestBitmapPixels, layerArea);
+    largestLayerPixels = Math.max(largestLayerPixels, layerPixels);
+    if (!Number.isSafeInteger(pixels) || !Number.isSafeInteger(channelBytes)) throw new Error("Unsafe Photoshop layer allocation");
+    offset = extraEnd;
+  }
+  requireBytes(offset, channelBytes);
+  return { layerPixels: pixels, largestLayerPixels, bitmapPixels, largestBitmapPixels };
 }
 
 export function assertSafePhotoshopHeader(

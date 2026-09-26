@@ -20,11 +20,11 @@ test("desktop icon-only commands expose stable assistive names", () => {
   for (const label of [
     "Add paint layer",
     "Add adjustment layer",
-    "Group active layer",
+    "Group selected layers",
     "Move active layer up",
     "Move active layer down",
     "Open layer styles",
-    "Delete active layer",
+    "Delete selected layers",
     "Focus this layer",
     "Record action",
     "Undo",

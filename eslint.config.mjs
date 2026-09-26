@@ -17,6 +17,12 @@ const eslintConfig = defineConfig([
     ".vinext/**",
     ".wrangler/**",
     "src-tauri/target/**",
+    // Qualification archives, generated diagnostics and Rust outputs are not
+    // maintained JS/TS source. Traversing them grows with every corpus run.
+    "artifacts/**",
+    "crates/**/target/**",
+    "public/pdfjs/**",
+    "public/onnxruntime/**",
     "next-env.d.ts",
   ]),
 ]);

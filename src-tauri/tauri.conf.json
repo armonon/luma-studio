@@ -31,7 +31,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://huggingface.co https://*.huggingface.co https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      "csp": "default-src 'self' customprotocol: asset:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://huggingface.co https://*.huggingface.co https://us.aws.cdn.hf.co https://luma-studio-preview.armonon.chatgpt.site; img-src 'self' asset: http://asset.localhost blob: data:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'"
     }
   },
   "bundle": {

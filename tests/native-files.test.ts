@@ -1,6 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { developNativeRaw, openNativeAiSignIn, openNativeFile, saveNativeFile } from "../app/engine/native-files.ts";
+import { developNativeRaw, openNativeAiSignIn, openNativeFile, saveNativeFile, saveNativeProject } from "../app/engine/native-files.ts";
+
+test("native project writes require an explicit valid receipt before clearing dirty state", async () => {
+  const bytes = new Uint8Array([1]);
+  for (const result of [false, null, undefined, 1, "true", {}]) {
+    await assert.rejects(saveNativeProject(bytes, "work.luma", "/tmp/work.luma", async <T>() => result as T), /did not confirm/);
+  }
+  for (const result of [false, undefined, 1, {}, "", " ", "bad\0path", "a".repeat(4097)]) {
+    await assert.rejects(saveNativeProject(bytes, "work.luma", undefined, async <T>() => result as T), /invalid save receipt/);
+  }
+  assert.equal(await saveNativeProject(bytes, "work.luma", undefined, async <T>() => null as T), null);
+  assert.equal(await saveNativeFile(bytes, "work.png", async <T>() => false as T), false);
+  await assert.rejects(saveNativeFile(bytes, "work.png", async <T>() => "true" as T), /did not confirm/);
+});
 
 test("native open packets preserve UTF-8 file names and raw bytes", async () => {
   const name = new TextEncoder().encode("café.psd");

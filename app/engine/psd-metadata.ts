@@ -32,6 +32,9 @@ export type PhotoshopDocumentMetadata = {
   originalDocumentFingerprint?: string;
   /** ag-psd resources that it can decode and write back. */
   imageResources?: Psd["imageResources"];
+  /** Original global text engine, reusable only while its complete layer mapping is unchanged. */
+  engineData?: Psd["engineData"];
+  originalLayerCount?: number;
   /** Embedded and linked smart-object payloads. Data is retained byte-for-byte. */
   linkedFiles?: Psd["linkedFiles"];
   /** Raw resource blocks that ag-psd does not expose, including ICC profiles. */

@@ -1,6 +1,10 @@
 "use client";
 
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useCallback, useState } from "react";
+import type { StudioCommand } from "@/app/desktop/menu-model";
+import type { LayerSelectionModifiers } from "@/app/engine/layer-selection";
+import LayerContextMenu from "../layer-context-menu";
+import { ArrowDown, ArrowUp, Folder, Plus, Trash2 } from "lucide-react";
 import { EFFECT_LABELS, type Layer } from "@/app/engine/document";
 import {
   PRO_ADJUSTMENT_KINDS,
@@ -17,6 +21,10 @@ export type LayersPanelProps = Readonly<{
   studio: Studio | null;
   layers: Layer[];
   activeLayerId: string | null;
+  selectedLayerIds: string[];
+  onSelectLayers: (layer: Layer, modifiers: LayerSelectionModifiers) => void;
+  onCommand: (id: StudioCommand) => void;
+  commandEnabled: (id: StudioCommand) => boolean;
   activeLayer: Layer | null | undefined;
   draggedLayerId: string | null;
   onDragStart: (layerId: string) => void;
@@ -31,12 +39,17 @@ export type LayersPanelProps = Readonly<{
   onAddTone: () => void;
   onAddProfessionalAdjustment: (kind: ProAdjustmentKind) => void;
   onRemoveActive: () => void;
+  onRenameLayer: (layer: Layer) => void;
 }>;
 
 export default function LayersPanel({
   studio,
   layers,
   activeLayerId,
+  selectedLayerIds,
+  onSelectLayers,
+  onCommand,
+  commandEnabled,
   activeLayer,
   draggedLayerId,
   onDragStart,
@@ -50,14 +63,16 @@ export default function LayersPanel({
   onAddBlank,
   onAddTone,
   onAddProfessionalAdjustment,
-  onRemoveActive,
+  onRenameLayer,
 }: LayersPanelProps) {
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
   return (
     <section className="glass-card layers-card">
       <header>
-        <strong>Layers</strong>
+        <strong>Layers <small className="layer-count">{layers.length}{selectedLayerIds.length > 1 ? ` · ${selectedLayerIds.length} selected` : ""}</small></strong>
         <div className="layer-add-menu">
-          <button onClick={onAddBlank} title="Add paint layer" aria-label="Add paint layer">＋</button>
+          <button onClick={onAddBlank} title="Add paint layer" aria-label="Add paint layer"><Plus size={16} /></button>
           <select
             aria-label="Add adjustment layer"
             title="Add adjustment layer"
@@ -88,6 +103,7 @@ export default function LayersPanel({
         <VirtualLayerStack
           layers={layers}
           activeLayerId={activeLayerId}
+          selectedLayerIds={selectedLayerIds}
           draggedLayerId={draggedLayerId}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
@@ -97,42 +113,40 @@ export default function LayersPanel({
             studio.reorderLayer(sourceId, targetIndex - sourceIndex);
             onDragEnd();
           }}
-          onSelect={onSelectLayer}
+          onSelect={onSelectLayers}
+          onDeleteSelection={() => onCommand("delete-layer")}
+          onContextMenu={(layer, point) => {
+            if (!selectedLayerIds.includes(layer.id)) onSelectLayers(layer, {});
+            setContextMenu(point);
+          }}
           onOpenStyle={(layer) => {
-            onSetActiveLayerId(layer.id);
+            onSelectLayers(layer, {});
             onOpenLayerStyle(layer.id);
           }}
-          onRename={(layer) => {
-            const name = window.prompt("Layer name", layer.name)?.trim();
-            if (name) studio?.setLayerProp(layer.id, "name", name, "Layer renamed");
-          }}
+          onRename={onRenameLayer}
           onToggleVisible={(layer) => onSetLayerVisible(layer.id, !layer.visible)}
           onDelete={(layer) => {
             if (!studio) return;
             studio.removeLayer(layer.id);
             if (activeLayerId === layer.id) onSetActiveLayerId(studio.doc.layers[0]?.id ?? null);
           }}
+          canDelete={(layer) => Boolean(studio && !studio.layerBatchReason([layer.id], "delete"))}
         />
       </Suspense>
       <div className="layer-stack-footer" aria-label="Layer actions">
-        <button onClick={() => {
-          if (!studio || !activeLayerId) return;
-          if (activeLayer?.kind === "group") studio.ungroupLayer(activeLayer.id);
-          else {
-            const group = studio.groupLayer(activeLayerId);
-            if (group) onSetActiveLayerId(group.id);
-          }
-        }} title={activeLayer?.kind === "group" ? "Ungroup" : "Group active layer"} aria-label={activeLayer?.kind === "group" ? "Ungroup active layer" : "Group active layer"}>⌘</button>
-        <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, -1); }} title="Move up" aria-label="Move active layer up">↑</button>
-        <button onClick={() => { if (studio && activeLayerId) studio.reorderLayer(activeLayerId, 1); }} title="Move down" aria-label="Move active layer down">↓</button>
-        <button onClick={() => activeLayer && onOpenLayerStyle(activeLayer.id)} title="Layer styles and advanced blending" aria-label="Open layer styles">fx</button>
-        <button className="danger" onClick={onRemoveActive} title="Delete active" aria-label="Delete active layer">⌫</button>
+        <button disabled={!commandEnabled("group-layer")} onClick={() => onCommand("group-layer")} title="Group selected layers (⌘G)" aria-label="Group selected layers"><Folder size={15} /></button>
+        <button disabled={!commandEnabled("bring-forward") || layers[0]?.id === activeLayerId} onClick={() => onCommand("bring-forward")} title="Move up" aria-label="Move active layer up"><ArrowUp size={15} /></button>
+        <button disabled={!commandEnabled("send-backward") || layers.at(-1)?.id === activeLayerId} onClick={() => onCommand("send-backward")} title="Move down" aria-label="Move active layer down"><ArrowDown size={15} /></button>
+        <button disabled={!commandEnabled("layer-style")} onClick={() => onCommand("layer-style")} title="Layer styles and advanced blending" aria-label="Open layer styles">fx</button>
+        <button disabled={!commandEnabled("delete-layer")} className="danger" onClick={() => onCommand("delete-layer")} title="Delete selected layers" aria-label="Delete selected layers"><Trash2 size={15} /></button>
       </div>
-      {activeLayer && (
+      {selectedLayerIds.length > 1 && <div className="layer-selection-summary"><span>Shift-click a range · ⌘/Ctrl-click to toggle</span><button disabled={!commandEnabled("merge-layers")} title={studio?.layerBatchReason(selectedLayerIds, "merge") ?? "Rasterize selected layers · ⌘E · undo restores originals"} onClick={() => onCommand("merge-layers")}>Merge selected</button></div>}
+      {contextMenu && <LayerContextMenu {...contextMenu} count={selectedLayerIds.length} enabled={commandEnabled} execute={onCommand} close={closeContextMenu} mergeReason={studio?.layerBatchReason(selectedLayerIds, "merge")} />}
+      {activeLayer && selectedLayerIds.length <= 1 && (
         <div className="layer-controls">
           <label>
-            <span>Master</span>
-            <input type="range" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => onPreviewOpacity(activeLayer.id, Number(event.target.value) / 100)} onPointerUp={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} onBlur={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} />
+            <span>Opacity</span>
+            <input type="range" min="0" max="100" disabled={studio?.isLayerLocked(activeLayer.id)} value={Math.round(activeLayer.opacity * 100)} onChange={(event) => onPreviewOpacity(activeLayer.id, Number(event.target.value) / 100)} onPointerUp={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} onBlur={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} />
             <output>{Math.round(activeLayer.opacity * 100)}%</output>
           </label>
           {activeLayer.kind === "group"

@@ -20,6 +20,8 @@ import { layerNeedsBackdrop } from "./gl-renderer";
  */
 
 export type NativeRefusal =
+  /** Portable viewport composition keeps source-backed layers tile-bounded. */
+  | "source-backed"
   /** Adjustment layers transform the composite beneath them, they do not add to it. */
   | "adjustment-layer"
   /** A group is a nested composite, not an entry in a flat stack. */
@@ -52,6 +54,7 @@ export function nativeFlattenRefusal(doc: Document): NativeRefusal {
 
   const visible = doc.layers.filter((layer) => layer.visible && layer.opacity > 0);
   for (const layer of visible) {
+    if (layer.surface?.store.sourceState()) return "source-backed";
     if (layer.kind === "group") return "group";
     if (layer.kind.startsWith("adjustment-")) return "adjustment-layer";
     if (layer.parentId) return "group";
@@ -98,6 +101,7 @@ export function nativeCanUseSurfaceDirectly(layer: Layer, doc: Document): boolea
     && layer.surface.grid.height === doc.height
     && transform.tx === 0 && transform.ty === 0
     && transform.sx === 1 && transform.sy === 1 && transform.rotation === 0
+    && !(transform.skewX ?? 0)
     && !layer.filters?.some((filter) => filter.enabled)
     && !layer.effects?.some((effect) => effect.enabled)
     && !layer.clipping

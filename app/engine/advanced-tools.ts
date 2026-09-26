@@ -1,5 +1,18 @@
 export type Point = { x: number; y: number };
 export type Quad = readonly [Point, Point, Point, Point];
+
+/** Refuse folds, degenerate quads and non-finite input before allocating warp buffers. */
+export function isValidTransformQuad(quad: Quad): boolean {
+  if (quad.length !== 4 || quad.some(p => !p || !Number.isFinite(p.x) || !Number.isFinite(p.y))) return false;
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = quad[i], b = quad[(i + 1) % 4], c = quad[(i + 2) % 4];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (!Number.isFinite(cross) || Math.abs(cross) < 1 || (sign && Math.sign(cross) !== sign)) return false;
+    sign = Math.sign(cross);
+  }
+  return true;
+}
 export type PixelBuffer = { width: number; height: number; data: Uint8ClampedArray };
 export type PatternKind = "checker" | "stripes" | "dots";
 

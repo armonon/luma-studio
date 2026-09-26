@@ -55,14 +55,35 @@ function ihdr(width: number, height: number) {
 
 type CompressedGroup = { chunks: Uint8Array[]; bytes: number };
 
-function collectCompressed(stream: ReadableStream<Uint8Array>) {
+/** Conservative: only known empty raster masters can skip compositing. */
+export function isProvablyTransparent(doc: Document) {
+  return doc.layers.filter(layer => layer.visible).every(layer => layer.kind === "raster"
+    && !layer.bitmap && Boolean(layer.surface) && !layer.surface!.store.sourceState() && layer.surface!.store.stats().residentTiles === 0
+    && !layer.effects?.some(effect => effect.enabled) && !layer.filters?.some(filter => filter.enabled));
+}
+
+export function defaultExportHalo(doc: Document) {
+  // Plain paint/vector layers need only edge sampling. A fixed 256px halo
+  // around every 16-row band used to render ~33 times the necessary pixels.
+  return doc.layers.some(layer => layer.effects?.some(effect => effect.enabled)
+    || layer.filters?.some(filter => filter.enabled) || layer.spatial?.enabled || layer.text?.spatial?.enabled) ? 256 : 2;
+}
+
+function collectCompressed(stream: ReadableStream<Uint8Array>, maximumBytes: number) {
   return (async () => {
     const reader = stream.getReader();
     const groups: CompressedGroup[] = [];
     let group: CompressedGroup = { chunks: [], bytes: 0 };
+    let total = 0;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        const error = new Error("PNG export exceeds the compressed-output memory ceiling");
+        await reader.cancel(error);
+        throw error;
+      }
       let offset = 0;
       while (offset < value.byteLength) {
         const room = MAX_IDAT_BYTES - group.bytes;
@@ -88,6 +109,8 @@ function collectCompressed(stream: ReadableStream<Uint8Array>) {
 export async function exportTiledPng(
   doc: Document,
   options: {
+    assertCurrent?: () => void;
+    maximumCompressedBytes?: number;
     tileWidth?: number;
     bandHeight?: number;
     halo?: number;
@@ -107,7 +130,7 @@ export async function exportTiledPng(
   }
   const tileWidth = Math.max(64, Math.min(3072, Math.round(options.tileWidth ?? 2048)));
   const bandHeight = Math.max(1, Math.min(64, Math.round(options.bandHeight ?? 16)));
-  const halo = Math.max(0, Math.min(512, Math.round(options.halo ?? 256)));
+  const halo = Math.max(0, Math.min(512, Math.round(options.halo ?? defaultExportHalo(doc))));
   // The region keeps the size it asked for even where it hangs off the
   // document — an artboard partly outside the canvas exports with transparent
   // padding, which is what Photoshop does and what the artboard is *for*.
@@ -127,12 +150,19 @@ export async function exportTiledPng(
   };
   const compressor = new CompressionStream("deflate");
   const writer = compressor.writable.getWriter();
-  const compressed = collectCompressed(compressor.readable);
+  const maximumBytes = options.maximumCompressedBytes ?? 128 * 1024 * 1024;
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 128 * 1024 * 1024) throw new Error("Invalid PNG output memory ceiling");
+  const compressed = collectCompressed(compressor.readable, maximumBytes);
+  // The producer may fail before awaiting the consumer; retain its rejection.
+  void compressed.catch(() => undefined);
+  const transparent = isProvablyTransparent(doc);
 
+  try {
   for (let bandY = 0; bandY < region.height; bandY += bandHeight) {
+    options.assertCurrent?.();
     const height = Math.min(bandHeight, region.height - bandY);
     const horizontalTiles: Array<{ x: number; width: number; data: Uint8ClampedArray }> = [];
-    for (let tileX = 0; tileX < region.width; tileX += tileWidth) {
+    for (let tileX = 0; !transparent && tileX < region.width; tileX += tileWidth) {
       const width = Math.min(tileWidth, region.width - tileX);
       // Where this tile sits in the document, and how much of it the document
       // actually covers. An artboard may hang off the canvas, and reading past
@@ -203,12 +233,21 @@ export async function exportTiledPng(
         scanline.set(tile.data.subarray(sourceStart, sourceStart + tile.width * 4), 1 + tile.x * 4);
       }
       await writer.write(scanline);
+      options.assertCurrent?.();
     }
   }
   await writer.close();
   const idatGroups = await compressed;
+  options.assertCurrent?.();
   const parts: BlobPart[] = [blobPart(PNG_SIGNATURE), ...chunk("IHDR", [ihdr(region.width, region.height)]).map(blobPart)];
   for (const group of idatGroups) parts.push(...chunk("IDAT", group.chunks).map(blobPart));
   parts.push(...chunk("IEND", []).map(blobPart));
   return new Blob(parts, { type: "image/png" });
+  } catch (error) {
+    await writer.abort(error).catch(() => undefined);
+    await compressed.catch(() => undefined);
+    throw error;
+  } finally {
+    writer.releaseLock();
+  }
 }

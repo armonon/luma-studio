@@ -1,14 +1,12 @@
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { validUpdaterConfiguration } from "./release-config.mjs";
+import { releaseSourceId, evidenceMatchesSource } from "./release-source-id.mjs";
+import { completedCorpusEvidence, independentPhotoshopCorpusEvidence } from "./corpus-evidence.mjs";
 
 const requested = process.argv[2] ?? "status";
 const phases = { rc0: 0, rc1: 1, rc2: 2, status: 2 };
 if (!(requested in phases)) throw new Error("Usage: node build/check-release-evidence.mjs [rc0|rc1|rc2|status]");
-
-async function exists(path) {
-  try { await access(path); return true; } catch { return false; }
-}
 
 async function json(path) {
   try { return JSON.parse(await readFile(path, "utf8")); } catch { return null; }
@@ -28,10 +26,12 @@ const updaterConfig = tauriRelease?.plugins?.updater ?? tauri.plugins?.updater;
 const updaterArtifacts = tauriRelease?.bundle?.createUpdaterArtifacts ?? tauri.bundle?.createUpdaterArtifacts;
 const nativeMain = await readFile("src-tauri/src/main.rs", "utf8");
 const corpus = await json("artifacts/compatibility-corpus-report.json");
+const externalCorpus = await json("artifacts/photoshop-external-report.json");
+const externalQualified = independentPhotoshopCorpusEvidence(externalCorpus, corpus);
 const corpusResults = Array.isArray(corpus?.results) ? corpus.results : [];
 const photoshopResults = corpusResults.filter((entry) => entry.kind === "psd" || entry.kind === "psb");
 const corpusIsEditable = photoshopResults.length > 0 && photoshopResults.every((entry) =>
-  entry.status === "pass" && ["layered", "composite-only"].includes(entry.metrics?.importMode));
+  entry.status === "pass" && entry.metrics?.importMode === "layered");
 const corpusHasReferences = photoshopResults.length > 0 && photoshopResults.every((entry) =>
   entry.status === "pass" && entry.metrics?.reference === "photoshop-golden");
 const notarization = await json("artifacts/notarization-report.json");
@@ -40,20 +40,25 @@ const crashes = await json("artifacts/crash-reporting-report.json");
 const cleanInstall = await json("artifacts/clean-install-report.json");
 const cleanMachines = Array.isArray(cleanInstall?.results) ? cleanInstall.results : [];
 const uniqueCleanMachines = new Set(cleanMachines.map((entry) => entry?.machineId).filter(Boolean));
+const sourceSha256 = releaseSourceId();
+const local = await json("artifacts/local-hardening-report.json");
+const localQualified = evidenceMatchesSource(local, sourceSha256) && local.unchanged === true &&
+  ["types", "engine-regressions", "lint", "native-bridge", "native-core"].every(id => local.checks?.some(check => check.id === id && check.pass === true && check.exitCode === 0));
+const localDetail = localQualified ? "current-source local campaign passed" : "fresh local qualification required: npm run qualify:local";
 
 const checks = [
   { phase: 0, name: "P0 checkpoint tagged", pass: tagged("v0.5.0-alpha-p0"), detail: "v0.5.0-alpha-p0" },
-  { phase: 0, name: "Sparse selection implementation", pass: await exists("app/engine/alpha-surface.ts") && await exists("tests/extreme-alpha-memory.test.ts"), detail: "implementation + extreme-size tests" },
-  { phase: 0, name: "Sparse layer-mask implementation", pass: await exists("app/engine/layer-mask.ts") && await exists("tests/sparse-mask.test.ts"), detail: "shared alpha tiles + mask tests" },
-  { phase: 0, name: "Recovery/destructive tests", pass: await exists("tests/recovery-rc.test.ts"), detail: "workspace recovery, corrupt import, long history" },
+  { phase: 0, name: "Sparse selection regressions", pass: localQualified, detail: localDetail },
+  { phase: 0, name: "Sparse layer-mask regressions", pass: localQualified, detail: localDetail },
+  { phase: 0, name: "Recovery/destructive regressions", pass: localQualified, detail: localDetail },
   {
     phase: 1,
     name: "Real compatibility corpus",
-    pass: !!corpus && corpus.total >= 50 && corpus.failed === 0 &&
+    pass: evidenceMatchesSource(corpus, sourceSha256) && completedCorpusEvidence(corpus) && corpus.total >= 50 && corpus.failed === 0 &&
       ["psd", "psb", "raw"].every((kind) => corpusResults.some((entry) => entry.kind === kind && entry.status === "pass")) &&
-      corpusIsEditable && corpusHasReferences,
+      corpusIsEditable && corpusHasReferences && externalQualified,
     detail: corpus
-      ? `${corpus.passed ?? 0}/${corpus.total ?? 0} pass · editable ${corpusIsEditable ? "yes" : "no"} · Photoshop goldens ${corpusHasReferences ? "yes" : "no"}`
+      ? `${evidenceMatchesSource(corpus, sourceSha256) ? "CURRENT SOURCE" : "STALE EVIDENCE"} · ${completedCorpusEvidence(corpus) ? "complete" : "incomplete/unverified campaign"} · ${corpus.passed ?? 0}/${corpus.total ?? 0} workflow pass · ${photoshopResults.filter(entry => entry.status === "pass" && entry.metrics?.importMode === "layered").length}/${photoshopResults.length} layered · all editable ${corpusIsEditable ? "yes" : "no"} · Photoshop goldens ${corpusHasReferences ? "yes" : "no"} · artifacts/compatibility-corpus-report.json`
       : "report missing",
   },
   {
@@ -68,7 +73,7 @@ const checks = [
   {
     phase: 2,
     name: "Updater failure campaign",
-    pass: updater?.signatureVerified === true && updater?.previousVersionUpgrade === true &&
+    pass: evidenceMatchesSource(updater, sourceSha256) && updater?.signatureVerified === true && updater?.previousVersionUpgrade === true &&
       updater?.interruptedUpdateRecovered === true && updater?.invalidSignatureRejected === true &&
       updater?.offlineRetryRecovered === true && typeof updater?.fromVersion === "string" &&
       typeof updater?.toVersion === "string" && updater.fromVersion !== updater.toVersion &&
@@ -78,7 +83,7 @@ const checks = [
   {
     phase: 2,
     name: "Apple signing and notarization",
-    pass: notarization?.status === "Accepted" && notarization?.bundleId === tauri.identifier &&
+    pass: evidenceMatchesSource(notarization, sourceSha256) && notarization?.status === "Accepted" && notarization?.bundleId === tauri.identifier &&
       notarization?.gatekeeperAccepted === true && notarization?.stapledTicket === true &&
       notarization?.hardenedRuntime === true && /^[A-Z0-9]{10}$/.test(notarization?.teamId ?? "") &&
       /^[a-f0-9]{64}$/.test(notarization?.executableSha256 ?? ""),
@@ -87,20 +92,21 @@ const checks = [
   {
     phase: 2,
     name: "Remote crash reporting",
-    pass: crashes?.remoteCrashReceived === true && crashes?.symbolsResolved === true && crashes?.sensitiveDataScrubbed === true &&
+    pass: evidenceMatchesSource(crashes, sourceSha256) && crashes?.remoteCrashReceived === true && crashes?.symbolsResolved === true && crashes?.sensitiveDataScrubbed === true &&
       typeof crashes?.receiptId === "string" && crashes.receiptId.length > 8,
     detail: crashes ? "evidence loaded" : "report missing",
   },
   {
     phase: 2,
     name: "Clean-machine installation",
-    pass: cleanInstall?.withoutDevEnvironment === true && uniqueCleanMachines.size >= 2 &&
+    pass: evidenceMatchesSource(cleanInstall, sourceSha256) && cleanInstall?.withoutDevEnvironment === true && uniqueCleanMachines.size >= 2 &&
       cleanMachines.every((entry) => entry?.installed === true && entry?.launched === true && entry?.fileAssociations === true),
     detail: cleanInstall ? `${uniqueCleanMachines.size} independently identified machines` : "report missing",
   },
 ];
 
 const selected = checks.filter((check) => check.phase <= phases[requested]);
+if (phases[requested] >= 1) console.log(`Independent Photoshop evidence: ${externalQualified ? "qualified" : externalCorpus ? `${externalCorpus.qualificationLevel ?? "unclassified"} · ${externalCorpus.passed ?? 0}/${externalCorpus.total ?? 0} pass · not production-qualified` : "missing"}`);
 for (const check of selected) console.log(`${check.pass ? "PASS" : "FAIL"} ${check.name} — ${check.detail}`);
 const failed = selected.filter((check) => !check.pass);
 console.log(`\n${selected.length - failed.length}/${selected.length} release evidence gates pass.`);

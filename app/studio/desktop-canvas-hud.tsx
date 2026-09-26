@@ -1,6 +1,7 @@
 "use client";
 
 import type { Layer } from "@/app/engine/document";
+import { Pin, PinOff, SlidersHorizontal, X } from "lucide-react";
 import type { SpaceDeckCommand, SpaceDeckContext, SpaceDeckPoint } from "./space-deck-model";
 
 export type SpaceDeckFeature =
@@ -112,7 +113,7 @@ export default function DesktopCanvasHud({
     >
       <header className="space-deck-header">
         <span>
-          <i aria-hidden="true">⌘</i>
+          <SlidersHorizontal aria-hidden="true" />
           <strong>{toolLabel}</strong>
           <small>{contextName[context]}</small>
         </span>
@@ -124,8 +125,8 @@ export default function DesktopCanvasHud({
           aria-pressed={pinned}
           title={pinned ? "Pinned · Space to close" : "Keep on screen"}
           onClick={() => onPinnedChange(!pinned)}
-        >{pinned ? "●" : "○"}</button>
-        <button type="button" onClick={onClose} aria-label="Close tool features">×</button>
+        >{pinned ? <Pin /> : <PinOff />}</button>
+        <button type="button" onClick={onClose} aria-label="Close tool features"><X /></button>
       </header>
 
       <div className="space-deck-features" aria-label={`${toolLabel} controls`}>

@@ -1,3 +1,11 @@
+import { cloneCubeLut, sampleCubeLut, type CubeLut } from "./cube-lut";
+
+export type BlackWhiteMix = [number, number, number, number, number, number];
+export const BLACK_WHITE_BANDS = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas"] as const;
+// These coefficients reproduce the previous Rec.709 conversion exactly.
+export const DEFAULT_BLACK_WHITE_MIX: BlackWhiteMix = [21.26, 92.78, 71.52, 78.74, 7.22, 28.48];
+export type GradientMapStop = { position: number; color: string };
+
 export type ProAdjustmentKind =
   | "black-white"
   | "color-balance"
@@ -18,12 +26,12 @@ export type ChannelMixerMatrix = [
 ];
 
 export type ProAdjustmentParams =
-  | { kind: "black-white"; amount: number; tint: string; tintAmount: number }
+  | { kind: "black-white"; amount: number; tint: string; tintAmount: number; colorMix?: BlackWhiteMix }
   | { kind: "color-balance"; shadows: RgbOffset; midtones: RgbOffset; highlights: RgbOffset; preserveLuminosity: boolean }
   | { kind: "photo-filter"; color: string; density: number; preserveLuminosity: boolean }
   | { kind: "channel-mixer"; matrix: ChannelMixerMatrix }
-  | { kind: "color-lookup"; preset: "cinematic" | "teal-orange" | "film" | "chrome"; intensity: number }
-  | { kind: "gradient-map"; shadow: string; highlight: string; reverse: boolean; smoothness: number }
+  | { kind: "color-lookup"; preset: "cinematic" | "teal-orange" | "film" | "chrome"; intensity: number; lut?: CubeLut }
+  | { kind: "gradient-map"; shadow: string; highlight: string; reverse: boolean; smoothness: number; stops?: GradientMapStop[] }
   | { kind: "relight-field"; centerX: number; centerY: number; radius: number; intensity: number; angle: number; temperature: number; falloff: number }
   | { kind: "threshold"; level: number }
   | { kind: "posterize"; levels: number }
@@ -69,6 +77,12 @@ export function cloneProAdjustment(params: ProAdjustmentParams): ProAdjustmentPa
     throw new TypeError(`Not a professional adjustment: ${JSON.stringify(params)?.slice(0, 80)}`);
   }
   switch (params.kind) {
+    case "black-white": {
+      if (params.colorMix && (params.colorMix.length !== 6 || !params.colorMix.every((v) => Number.isFinite(v) && v >= -200 && v <= 300))) throw new Error("Black & White needs six finite color weights between -200 and 300");
+      return { ...params, ...(params.colorMix ? { colorMix: [...params.colorMix] as BlackWhiteMix } : {}) };
+    }
+    case "gradient-map": return { ...params, ...(params.stops ? { stops: gradientMapStops(params) } : {}) };
+    case "color-lookup": return { ...params, ...(params.lut ? { lut: cloneCubeLut(params.lut) } : {}) };
     case "color-balance": return {
       ...params,
       shadows: [...params.shadows],
@@ -91,6 +105,12 @@ function parseHex(color: string): [number, number, number] {
 }
 
 function mix(a: number, b: number, amount: number) { return a + (b - a) * amount; }
+
+export function gradientMapStops(params: Extract<ProAdjustmentParams, { kind: "gradient-map" }>): GradientMapStop[] {
+  const stops = params.stops ?? [{ position: 0, color: params.shadow }, { position: 1, color: params.highlight }];
+  if (stops.length < 2 || stops.length > 16 || stops.some((s) => !s || !Number.isFinite(s.position) || s.position < 0 || s.position > 1 || !/^#[\da-f]{6}$/i.test(s.color))) throw new Error("Gradient Map needs 2–16 valid color stops");
+  return stops.map((s) => ({ ...s })).sort((a, b) => a.position - b.position);
+}
 
 function lookupColor(preset: Extract<ProAdjustmentParams, { kind: "color-lookup" }>["preset"], r: number, g: number, b: number) {
   switch (preset) {
@@ -137,6 +157,7 @@ export function applyProAdjustmentToImageData(
   spatial?: ProAdjustmentSpatialContext,
 ) {
   const data = image.data;
+  const gradient = params.kind === "gradient-map" ? gradientMapStops(params).map((s) => ({ ...s, rgb: parseHex(s.color) })) : null;
   const tint = params.kind === "black-white" ? parseHex(params.tint)
     : params.kind === "photo-filter" ? parseHex(params.color)
     : params.kind === "gradient-map" ? [parseHex(params.shadow), parseHex(params.highlight)] as const
@@ -149,7 +170,15 @@ export function applyProAdjustmentToImageData(
 
     switch (params.kind) {
       case "black-white": {
-        const gray = originalLuma;
+        let gray = originalLuma;
+        if (params.colorMix) {
+          const low = Math.min(r, g, b), high = Math.max(r, g, b), chroma = high - low;
+          if (chroma > 0) {
+            const hue = ((high === r ? (g - b) / chroma : high === g ? (b - r) / chroma + 2 : (r - g) / chroma + 4) + 6) % 6;
+            const band = Math.floor(hue);
+            gray = clamp01(low + chroma * mix(params.colorMix[band], params.colorMix[(band + 1) % 6], hue - band) / 100);
+          }
+        }
         const tinted = tint as [number, number, number];
         const tintAmount = clamp01(params.tintAmount);
         r = mix(r, mix(gray, tinted[0] * gray * 1.15, tintAmount), clamp01(params.amount));
@@ -195,19 +224,23 @@ export function applyProAdjustmentToImageData(
         break;
       }
       case "color-lookup": {
-        const mapped = lookupColor(params.preset, r, g, b);
+        const mapped = params.lut ? sampleCubeLut(params.lut, r, g, b) : lookupColor(params.preset, r, g, b);
         const amount = clamp01(params.intensity);
         r = mix(r, mapped[0], amount); g = mix(g, mapped[1], amount); b = mix(b, mapped[2], amount);
         break;
       }
       case "gradient-map": {
-        const [shadow, highlight] = tint as readonly [[number, number, number], [number, number, number]];
         let position = params.reverse ? 1 - originalLuma : originalLuma;
         const smoothness = clamp01(params.smoothness);
         position = mix(position, position * position * (3 - 2 * position), smoothness);
-        r = mix(shadow[0], highlight[0], position);
-        g = mix(shadow[1], highlight[1], position);
-        b = mix(shadow[2], highlight[2], position);
+        const stops = gradient!;
+        const index = stops.findIndex((s) => s.position > position);
+        const left = index < 0 ? stops[stops.length - 1] : stops[Math.max(0, index - 1)];
+        const right = index < 0 ? left : stops[index];
+        const t = right.position > left.position ? clamp01((position - left.position) / (right.position - left.position)) : 0;
+        r = mix(left.rgb[0], right.rgb[0], t);
+        g = mix(left.rgb[1], right.rgb[1], t);
+        b = mix(left.rgb[2], right.rgb[2], t);
         break;
       }
       case "relight-field": {

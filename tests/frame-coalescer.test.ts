@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { FrameCoalescer } from "../app/studio/frame-coalescer.ts";
+import { FrameCoalescer, browserFrameCoalescer } from "../app/studio/frame-coalescer.ts";
 
 test("frame coalescer applies only the newest high-frequency input", () => {
   const callbacks = new Map<number, () => void>();
@@ -39,4 +39,18 @@ test("frame coalescer cancellation drops pending work", () => {
   coalescer.cancel();
   scheduled.callback?.();
   assert.deepEqual(applied, []);
+});
+
+test("browser frame scheduling preserves its host receiver and coalesces a burst", () => {
+  let callback: FrameRequestCallback | undefined;
+  let scheduled = 0, cancelled = 0, updates = 0;
+  const host = {
+    requestAnimationFrame(next: FrameRequestCallback) { assert.equal(this, host); callback = next; scheduled++; return 1; },
+    cancelAnimationFrame(id: number) { assert.equal(this, host); assert.equal(id, 1); cancelled++; },
+  };
+  const coalescer = browserFrameCoalescer(() => updates++, host);
+  for (let i = 0; i < 1000; i++) coalescer.push(true);
+  assert.equal(scheduled, 1);
+  callback!(0); assert.equal(updates, 1);
+  coalescer.push(true); coalescer.cancel(); assert.equal(cancelled, 1);
 });

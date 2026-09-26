@@ -40,6 +40,25 @@ Run the failure campaign with two signed versions before recording
 - a terminated/interrupted download resumes or restarts without damaging the installed app;
 - an offline or 5xx endpoint remains non-fatal and a later retry succeeds.
 
+The native update now downloads and verifies into a single-use ticket before
+checkpointing. Test these boundaries too, using a private review installation:
+
+- A dirty tab, including an inactive tab, prevents checkpoint/install.
+- Closing or editing any tab during checkpoint creation or its durable write
+  invalidates restart authorization. An edit arriving immediately before the
+  install IPC also prevents replacement.
+- Duplicate update requests do not unlock or replace the running update flow.
+- Artifact bodies above 512 MiB are rejected both with and without an advertised
+  length. Empty, truncated, stalled, bad-signature and unsafe-redirect responses
+  leave the old executable intact. The next attempt remains usable.
+- A failed checkpoint discards the downloaded ticket. Tickets are single-use
+  and expire after five minutes; installation performs no fresh network wait.
+
+The local Rust transport/signature and frontend race tests cover these component
+boundaries. They do **not** prove interrupted executable replacement, production
+endpoint behavior or an actual previous-version upgrade. Keep those release
+evidence fields false until the installed workflow has been observed.
+
 The report must set `signatureVerified`, `previousVersionUpgrade`,
 `interruptedUpdateRecovered`, `invalidSignatureRejected`, and
 `offlineRetryRecovered` to true; provide distinct `fromVersion` / `toVersion`

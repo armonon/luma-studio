@@ -70,11 +70,12 @@ export default function NeuralPanel({
         </div>
         <div style={{ display: "flex", gap: 6 }}>
           <select value={operation} onChange={(event) => onOperationChange(event.target.value as AiProvenance["operation"])} style={{ flex: 1 }}>
-            <option value="fill">Generative fill</option><option value="remove">Remove</option><option value="relight">Relight</option><option value="harmonize">Harmonize</option><option value="upscale">Detail synthesis · same canvas</option><option value="expand">Context fill · same canvas</option>
+            <option value="fill">Generative fill</option><option value="remove">Remove</option><option value="relight">Relight</option><option value="harmonize">Harmonize</option><option value="upscale">Upscale 2× · new copy</option><option value="expand">Expand 150% · new copy</option>
           </select>
           <button onClick={onGenerate} disabled={running || !prompt.trim()} style={{ flex: 1 }}>{running ? "Creating…" : "Generate layer ✦"}</button>
           {running && <button onClick={onCancel} title="Cancel all pending variations">Cancel</button>}
         </div>
+        {(operation === "upscale" || operation === "expand") && <small>Creates an enlarged raster document; your original layered tab stays unchanged. Expand adds space on all sides. Maximum 3840 px per side / 8.29 MP.</small>}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
           <label style={{ display: "grid", gap: 3, fontSize: 10 }}><span>Quality</span><select value={quality} onChange={(event) => onQualityChange(event.target.value as AiEditQuality)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <label style={{ display: "grid", gap: 3, fontSize: 10 }}><span>Variations</span><select value={variations} onChange={(event) => onVariationsChange(Number(event.target.value))}>{[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>

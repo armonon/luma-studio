@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
+import { encodeFixturePng, decodeFixturePng } from "./lossless-png-fixture.ts";
 import "./canvas-harness.ts";
 import { createDocument, createRasterLayer, newCanvas } from "../app/engine/document.ts";
 import { OperationHistory } from "../app/engine/operation-history.ts";
@@ -58,6 +59,10 @@ class TestCanvasContext {
   }
 }
 
+function encodeTestPng(width: number, height: number, pixels: Uint8ClampedArray) {
+  return encodeFixturePng(width, height, pixels);
+}
+
 class TestCanvas {
   private context = new TestCanvasContext(this);
   pixels = new Uint8ClampedArray();
@@ -71,13 +76,8 @@ class TestCanvas {
 
   getContext(kind: string) { return kind === "2d" ? this.context : null; }
 
-  toBlob(callback: (blob: Blob) => void, type = "image/png") {
-    const bytes = new TextEncoder().encode(JSON.stringify({
-      width: this.width,
-      height: this.height,
-      pixels: [...this.pixels],
-      type,
-    }));
+  toBlob(callback: (blob: Blob) => void) {
+    const bytes = encodeTestPng(this.width, this.height, this.pixels);
     callback(bytes as unknown as Blob);
   }
 
@@ -98,7 +98,7 @@ globalThis.document = {
 } as unknown as Document;
 globalThis.ImageData = TestImageData as unknown as typeof ImageData;
 globalThis.createImageBitmap = (async (blob: Blob) => {
-  const decoded = JSON.parse(await blob.text()) as { width: number; height: number; pixels: number[] };
+  const decoded = await decodeFixturePng(blob);
   return {
     ...decoded,
     close() {},
@@ -249,7 +249,7 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
   assert.equal(recoveredState.doc.layers[0].surface!.readPixel(0, 0)[0], 1.5);
   const decoded = await decodeLumaProject(await blob.arrayBuffer());
 
-  assert.equal(LUMA_PROJECT_VERSION, 5);
+  assert.equal(LUMA_PROJECT_VERSION, 14);
   assert.equal(decoded.name, "History fixture");
   assert.equal(decoded.doc.layers[0].id, layer.id);
   assert.equal(decoded.doc.layers[0].opacity, 0.8);
@@ -305,11 +305,7 @@ test("v4 projects round-trip stable ids, precision tiles, editable RAW sources, 
 
 test("legacy v1 projects remain readable and receive safe generated ids", async () => {
   const zip = new JSZip();
-  zip.file("assets/legacy.png", new TextEncoder().encode(JSON.stringify({
-    width: 2,
-    height: 2,
-    pixels: new Array(16).fill(42),
-  })));
+  zip.file("assets/legacy.png", encodeTestPng(2, 2, new Uint8ClampedArray(16).fill(42)));
   zip.file("manifest.json", JSON.stringify({
     format: "luma-project",
     version: 1,

@@ -4,6 +4,9 @@ import type { Layer } from "@/app/engine/document";
 import type { Studio } from "@/app/engine/studio";
 import { CONTEXTUAL_PANEL_CHOICES, type ContextualPanelId } from "../contextual-panel-registry";
 import type { Tool, WorkspaceMode } from "../tool-registry";
+import SpatialLayerPanel from "./spatial-layer-panel";
+import LayerThumbnail from "../layer-thumbnail";
+import { Box, Eye, EyeOff, Focus, LockKeyhole, UnlockKeyhole } from "lucide-react";
 
 export type PropertiesPanelProps = Readonly<{
   showPanelPicker: boolean;
@@ -36,6 +39,7 @@ export type PropertiesPanelProps = Readonly<{
   onSetLayerVisible: (layerId: string, visible: boolean) => void;
   onOpenSpaceDeck: () => void;
   onAddBlank: () => void;
+  onSendToForm: () => void;
 }>;
 
 export default function PropertiesPanel({
@@ -69,6 +73,7 @@ export default function PropertiesPanel({
   onSetLayerVisible,
   onOpenSpaceDeck,
   onAddBlank,
+  onSendToForm,
 }: PropertiesPanelProps) {
   return (
     <section className="glass-card desktop-properties-card">
@@ -91,15 +96,15 @@ export default function PropertiesPanel({
           </label>
         )}
         <div className="desktop-property-target">
-          <span className={`spatial-layer-thumb kind-${activeLayer?.kind ?? "canvas"}`} aria-hidden="true">
-            {activeLayer?.kind === "text" ? "T" : activeLayer?.kind === "shape" ? "▭" : activeLayer?.kind === "group" ? "▾" : "▨"}
-          </span>
+          <LayerThumbnail layer={activeLayer} />
           <span>
             <strong>{activeLayer?.name ?? "Canvas"}</strong>
-            <small>{activeLayer ? `${activeLayer.kind} · ${activeLayer.visible ? "visible" : "hidden"}${activeLayer.locked ? " · locked" : ""}` : `${documentWidth} × ${documentHeight}`}</small>
+            <small>{activeLayer ? `${activeLayer.kind.replaceAll("-", " ")} · ${activeLayer.visible ? "visible" : "hidden"}${activeLayer.locked ? " · locked" : ""}` : `${documentWidth} × ${documentHeight}`}</small>
           </span>
-          {activeLayer && <button type="button" onClick={() => onFocusLayer(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer">◎</button>}
+          {activeLayer && <button type="button" onClick={() => onFocusLayer(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer"><Focus size={16} /></button>}
         </div>
+        <details className="desktop-quick-controls">
+        <summary>Quick controls</summary>
         {activeTool === "radial-warp" ? <>
           <div className="desktop-property-switch">
             <span><strong>Radial warp</strong><small>Drag inside the ring to reshape locally</small></span>
@@ -141,13 +146,18 @@ export default function PropertiesPanel({
             <button type="button" onClick={onOpenSpaceDeck}>{spaceToolLabel} · Open</button>
           </div>
           <div className="desktop-property-row desktop-property-buttons">
-            <button type="button" className={activeLayer.visible ? "active" : ""} onClick={() => onSetLayerVisible(activeLayer.id, !activeLayer.visible)}>◉ Visible</button>
-            <button type="button" className={activeLayer.locked ? "active" : ""} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>⌁ {activeLayer.locked ? "Locked" : "Unlocked"}</button>
+            <button type="button" className={activeLayer.visible ? "active" : ""} aria-pressed={activeLayer.visible} onClick={() => onSetLayerVisible(activeLayer.id, !activeLayer.visible)}>{activeLayer.visible ? <Eye size={14} /> : <EyeOff size={14} />} {activeLayer.visible ? "Visible" : "Hidden"}</button>
+            <button type="button" className={activeLayer.locked ? "active" : ""} aria-pressed={Boolean(activeLayer.locked)} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>{activeLayer.locked ? <LockKeyhole size={14} /> : <UnlockKeyhole size={14} />} {activeLayer.locked ? "Locked" : "Unlocked"}</button>
           </div>
         </> : (
           <button className="desktop-empty-action" type="button" onClick={onAddBlank}>＋ Add your first layer</button>
         )}
-        <div className="desktop-space-hint"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></div>
+        </details>
+        <button type="button" className="desktop-space-hint" onClick={onOpenSpaceDeck} title="Open tool features (Space)"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></button>
+        <details className="desktop-spatial-disclosure">
+          <summary><Box />Spatial & Form Studio</summary>
+          <SpatialLayerPanel layer={activeLayer} tool={activeTool} studio={studio} onSendToForm={onSendToForm} />
+        </details>
       </div>
     </section>
   );

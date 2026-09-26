@@ -6,6 +6,39 @@ import { SparseAlphaSurface } from "../app/engine/alpha-surface.ts";
 import { decodeLumaProject } from "../app/engine/project.ts";
 import { testCanvas } from "./canvas-harness.ts";
 
+test("repeated recovery preserves checkpoint identity instead of multiplying tabs", async () => {
+  const original = new Studio(8, 8, testCanvas(1, 1));
+  original.addBlankRaster("Recovered");
+  let checkpoint = await original.exportRecoveryDocument();
+  const id = checkpoint.id;
+  original.dispose();
+  for (let restart = 0; restart < 5; restart++) {
+    const restored = new Studio(1, 1, testCanvas(1, 1));
+    await restored.importProject(checkpoint.blob, { restoreHistory: false, recoveryId: checkpoint.id });
+    restored.restoreDocumentSessionState(id, checkpoint);
+    checkpoint = await restored.exportRecoveryDocument();
+    assert.equal(checkpoint.id, id);
+    assert.equal(restored.listDocuments().length, 1);
+    await assert.rejects(restored.importProject(checkpoint.blob, { recoveryId: id }), /already open/);
+    assert.equal(restored.listDocuments().length, 1);
+    restored.dispose();
+  }
+});
+
+test("empty recovered documents stay distinct and an initial placeholder can reuse a recovery ID", async () => {
+  const original = new Studio(8, 8, testCanvas(1, 1));
+  const checkpoint = await original.exportRecoveryDocument();
+  const restored = new Studio(1, 1, testCanvas(1, 1));
+  const initial = restored.activeDocumentState().id;
+  await restored.importProject(checkpoint.blob, { restoreHistory: false, recoveryId: initial });
+  await restored.importProject(checkpoint.blob, { restoreHistory: false, recoveryId: "doc-zzzz" });
+  assert.equal(restored.listDocuments().length, 2);
+  restored.resetDocument(20, 20);
+  assert.equal(restored.listDocuments().length, 3);
+  assert.notEqual(restored.activeDocumentState().id, "doc-zzzz");
+  original.dispose(); restored.dispose();
+});
+
 test("crash recovery checkpoints every open document and restores the active tab", async () => {
   const studio = new Studio(64, 48, testCanvas(1, 1));
   const firstLayer = studio.addBlankRaster("First work");

@@ -6,6 +6,7 @@ import {
   isValidElement,
   useMemo,
   useState,
+  useEffect,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -27,6 +28,9 @@ import {
   type FloatingPanel,
 } from "./dock-model";
 import { STUDIO_PANEL_REGISTRY, type PanelId } from "./panel-registry";
+import PanelIcon from "./panel-icon";
+import { PanelErrorBoundary } from "./panel-error-boundary";
+import { ChevronDown, ChevronUp, Ellipsis, X } from "lucide-react";
 
 export function DockPanelContent({ children }: { panelId: PanelId; children: ReactNode }) {
   return <>{children}</>;
@@ -45,14 +49,6 @@ function collectPanelContent(node: ReactNode, result = new Map<PanelId, ReactNod
   return result;
 }
 
-function panelGlyph(panelId: PanelId) {
-  if (panelId === "neural") return "✦";
-  if (panelId === "layers") return "▱";
-  if (panelId === "channels") return "◉";
-  if (panelId === "actions") return "▶";
-  return "⌘";
-}
-
 export default function DockManager({
   layout,
   onLayoutChange,
@@ -69,14 +65,24 @@ export default function DockManager({
   const [dragging, setDragging] = useState<PanelId | null>(null);
   const [menuGroupId, setMenuGroupId] = useState<string | null>(null);
   const content = useMemo(() => collectPanelContent(children), [children]);
+  useEffect(() => {
+    if (!menuGroupId) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuGroupId(null); };
+    const closeOutside = (event: PointerEvent) => { if (event.target instanceof Element && !event.target.closest(".dock-group-menu")) setMenuGroupId(null); };
+    window.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("pointerdown", closeOutside);
+    return () => { window.removeEventListener("keydown", closeOnEscape); window.removeEventListener("pointerdown", closeOutside); };
+  }, [menuGroupId]);
 
   const panelContent = (panelId: PanelId) => {
     const definition = STUDIO_PANEL_REGISTRY.require(panelId);
     const Component = definition.component;
-    const nodes = panelId === "properties"
+    const candidates = panelId === "properties"
       ? [...(content.get("properties") ?? []), ...(content.get(contextualPanel) ?? [])]
       : content.get(panelId) ?? [];
+    const nodes = Children.toArray(candidates);
     return (
+      <PanelErrorBoundary key={`${panelId}:${panelId === "properties" ? contextualPanel : panelId}`} title={definition.title}>
       <Component>
         {nodes.length ? nodes : (
           <div className="dock-panel-empty">
@@ -85,6 +91,7 @@ export default function DockManager({
           </div>
         )}
       </Component>
+      </PanelErrorBoundary>
     );
   };
 
@@ -94,6 +101,8 @@ export default function DockManager({
   };
 
   const beginDockResize = (event: ReactPointerEvent<HTMLDivElement>, group: DockGroup) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const startX = event.clientX;
     const startY = event.clientY;
@@ -115,6 +124,8 @@ export default function DockManager({
   };
 
   const beginSplitResize = (event: ReactPointerEvent<HTMLDivElement>, group: DockGroup) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const start = group.dock === "bottom" ? event.clientX : event.clientY;
     const startWeight = group.weight;
@@ -170,11 +181,19 @@ export default function DockManager({
                     setDragging(null);
                   }}
                 >
-                  <button role="tab" aria-selected={activePanelId === panelId} onClick={() => activate(group, panelId)} title={panel.title}>
-                    <span aria-hidden="true">{panelGlyph(panelId)}</span><strong>{panel.title}</strong>
+                  <button role="tab" id={`dock-tab-${group.id}-${panelId}`} aria-controls={`dock-body-${group.id}`} tabIndex={activePanelId === panelId ? 0 : -1} aria-selected={activePanelId === panelId} onClick={() => activate(group, panelId)} title={panel.title}
+                    onKeyDown={(event) => {
+                      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                      event.preventDefault();
+                      const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? group.panelIds.length - 1
+                        : (tabIndex + (event.key === "ArrowRight" ? 1 : -1) + group.panelIds.length) % group.panelIds.length;
+                      activate(group, group.panelIds[nextIndex]);
+                      event.currentTarget.closest('[role="tablist"]')?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
+                    }}>
+                    <PanelIcon name={panel.icon} /><strong>{panel.title}</strong>
                   </button>
                   {panel.closable && (
-                    <button className="dock-tab-close" onClick={() => onLayoutChange(closeDockPanel(layout, panelId))} aria-label={`Close ${panel.title}`}>×</button>
+                    <button className="dock-tab-close" onClick={() => onLayoutChange(closeDockPanel(layout, panelId))} aria-label={`Close ${panel.title}`}><X size={12} /></button>
                   )}
                 </div>
               );
@@ -185,14 +204,14 @@ export default function DockManager({
             onClick={() => onLayoutChange(collapseDockGroup(layout, group.id, !group.collapsed))}
             aria-label={group.collapsed ? `Expand ${group.dock} panel group` : `Collapse ${group.dock} panel group`}
             aria-expanded={!group.collapsed}
-          >{group.collapsed ? "+" : "−"}</button>
+          >{group.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}</button>
           <div className="dock-group-menu" data-open={menuGroupId === group.id ? "true" : undefined}>
             <button
               className="dock-group-menu-trigger"
               aria-label={`${STUDIO_PANEL_REGISTRY.require(activePanelId).title} panel options`}
               aria-expanded={menuGroupId === group.id}
               onClick={() => setMenuGroupId((current) => current === group.id ? null : group.id)}
-            >•••</button>
+            ><Ellipsis size={16} /></button>
             {menuGroupId === group.id && <div role="menu">
               <button role="menuitem" onClick={() => { setMenuGroupId(null); onLayoutChange(moveDockPanel(layout, activePanelId, "floating", STUDIO_PANEL_REGISTRY)); }}>Float panel</button>
               <button role="menuitem" onClick={() => { setMenuGroupId(null); onLayoutChange(splitDockPanel(layout, activePanelId, "left", STUDIO_PANEL_REGISTRY)); }}>Move to new left split</button>
@@ -204,7 +223,7 @@ export default function DockManager({
             </div>}
           </div>
         </nav>
-        {!group.collapsed && <div className="dock-panel-body">{panelContent(activePanelId)}</div>}
+        {!group.collapsed && <div className="dock-panel-body" id={`dock-body-${group.id}`} role="tabpanel" aria-labelledby={`dock-tab-${group.id}-${activePanelId}`}>{panelContent(activePanelId)}</div>}
         {!group.collapsed && <div className={`dock-resizer dock-resizer-${group.dock}`} onPointerDown={(event) => beginDockResize(event, group)} aria-hidden="true" />}
         <div className={`dock-split-resizer dock-split-resizer-${group.dock}`} onPointerDown={(event) => beginSplitResize(event, group)} aria-hidden="true" />
       </aside>
@@ -214,25 +233,33 @@ export default function DockManager({
   const renderFloating = (panel: FloatingPanel) => {
     const definition = STUDIO_PANEL_REGISTRY.require(panel.panelId);
     const beginMove = (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
       const startX = event.clientX;
       const startY = event.clientY;
       const onMove = (move: PointerEvent) => onLayoutChange(moveFloatingPanel(layout, panel.panelId, panel.x + move.clientX - startX, panel.y + move.clientY - startY));
-      const stop = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", stop); };
+      const stop = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
     };
     const beginResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
       const startX = event.clientX;
       const startY = event.clientY;
       const onMove = (move: PointerEvent) => onLayoutChange(resizeFloatingPanel(layout, panel.panelId, panel.width + move.clientX - startX, panel.height + move.clientY - startY, STUDIO_PANEL_REGISTRY));
-      const stop = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", stop); };
+      const stop = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", stop); window.removeEventListener("pointercancel", stop); };
       window.addEventListener("pointermove", onMove);
       window.addEventListener("pointerup", stop);
+      window.addEventListener("pointercancel", stop);
     };
     return (
       <aside key={panel.panelId} className="dock-floating-panel" style={{ left: panel.x, top: panel.y, width: panel.width, height: panel.height }}>
         <header onPointerDown={beginMove}>
-          <span aria-hidden="true">{panelGlyph(panel.panelId)}</span><strong>{definition.title}</strong>
+          <PanelIcon name={definition.icon} /><strong>{definition.title}</strong>
           <button onPointerDown={(event) => event.stopPropagation()} onClick={() => onLayoutChange(moveDockPanel(layout, panel.panelId, "right", STUDIO_PANEL_REGISTRY))}>Dock</button>
           <button onPointerDown={(event) => event.stopPropagation()} onClick={() => onLayoutChange(closeDockPanel(layout, panel.panelId))} aria-label={`Close ${definition.title}`}>×</button>
         </header>
@@ -250,6 +277,16 @@ export default function DockManager({
       {(["left", "right", "bottom"] as const).map((dock) => {
         const groups = groupsFor(dock);
         if (!groups.length) return null;
+        const rail = dock !== "bottom" && groups.every(group => group.collapsed);
+        if (rail) return <nav key={dock} className={`dock-stack dock-stack-${dock} dock-icon-rail`} aria-label={`${dock} collapsed panels`} style={{ "--dock-stack-size": "40px" } as CSSProperties}>
+          {groups.flatMap(group => group.panelIds.map(panelId => {
+            const panel = STUDIO_PANEL_REGISTRY.require(panelId);
+            return <button key={panelId} title={`Open ${panel.title}`} aria-label={`Open ${panel.title} panel`} onClick={() => {
+              onLayoutChange(selectDockPanel(collapseDockGroup(layout, group.id, false), group.id, panelId));
+              onActivePanelChange(panelId);
+            }}><PanelIcon name={panel.icon} /></button>;
+          }))}
+        </nav>;
         const size = Math.max(...groups.map((group) => group.size));
         return <div key={dock} className={`dock-stack dock-stack-${dock}`} style={{ "--dock-stack-size": `${size}px` } as CSSProperties}>{groups.map(renderGroup)}</div>;
       })}

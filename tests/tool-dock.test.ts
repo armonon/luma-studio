@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { commandForShortcut } from "../app/desktop/command-shortcuts";
 import { categoryForTool } from "../app/studio/tool-dock";
+
+test("Campaign shortcut is not intercepted by the command library",()=>{
+  assert.equal(commandForShortcut({key:"k",metaKey:true,ctrlKey:false,altKey:true,shiftKey:false}),"panel-campaign");
+  const source=readFileSync(new URL("../app/studio/tool-dock.tsx",import.meta.url),"utf8");
+  assert.match(source,/!event\.defaultPrevented && !event\.altKey && !event\.shiftKey/);
+});
 
 test("the primary dock maps representative tools into six professional categories", () => {
   assert.equal(categoryForTool("move"), "move");

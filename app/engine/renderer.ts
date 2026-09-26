@@ -10,7 +10,6 @@ import {
   newCanvas,
   resolvedBlendIf,
   resolvedBlendPasses,
-  rasterizeVectorMask,
   resolvedFillOpacity,
 } from "./document";
 import { drawLayerContentManaged } from "./precision-renderer";
@@ -30,6 +29,8 @@ import {
 } from "./color-management";
 import { applyProAdjustmentToImageData } from "./pro-adjustments";
 import { hasLayerMask, layerMaskRegionCanvas } from "./layer-mask";
+import { pathContours, traceContours } from "./vector-path";
+import { requestTextFonts } from "./text-font-resources";
 
 type Scratch = {
   a: HTMLCanvasElement;
@@ -182,25 +183,9 @@ function frameScale(frame: RenderFrame) {
   };
 }
 
-function setFrameTransform(ctx: CanvasRenderingContext2D, frame: RenderFrame) {
-  const scale = frameScale(frame);
-  ctx.setTransform(scale.x, 0, 0, scale.y, -frame.x * scale.x, -frame.y * scale.y);
-}
-
 function frameTransform(frame: RenderFrame) {
   const scale = frameScale(frame);
   return { a: scale.x, b: 0, c: 0, d: scale.y, e: -frame.x * scale.x, f: -frame.y * scale.y };
-}
-
-function drawProjectedCanvas(
-  ctx: CanvasRenderingContext2D,
-  source: CanvasImageSource,
-  frame: RenderFrame,
-) {
-  ctx.save();
-  setFrameTransform(ctx, frame);
-  ctx.drawImage(source, 0, 0);
-  ctx.restore();
 }
 
 export function toneToFilter(tone: ToneParams): string {
@@ -244,6 +229,8 @@ function clamp255(x: number) {
 let antsOffset = 0;
 
 export type RenderOptions = {
+  /** File/processing pixels must not inherit the monitor's wide-gamut space. */
+  outputColorSpace?: "srgb";
   checkerboard?: boolean;
   selectionOverlay?: boolean;
   proofing?: boolean;
@@ -281,7 +268,7 @@ type ViewportRenderSample = {
 
 const viewportRenderSamples: ViewportRenderSample[] = [];
 const MAX_RENDER_SAMPLES = 120;
-const viewportTargetState = new WeakMap<HTMLCanvasElement, string>();
+const viewportTargetState = new WeakMap<HTMLCanvasElement, { signature: string; document: Document }>();
 
 function viewportSignature(viewport: DisplayViewport) {
   return [
@@ -545,6 +532,22 @@ function drawLayerMaskProjected(target: CanvasRenderingContext2D, doc: Document,
   target.restore();
 }
 
+/** Trace vector alpha directly into the bounded frame, not a canvas-sized
+ * raster cache. This also makes vector masks on component groups effective. */
+function drawVectorMaskProjected(target: CanvasRenderingContext2D, layer: Layer, frame: RenderFrame) {
+  if(!layer.vectorMask)return;
+  const contours=pathContours(layer.vectorMask);
+  if(contours.every(contour=>contour.anchors.length<2))return;
+  const scale=frameScale(frame);
+  target.save();target.setTransform(1,0,0,1,0,0);
+  // Project coordinates before tracing. This keeps the destination-in clip
+  // in frame space on canvas backends with translated-composite limitations.
+  const x=(value:number)=>(value-frame.x)*scale.x,y=(value:number)=>(value-frame.y)*scale.y;
+  target.fillStyle="#ffffff";target.beginPath();
+  traceContours({moveTo:(px,py)=>target.moveTo(x(px),y(py)),bezierCurveTo:(ax,ay,bx,by,px,py)=>target.bezierCurveTo(x(ax),y(ay),x(bx),y(by),x(px),y(py)),closePath:()=>target.closePath()},contours,true);
+  target.fill(layer.vectorMask.fillRule??"nonzero");target.restore();
+}
+
 function drawMaskSource(target: CanvasRenderingContext2D, doc: Document, layer: Layer, frame: RenderFrame) {
   if (!hasLayerMask(layer)) return;
   drawLayerMaskProjected(target, doc, layer, frame);
@@ -620,6 +623,9 @@ function renderLayerSequence(
     const layer = siblings[i];
     if (included && !included.has(layer.id)) continue;
     if (!layer.visible || layer.opacity <= 0) continue;
+    // Resolve using the document-owned layer before blend passes create a
+    // temporary copy: preservation metadata lives in a layer-keyed WeakMap.
+    if (layer.text) requestTextFonts(layer.text, layer);
     if (layer.kind === "group") {
       if (groupIsPassThrough(layer)) {
         renderLayerSequence(composite, s, doc, frame, preparedLayers, layer.id, groupDepth, included, rootComposite);
@@ -627,11 +633,13 @@ function renderLayerSequence(
         const groupCanvas = groupBuffer(s, groupDepth, frame.outputWidth, frame.outputHeight);
         const groupContext = groupCanvas.getContext("2d")!;
         renderLayerSequence(groupContext, s, doc, frame, preparedLayers, layer.id, groupDepth + 1, included, rootComposite);
-        if (hasLayerMask(layer)) {
-          groupContext.globalCompositeOperation = "destination-in";
-          drawLayerMaskProjected(groupContext, doc, layer, frame);
-          groupContext.globalCompositeOperation = "source-over";
-        }
+        const maskGroup=(context:CanvasRenderingContext2D,afterEffects:boolean)=>{
+          context.globalCompositeOperation="destination-in";
+          if(hasLayerMask(layer)&&Boolean(layer.maskHidesEffects)===afterEffects)drawLayerMaskProjected(context,doc,layer,frame);
+          if(layer.vectorMask&&Boolean(layer.vectorMaskHidesEffects)===afterEffects)drawVectorMaskProjected(context,layer,frame);
+          context.globalCompositeOperation="source-over";
+        };
+        maskGroup(groupContext,false);
         // A group takes a layer style like any other layer — Photoshop styles
         // whole compositions this way. groupIsPassThrough already refuses to
         // flatten a styled group, so reaching here with effects is expected.
@@ -643,10 +651,12 @@ function renderLayerSequence(
             styledContext, groupCanvas, s.effectBuf, s.clipBuf, layer, frame, frameScale(frame),
             doc.globalLight, composite.canvas,
           );
+          maskGroup(styledContext,true);
           // Fill opacity is already applied to the contents inside compose, and
           // must not touch the effects, so only master opacity is passed on.
           compositeBlendStack(composite, styled, resolvedBlendPasses(layer), layer.opacity, resolvedBlendIf(layer));
         } else {
+          maskGroup(groupContext,true);
           compositeBlendStack(
             composite,
             groupCanvas,
@@ -735,7 +745,7 @@ function isNoOpToneAdjustment(layer: Layer) {
 
 function groupIsPassThrough(layer: Layer) {
   const passes = resolvedBlendPasses(layer);
-  return layer.opacity === 1 && resolvedFillOpacity(layer) === 1 && !hasLayerMask(layer) &&
+  return layer.opacity === 1 && resolvedFillOpacity(layer) === 1 && !hasLayerMask(layer) && !layer.vectorMask &&
     !(layer.effects?.some((effect) => effect.enabled)) &&
     !(layer.filters?.some((filter) => filter.enabled)) &&
     passes.length === 1 && passes[0].enabled && passes[0].mode === "source-over" && passes[0].opacity === 1;
@@ -757,7 +767,7 @@ export function render(
   if (target.width !== doc.width) target.width = doc.width;
   if (target.height !== doc.height) target.height = doc.height;
   const composite = renderCompositeRegion(doc, frame, options);
-  const out = getDisplayCtx(target)!;
+  const out = renderTargetContext(target, options);
   clearContext(out, target.width, target.height);
   if (options.checkerboard ?? true) drawDocumentCheckerboard(out, doc, frame);
   out.drawImage(composite, 0, 0);
@@ -778,11 +788,12 @@ export function renderViewport(
 ) {
   const startedAt = typeof performance === "undefined" ? Date.now() : performance.now();
   const signature = viewportSignature(viewport);
-  const sameViewport = viewportTargetState.get(target) === signature;
+  const previousTarget = viewportTargetState.get(target);
+  const sameViewport = previousTarget?.signature === signature && previousTarget.document === doc;
   const resized = target.width !== viewport.outputWidth || target.height !== viewport.outputHeight;
   if (target.width !== viewport.outputWidth) target.width = viewport.outputWidth;
   if (target.height !== viewport.outputHeight) target.height = viewport.outputHeight;
-  const out = getDisplayCtx(target)!;
+  const out = renderTargetContext(target, options);
   const fullFrame: RenderFrame = viewport;
   let preparedLayers: PreparedLayers | null = null;
   // Resolve lazily so a frame served entirely from the tile cache never walks
@@ -873,7 +884,7 @@ export function renderViewport(
   }
 
   if ((options.selectionOverlay ?? true) && doc.selection) drawProjectedSelection(out, doc, fullFrame);
-  viewportTargetState.set(target, signature);
+  viewportTargetState.set(target, { signature, document: doc });
   const finishedAt = typeof performance === "undefined" ? Date.now() : performance.now();
   recordViewportRender({
     durationMs: Math.max(0, finishedAt - startedAt),
@@ -885,7 +896,40 @@ export function renderViewport(
 
 /** Render only document pixels. UI chrome must never leak into files or batch output. */
 export function renderClean(doc: Document, target: HTMLCanvasElement) {
-  render(doc, target, { checkerboard: false, selectionOverlay: false, proofing: false });
+  render(doc, target, { checkerboard: false, selectionOverlay: false, proofing: false, outputColorSpace: "srgb" });
+}
+
+function renderTargetContext(target: HTMLCanvasElement, options: RenderOptions) {
+  const context = options.outputColorSpace === "srgb" ? target.getContext("2d", { colorSpace: "srgb" }) : getDisplayCtx(target);
+  if (!context) throw new Error("Rendering requires a 2D canvas context");
+  if (options.outputColorSpace === "srgb" && context.getContextAttributes?.().colorSpace === "display-p3") {
+    // Canvas color space is fixed by its first context request. Reusing a P3
+    // viewport would silently relabel those samples in PSD/ICC/clipboard paths.
+    throw new Error("Clean rendering requires a fresh sRGB canvas, not a Display P3 viewport");
+  }
+  return context;
+}
+
+/** Destination + bounded tile caches + peak scratch (including nested groups).
+ * This is known-buffer admission, not a claim to bound total process RSS. */
+export function tiledCleanRenderBytes(doc: Document) {
+  const plan = viewportLayerPlan(doc.layers, 1);
+  const edge = cleanRenderNeedsFullFrame(doc) || plan.fullBackdrop ? Math.max(doc.width, doc.height) : DEFAULT_TILE_SIZE + 2 * plan.overscan;
+  const pixels = Math.min(doc.width, edge) * Math.min(doc.height, edge);
+  const groups = doc.layers.filter(layer => layer.kind === "group").length;
+  return doc.width * doc.height * 4 + MAX_VIEWPORT_CACHE_BYTES + MAX_SCRATCH_CACHE_BYTES + pixels * (64 + groups * 4);
+}
+
+export function renderTiledClean(doc: Document, target: HTMLCanvasElement) {
+  // Viewport overscan is capped. Baking a large-radius or spatial filter through
+  // that approximation could permanently introduce seams. Keep those merges
+  // exact, admitting the full-frame working set above before any allocation.
+  if (cleanRenderNeedsFullFrame(doc)) { renderClean(doc, target); return; }
+  renderViewport(doc, target, { x: 0, y: 0, width: doc.width, height: doc.height, outputWidth: doc.width, outputHeight: doc.height, zoom: 1, cssScale: 1, devicePixelRatio: 1 }, { checkerboard: false, selectionOverlay: false, proofing: false, outputColorSpace: "srgb" });
+}
+
+function cleanRenderNeedsFullFrame(doc: Document) {
+  return doc.layers.some(layer => layer.filters?.some(filter => filter.enabled));
 }
 
 export function viewportLayerPlan(layers: ReadonlyArray<Layer>, displayScale: number) {
@@ -990,13 +1034,11 @@ function drawContentLayer(
   }
   // The vector mask carries its own switch, because a layer can have both and
   // Photoshop lets each hide effects independently.
-  const vectorMask = layer.vectorMask
-    ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
-    : null;
+  const vectorMask = layer.vectorMask;
   const vectorHidesEffects = layer.vectorMaskHidesEffects ?? false;
   if (vectorMask && !vectorHidesEffects) {
     contentCtx.globalCompositeOperation = "destination-in";
-    drawProjectedCanvas(contentCtx, vectorMask, frame);
+    drawVectorMaskProjected(contentCtx, layer, frame);
     contentCtx.globalCompositeOperation = "source-over";
   }
 
@@ -1042,7 +1084,7 @@ function drawContentLayer(
   }
   if (vectorMask && vectorHidesEffects) {
     bctx.globalCompositeOperation = "destination-in";
-    drawProjectedCanvas(bctx, vectorMask, frame);
+    drawVectorMaskProjected(bctx, layer, frame);
     bctx.globalCompositeOperation = "source-over";
   }
 
@@ -1167,9 +1209,7 @@ function compositeAdjustment(
   layer: Layer,
   frame: RenderFrame,
 ) {
-  const vectorMask = layer.vectorMask
-    ? rasterizeVectorMask(layer.vectorMask, doc.width, doc.height)
-    : null;
+  const vectorMask = layer.vectorMask;
   let adjusted = source;
   if (hasLayerMask(layer) || vectorMask) {
     const bctx = s.layerBuf.getContext("2d")!;
@@ -1177,7 +1217,7 @@ function compositeAdjustment(
     bctx.drawImage(source, 0, 0);
     bctx.globalCompositeOperation = "destination-in";
     if (hasLayerMask(layer)) drawLayerMaskProjected(bctx, doc, layer, frame);
-    if (vectorMask) drawProjectedCanvas(bctx, vectorMask, frame);
+    if (vectorMask) drawVectorMaskProjected(bctx, layer, frame);
     bctx.globalCompositeOperation = "source-over";
     adjusted = s.layerBuf;
   }

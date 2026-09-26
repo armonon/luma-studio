@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ToolIcon } from "./studio-icons";
 import type { StudioCommand } from "../desktop/menu-model";
+import { Search, X } from "lucide-react";
+import { COMMAND_DEFINITIONS } from "./command-registry";
 
 export type ToolPaletteGroup = {
   id: string;
@@ -21,19 +23,24 @@ export default function ToolPalette({
   activeTool,
   onSelect,
   onCommand,
+  commandEnabled,
   onClose,
 }: {
   groups: ToolPaletteGroup[];
   activeTool: string;
   onSelect: (tool: string, workspace: string) => void;
   onCommand: (command: StudioCommand) => void;
+  commandEnabled: (command: StudioCommand) => boolean;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
+    const previous = document.activeElement;
     searchRef.current?.focus();
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
 
   const visibleGroups = useMemo(() => {
@@ -49,7 +56,8 @@ export default function ToolPalette({
       .filter((group) => group.tools.length > 0);
   }, [groups, query]);
 
-  const allCommands: { id: StudioCommand; icon: string; label: string; detail: string; shortcut: string }[] = [
+  const featuredCommands: { id: StudioCommand; icon: string; label: string; detail: string; shortcut: string }[] = [
+    { id: "define-custom-shape", icon: "custom-shape", label: "Define Custom Shape", detail: "Save selected vector outline", shortcut: "" },
     { id: "select-subject", icon: "sel-sam", label: "Select Subject", detail: "AI selection", shortcut: "" },
     { id: "curves", icon: "tone", label: "Curves Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "levels", icon: "tone", label: "Levels Adjustment", detail: "New adjustment layer", shortcut: "" },
@@ -57,27 +65,49 @@ export default function ToolPalette({
     { id: "history", icon: "content-move", label: "Version History", detail: "History branches", shortcut: "" },
     { id: "export", icon: "frame", label: "Export", detail: "Raster or Photoshop", shortcut: "⌘E" },
   ];
-  const commands = allCommands.filter((command) => !query.trim()
+  const allCommands = Object.values(COMMAND_DEFINITIONS).map(definition => ({
+    ...definition,
+    icon: featuredCommands.find(command => command.id === definition.id)?.icon ?? "frame",
+    detail: featuredCommands.find(command => command.id === definition.id)?.detail ?? "Application command",
+  }));
+  const commands = (query.trim() ? allCommands : allCommands.filter(command => featuredCommands.some(featured => featured.id === command.id))).filter((command) => !query.trim()
     || `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
 
   return (
     <div className="tool-palette-scrim" onPointerDown={onClose}>
       <section
+        ref={dialogRef}
         className="tool-palette"
         role="dialog"
         aria-modal="true"
         aria-label="All tools"
         onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          // Keep tool-search navigation and button activation out of the canvas
+          // shortcut listener (Enter there enters layer focus).
+          event.stopPropagation();
+          if (event.key === "Escape") { event.stopPropagation(); onClose(); return; }
+          if (event.key === "ArrowDown" && event.target === searchRef.current) {
+            event.preventDefault();
+            dialogRef.current?.querySelector<HTMLButtonElement>(".tool-palette-groups button:not(:disabled)")?.focus();
+          }
+          if (event.key === "Tab") {
+            const targets = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, [tabindex="0"]') ?? [])];
+            const first = targets[0]; const last = targets.at(-1);
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+          }
+        }}
       >
         <header>
           <div>
             <span>Tool library</span>
             <strong>All tools</strong>
           </div>
-          <button onClick={onClose} aria-label="Close tool library">×</button>
+          <button onClick={onClose} aria-label="Close tool library"><X size={18} /></button>
         </header>
         <label className="tool-palette-search">
-          <span aria-hidden="true">⌕</span>
+          <Search size={18} aria-hidden="true" />
           <input
             ref={searchRef}
             type="search"
@@ -86,7 +116,7 @@ export default function ToolPalette({
             placeholder="Find a tool or shortcut"
             aria-label="Find a tool or shortcut"
           />
-          {query && <button onClick={() => setQuery("")} aria-label="Clear tool search">×</button>}
+          {query && <button onClick={() => setQuery("")} aria-label="Clear tool search"><X size={14} /></button>}
         </label>
         <div className="tool-palette-groups">
           {commands.length > 0 && (
@@ -97,7 +127,7 @@ export default function ToolPalette({
               </header>
               <div>
                 {commands.map((command) => (
-                  <button key={command.id} onClick={() => onCommand(command.id)}>
+                  <button key={command.id} disabled={!commandEnabled(command.id)} onClick={() => onCommand(command.id)}>
                     <span className="tool-glyph"><ToolIcon id={command.icon} size={16} /></span>
                     <span><strong>{command.label}</strong><small>{command.detail}</small></span>
                     {command.shortcut && <kbd>{command.shortcut}</kbd>}

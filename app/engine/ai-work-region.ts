@@ -1,5 +1,30 @@
 import type { DisplayViewport } from "./viewport";
 
+export type AiGeometryCopy = { mode: "upscale" | "expand"; factor: number };
+export function planAiGeometryCopy(width: number, height: number, options: AiGeometryCopy) {
+  if (![width, height].every((n) => Number.isSafeInteger(n) && n > 0) ||
+      !["upscale", "expand"].includes(options.mode) || !Number.isFinite(options.factor) || options.factor <= 1 || options.factor > 4) throw new Error("AI copy needs valid dimensions and a scale greater than 1, up to 4");
+  const outputWidth = Math.round(width * options.factor), outputHeight = Math.round(height * options.factor);
+  if (outputWidth > 3840 || outputHeight > 3840 || outputWidth * outputHeight > 8_294_400 || Math.max(outputWidth, outputHeight) / Math.min(outputWidth, outputHeight) > 3) throw new Error("AI enlarged copies support up to 3840 pixels per side, 8.29 megapixels, and a 3:1 aspect ratio. Reduce the scale or crop first.");
+  const paddingX = options.mode === "expand" ? Math.floor((outputWidth - width) / 2) : 0;
+  const paddingY = options.mode === "expand" ? Math.floor((outputHeight - height) / 2) : 0;
+  const regionWidth = options.mode === "expand" ? outputWidth : width;
+  const regionHeight = options.mode === "expand" ? outputHeight : height;
+  const proxy = Math.min(1, 2048 / regionWidth, 2048 / regionHeight);
+  const apiScale = Math.max(1, Math.sqrt(655_360 / (outputWidth * outputHeight)));
+  let apiWidth = Math.min(3840, Math.ceil(outputWidth * apiScale / 16) * 16);
+  let apiHeight = Math.min(3840, Math.ceil(outputHeight * apiScale / 16) * 16);
+  if (apiWidth * apiHeight > 8_294_400) {
+    const scale = Math.sqrt(8_294_400 / (apiWidth * apiHeight));
+    apiWidth = Math.floor(apiWidth * scale / 16) * 16;
+    apiHeight = Math.floor(apiHeight * scale / 16) * 16;
+  }
+  return { outputWidth, outputHeight, paddingX, paddingY, requestSize: `${apiWidth}x${apiHeight}` as `${number}x${number}`, work: {
+    x: -paddingX, y: -paddingY, width: regionWidth, height: regionHeight,
+    outputWidth: Math.max(1, Math.round(regionWidth * proxy)), outputHeight: Math.max(1, Math.round(regionHeight * proxy)),
+  } };
+}
+
 export type AiWorkRegion = {
   x: number;
   y: number;

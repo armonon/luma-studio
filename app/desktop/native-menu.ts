@@ -132,3 +132,27 @@ export function publishRecentFiles(files: readonly string[]) {
   // surface as an unhandled rejection while someone is opening a file.
   void invoke?.("set_recent_files", { files: [...files] })?.catch(() => {});
 }
+
+/** Serializes IPC updates so a slower old state cannot overwrite the newest one. */
+export function createMenuStatePublisher(invoke: (states: Record<string, boolean>) => Promise<unknown>) {
+  let pending: Record<string, boolean> | null = null;
+  let running = false;
+  let stopped = false;
+  const drain = async () => {
+    running = true;
+    while (pending && !stopped) {
+      const next = pending;
+      pending = null;
+      try { await invoke(next); } catch (error) { console.warn("Native menu state could not be updated", error); }
+    }
+    running = false;
+  };
+  return {
+    publish(states: Record<string, boolean>) { if (stopped) return; pending = { ...states }; if (!running) void drain(); },
+    dispose() { stopped = true; pending = null; },
+  };
+}
+
+export async function publishNativeMenuState(states: Record<string, boolean>) {
+  await (window as TauriWindow).__TAURI__?.core?.invoke?.("set_menu_command_states", { states });
+}

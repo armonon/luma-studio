@@ -34,3 +34,8 @@ export class FrameCoalescer<T> {
     this.pending = undefined;
   }
 }
+
+/** WebKit requires the Window receiver for animation-frame host methods. */
+export function browserFrameCoalescer<T>(apply: (value: T) => void, clock: Pick<Window, "requestAnimationFrame" | "cancelAnimationFrame"> = window) {
+  return new FrameCoalescer<T>(callback => clock.requestAnimationFrame(callback), id => clock.cancelAnimationFrame(id), apply);
+}

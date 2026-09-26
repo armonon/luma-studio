@@ -16,6 +16,8 @@ import {
 } from "./history-payload";
 import type { LayerSnapshot } from "./studio";
 import { cloneProAdjustment } from "./pro-adjustments";
+import { cloneSpatialStyle } from "./text-3d";
+import { cloneLetteringAsset } from "./lettering-asset";
 
 // Apply a single snapshot's fields to the given layer, in place. Returns
 // whether the layer bitmap or mask changed — the caller can use this to decide
@@ -60,6 +62,7 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
   if (snap.filters) layer.filters = cloneFilters(snap.filters);
   if (snap.ai) layer.ai = cloneAiProvenance(snap.ai);
   if (snap.raw) layer.raw = cloneRawLayerSource(snap.raw);
+  if (snap.smartSource !== undefined) layer.smartSource = snap.smartSource ?? undefined;
   if (snap.effects) layer.effects = cloneEffects(snap.effects);
   if (snap.opacity !== undefined) layer.opacity = snap.opacity;
   if (snap.fillOpacity !== undefined) layer.fillOpacity = snap.fillOpacity ?? undefined;
@@ -81,7 +84,10 @@ export function applyLayerSnapshot(layer: Layer, snap: LayerSnapshot): {
   if (snap.visible !== undefined) layer.visible = snap.visible;
   if (snap.name) layer.name = snap.name;
   if (snap.transform) layer.transform = { ...snap.transform };
+  if (snap.spatial !== undefined) layer.spatial = snap.spatial ? cloneSpatialStyle(snap.spatial) : undefined;
   if (snap.text) layer.text = { ...snap.text };
+  if (snap.lettering3d) layer.lettering3d = cloneLetteringAsset(snap.lettering3d);
+  if (snap.mesh3d) layer.mesh3d = structuredClone(snap.mesh3d);
   if (snap.shape) layer.shape = { ...snap.shape };
   return { bitmapReplaced, maskReplaced };
 }

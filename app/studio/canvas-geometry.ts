@@ -1,4 +1,42 @@
-import { Layer, Transform, layerCorners } from "../engine/document";
+import { Layer, Transform, layerCorners, rotateLayerTransformAround } from "../engine/document";
+import { vectorPathBounds } from "../engine/vector-path";
+import { textLayoutBounds } from "../engine/text-layout-bounds";
+export { isValidTransformQuad } from "../engine/advanced-tools";
+
+export type TransformMode = "scale" | "skew" | "distort";
+
+/** Editing geometry, in pre-transform local coordinates; never scan a raster. */
+export function transformContentBounds(layer: Layer, width: number, height: number) {
+  if (layer.shape) return { x: layer.shape.x, y: layer.shape.y, width: Math.max(1, layer.shape.w), height: Math.max(1, layer.shape.h) };
+  if (layer.path) return vectorPathBounds(layer.path);
+  if (layer.text) {
+    try {
+      const bounds = textLayoutBounds({ ...layer, transform: { tx: 0, ty: 0, sx: 1, sy: 1, rotation: 0 } });
+      return { ...bounds, width: Math.max(1, bounds.width), height: Math.max(1, bounds.height) };
+    } catch { /* Unmeasurable/over-budget text retains the bounded document box. */ }
+  }
+  return { x: 0, y: 0, width: layer.surface?.grid.width ?? layer.bitmap?.width ?? width, height: layer.surface?.grid.height ?? layer.bitmap?.height ?? height };
+}
+
+/** Shift constrains the dominant axis without introducing an easing lag. */
+export function constrainedTranslation(dx: number, dy: number, constrain: boolean) {
+  return constrain ? (Math.abs(dx) >= Math.abs(dy) ? { dx, dy: 0 } : { dx: 0, dy }) : { dx, dy };
+}
+
+export function rotationDragTransform(start: Transform, delta: number, cx: number, cy: number, snap: boolean) {
+  const angle = snap ? Math.round((start.rotation + delta) / (Math.PI / 12)) * Math.PI / 12 : start.rotation + delta;
+  return rotateLayerTransformAround(start, angle - start.rotation, cx, cy);
+}
+
+/** Shear the grabbed horizontal edge along its own axis; opposite edge stays fixed. */
+export function skewDragTransform(start: Transform, top: boolean, height: number, dx: number, dy: number, originY = 0): Transform {
+  const amount = dx * Math.cos(start.rotation) + dy * Math.sin(start.rotation);
+  const extent = start.sy * height;
+  if (Math.abs(extent) < 1e-6) return start;
+  const skewX = Math.max(-20, Math.min(20, (start.skewX ?? 0) + amount / (top ? -extent : extent)));
+  const shift = -start.sy * (originY + (top ? height : 0)) * (skewX - (start.skewX ?? 0));
+  return { ...start, skewX, tx: start.tx + shift * Math.cos(start.rotation), ty: start.ty + shift * Math.sin(start.rotation) };
+}
 
 /**
  * The pointer geometry the canvas needs, lifted out of the studio component.
@@ -44,7 +82,8 @@ export function snapTranslation(
   ty: number,
 ): { tx: number; ty: number } {
   const candidate: Layer = { ...layer, transform: { ...layer.transform, tx, ty } };
-  const corners = layerCorners(candidate, doc.width, doc.height);
+  const bounds = transformContentBounds(layer, doc.width, doc.height);
+  const corners = layerCorners(candidate, bounds.width, bounds.height, bounds.x, bounds.y);
   const xs = corners.map((corner) => corner[0]);
   const ys = corners.map((corner) => corner[1]);
   const spanX: [number, number] = [Math.min(...xs), Math.max(...xs)];
@@ -61,7 +100,7 @@ export function snapTranslation(
     ...doc.guides.filter((guide) => guide.orientation === "horizontal").map((guide) => guide.position),
   ];
 
-  const threshold = SNAP_SLACK_PX / Math.max(zoom, 0.05);
+  const threshold = SNAP_SLACK_PX / Math.max(zoom, 0.001);
   return {
     tx: tx + nearestPull(anchorsX, targetsX, threshold),
     ty: ty + nearestPull(anchorsY, targetsY, threshold),
@@ -100,6 +139,9 @@ export function cornerDragTransform(
   docHeight: number,
   pointerX: number,
   pointerY: number,
+  constrain = false,
+  originX = 0,
+  originY = 0,
 ): { sx: number; sy: number; tx: number; ty: number } {
   const localOpposite = {
     tl: [docWidth, docHeight], tr: [0, docHeight],
@@ -109,8 +151,12 @@ export function cornerDragTransform(
     tl: [0, 0], tr: [docWidth, 0],
     br: [docWidth, docHeight], bl: [0, docHeight],
   }[corner] as [number, number];
+  localOpposite[0] += originX; localOpposite[1] += originY;
+  localGrabbed[0] += originX; localGrabbed[1] += originY;
 
-  const R = rotMat(start.rotation);
+  const cosine = Math.cos(start.rotation), sine = Math.sin(start.rotation);
+  const shear = start.skewX ?? 0;
+  const R = [cosine, cosine * shear - sine, sine, sine * shear + cosine];
   // Where the pinned corner sits on the canvas under the starting transform.
   const pinX = R[0] * start.sx * localOpposite[0] + R[1] * start.sy * localOpposite[1] + start.tx;
   const pinY = R[2] * start.sx * localOpposite[0] + R[3] * start.sy * localOpposite[1] + start.ty;
@@ -123,8 +169,15 @@ export function cornerDragTransform(
   const signX = localGrabbed[0] - localOpposite[0];
   const signY = localGrabbed[1] - localOpposite[1];
 
-  const rawSx = (dx * ex.x + dy * ex.y) / signX;
-  const rawSy = (dx * ey.x + dy * ey.y) / signY;
+  const localY = dx * ey.x + dy * ey.y;
+  let rawSx = (dx * ex.x + dy * ex.y - shear * localY) / signX;
+  let rawSy = localY / signY;
+  if (constrain) {
+    const ratioX = rawSx / start.sx, ratioY = rawSy / start.sy;
+    const ratio = Math.abs(ratioX - 1) >= Math.abs(ratioY - 1) ? ratioX : ratioY;
+    rawSx = start.sx * ratio;
+    rawSy = start.sy * ratio;
+  }
   const sx = Math.abs(rawSx) < MIN_SCALE ? Math.sign(rawSx || 1) * MIN_SCALE : rawSx;
   const sy = Math.abs(rawSy) < MIN_SCALE ? Math.sign(rawSy || 1) * MIN_SCALE : rawSy;
 

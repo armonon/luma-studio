@@ -73,7 +73,7 @@ const bentoFeatures = [
     className: "bento-history",
     kicker: "BRANCHING HISTORY",
     title: "Explore without fear.",
-    copy: "Undo never throws work away — step back, take a different path, and the old branch is still there.",
+    copy: "Explore alternate edits with branching undo. Recent branches are retained within the document’s history memory and step limits.",
   },
 ] as const;
 

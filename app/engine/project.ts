@@ -1,4 +1,12 @@
 import JSZip from "jszip";
+import { validateCampaign, remapCampaign, type Campaign } from "./campaign";
+import { generateBoundedProjectZip, inspectProjectEntry, readProjectEntryBytes } from "./project-zip-stream";
+import { captureProjectPhotoshopPreservation, restoreProjectPhotoshopPreservation, type ProjectPhotoshopPreservation } from "./psd-project-preservation";
+import { validateVectorPath } from "./vector-path";
+import { validateLetteringAsset, validateLetteringLayer } from "./lettering-asset";
+import { validateFormMesh } from "./form-mesh-asset";
+import { inspectRasterHeader, PROJECT_DECODE_MEMORY_CEILING } from "./input-limits";
+import { exceedsBrowserCanvas } from "./large-documents";
 import { isSafeAction, type Action } from "./actions";
 import {
   Document,
@@ -28,18 +36,31 @@ import type { AlphaTileRecord } from "./alpha-surface";
 import { PixelFormat, PrecisionTileSurface } from "./tile-store";
 import { SparseAlphaSurface } from "./alpha-surface";
 import { alphaSurfaceFromCanvas } from "./selection";
+import { cloneProAdjustment, type ProAdjustmentParams } from "./pro-adjustments";
+import { MAX_CUBE_SIZE } from "./cube-lut";
 import type { WorkingColorSpace } from "./color";
 import { importPsd } from "./psd";
+import { getPhotoshopTileSource } from "./photoshop-tile-source";
 import {
   getPhotoshopDocumentMetadata,
   getPhotoshopLayerMetadata,
+  inspectPhotoshopHeader,
   setPhotoshopDocumentMetadata,
   setPhotoshopLayerMetadata,
 } from "./psd-metadata";
 
-export const LUMA_PROJECT_VERSION = 5 as const;
-const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, 4, LUMA_PROJECT_VERSION]);
+import { validateDesignSnapshots, DESIGN_SNAPSHOT_LIMITS, type DesignSnapshot } from "./design-snapshots";
+
+export const LUMA_PROJECT_VERSION = 14 as const;
+const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, LUMA_PROJECT_VERSION]);
 const RESTORED_HISTORY_LIMIT = 80;
+
+/** Avoid simultaneous codec scratch allocations for every layer/history item. */
+async function serialMap<T, R>(items: readonly T[], map: (item: T) => Promise<R>): Promise<R[]> {
+  const result: R[] = [];
+  for (const item of items) result.push(await map(item));
+  return result;
+}
 
 export const LUMA_PROJECT_LIMITS = {
   archiveBytes: 1024 * 1024 * 1024,
@@ -52,6 +73,7 @@ export const LUMA_PROJECT_LIMITS = {
   actions: 2_000,
   actionSteps: 20_000,
   historyNodes: 512,
+  decodedBytes: PROJECT_DECODE_MEMORY_CEILING,
 } as const;
 
 type SizedZipEntry = JSZip.JSZipObject & {
@@ -94,6 +116,8 @@ type SerializedPrecisionSurface = {
   colorSpace: WorkingColorSpace;
   tileSize: number;
   tiles: Array<{ key: string; asset: string }>;
+  baseSource?: { asset: string; layerIndex: number };
+  deleted?: string[];
 };
 
 type SerializedAlphaSurface = {
@@ -115,7 +139,9 @@ type SerializedRawSource = Omit<NonNullable<Layer["raw"]>, "original"> & {
   asset: string;
 };
 
-type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "maskSurface" | "raw" | "subjectMask"> & {
+type SerializedLayer = Omit<Layer, "bitmap" | "surface" | "mask" | "maskSurface" | "raw" | "subjectMask" | "smartSource"> & {
+  smartSourceAsset?: string;
+  proAdjustmentLutAsset?: string;
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
@@ -127,15 +153,22 @@ type SerializedCapturedBrush = Omit<CapturedBrushAsset, "bitmap"> & {
   bitmapAsset: string;
 };
 
-type SerializedDocument = Omit<Document, "layers" | "selection" | "capturedBrushes"> & {
+type SerializedAlphaChannel = { id: string; name: string; surface: SerializedAlphaSurface };
+type SerializedDesignSnapshot = { id: string; name: string; asset: string };
+type SerializedDocument = Omit<Document, "layers" | "selection" | "capturedBrushes" | "alphaChannels" | "designSnapshots"> & {
+  designSnapshots?: SerializedDesignSnapshot[];
+  alphaChannels?: SerializedAlphaChannel[];
   layers: SerializedLayer[];
   capturedBrushes?: SerializedCapturedBrush[];
   selection?: SerializedSelection;
   photoshopSourceAsset?: string;
   photoshopImportMode?: "layered" | "flattened";
+  photoshopPreservation?: ProjectPhotoshopPreservation;
 };
 
-type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "maskSurface" | "raw"> & {
+type SerializedLayerSnapshot = Omit<LayerSnapshot, "bitmap" | "surface" | "mask" | "maskSurface" | "raw" | "smartSource"> & {
+  smartSourceAsset?: string | null;
+  proAdjustmentLutAsset?: string;
   bitmapAsset?: string;
   surface?: SerializedPrecisionSurface;
   maskAsset?: string;
@@ -164,6 +197,16 @@ type SerializedLayerMaskTilePatch = Omit<LayerMaskTilePatch, "before" | "after">
 };
 
 type SerializedHistoryEntry = {
+  designSnapshotsBefore?: SerializedDesignSnapshot[];
+  designSnapshotsAfter?: SerializedDesignSnapshot[];
+  campaignBefore?: Campaign | null;
+  campaignAfter?: Campaign | null;
+  artboardsBefore?: NonNullable<Document["artboards"]>;
+  artboardsAfter?: NonNullable<Document["artboards"]>;
+  layoutBefore?: { width: number; height: number };
+  layoutAfter?: { width: number; height: number };
+  channelsBefore?: SerializedAlphaChannel[];
+  channelsAfter?: SerializedAlphaChannel[];
   label: string;
   before: SerializedLayerSnapshot[];
   after: SerializedLayerSnapshot[];
@@ -193,7 +236,7 @@ type SerializedOperationHistory = Omit<OperationHistorySnapshot<HistoryEntry>, "
 
 type ProjectManifest = {
   format: "luma-project";
-  version: 1 | 2 | 3 | 4 | typeof LUMA_PROJECT_VERSION;
+  version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | typeof LUMA_PROJECT_VERSION;
   name: string;
   savedAt: string;
   document: SerializedDocument;
@@ -209,6 +252,10 @@ export type DecodedProject = {
 };
 
 export type DecodeLumaProjectOptions = {
+  /** May lower, never raise, the aggregate decode admission ceiling. */
+  maximumDecodedBytes?: number;
+  /** The owner reserves process-wide working memory before any pixel decode. */
+  admitDecodedBytes?: (bytes: number) => () => void;
   /**
    * Recovery only needs the last committed document state. Skipping history
    * leaves its archived assets compressed inside the ZIP instead of inflating
@@ -217,6 +264,82 @@ export type DecodeLumaProjectOptions = {
    */
   restoreHistory?: boolean;
 };
+
+/** Count references, not unique ZIP entries: each mutable canvas is decoded separately. */
+export async function assertProjectDecodeAdmission(zip: JSZip, manifest: unknown, ceiling = LUMA_PROJECT_LIMITS.decodedBytes as number, encodedSizes?: ReadonlyMap<string, number>, encodedPrefixes?: ReadonlyMap<string, Uint8Array>) {
+  if (!Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > LUMA_PROJECT_LIMITS.decodedBytes) throw new Error("Invalid project decoded-memory ceiling");
+  const references = new Map<string, number>();
+  const streamedSources = new Map<string, number>();
+  const canvasReferences = new Map<string, number>();
+  const sourceBases = new Set<string>();
+  let descriptorBytes = 0;
+  const pending: unknown[] = [manifest];
+  let objects = 0;
+  while (pending.length) {
+    const value = pending.pop();
+    if (++objects > 2_000_000) throw new Error("Project manifest complexity exceeds the safety limit");
+    if (typeof value === "string" && value.startsWith("assets/")) references.set(value, (references.get(value) ?? 0) + 1);
+    else if (value && typeof value === "object") {
+      for (const key of ["bitmapAsset", "maskAsset"] as const) {
+        const asset = (value as Record<string, unknown>)[key];
+        if (typeof asset === "string" && asset.startsWith("assets/")) canvasReferences.set(asset, (canvasReferences.get(asset) ?? 0) + 1);
+      }
+      const candidate = value as Partial<SerializedDocument>;
+      const surface = value as Partial<SerializedPrecisionSurface>;
+      if (surface.baseSource && typeof surface.baseSource.asset === "string") {
+        const asset = surface.baseSource.asset;
+        if (!sourceBases.has(asset)) { sourceBases.add(asset); descriptorBytes += 128 * 1024 * 1024; }
+        streamedSources.set(asset, (streamedSources.get(asset) ?? 0) + 1);
+        // Per-source channel indexes plus globally bounded decode scratch.
+        descriptorBytes += 128 * 1024;
+      }
+      if (typeof candidate.photoshopSourceAsset === "string" && candidate.photoshopPreservation?.version === 1) {
+        const asset = candidate.photoshopSourceAsset;
+        streamedSources.set(asset, (streamedSources.get(asset) ?? 0) + 1);
+        descriptorBytes += (candidate.photoshopImportMode === "flattened" ? 4 : 64) * 1024 * 1024;
+      }
+      for (const child of Object.values(value)) pending.push(child);
+    }
+  }
+  let estimatedBytes = descriptorBytes;
+  let bitmapScratchBytes = 0;
+  for (const [asset, count] of references) {
+    const file = zip.file(asset) as SizedZipEntry | null;
+    if (!file) throw new Error(`Missing project asset: ${asset}`);
+    const bytes = encodedSizes?.get(asset) ?? file._data?.uncompressedSize;
+    if (!Number.isSafeInteger(bytes) || bytes! < 0) throw new Error(`Invalid project asset size: ${asset}`);
+    // Include decompression, working copies and history restore copies.
+    // v9 metadata-only sources are streamed into one owned buffer, with no
+    // second Photoshop pixel decode. Older projects retain their prior bound.
+    const streamed = Math.min(count, streamedSources.get(asset) ?? 0);
+    {
+      const signature = encodedPrefixes?.get(asset) ?? (await inspectProjectEntry(file, LUMA_PROJECT_LIMITS.entryBytes, bytes)).prefix;
+      // Only PNG assets become canvases here. RAW/TIFF payloads may need more
+      // than 32 bytes to parse and remain opaque until their own decoder runs.
+      const header = signature[0] === 137 && signature[1] === 80 && signature[2] === 78 && signature[3] === 71
+        ? inspectRasterHeader(signature.buffer.slice(signature.byteOffset, signature.byteOffset + signature.byteLength) as ArrayBuffer) : null;
+      if (header?.format === "png") {
+        if (!header.width || !header.height || exceedsBrowserCanvas(header.width, header.height)) throw new Error("Project bitmap has unsafe PNG dimensions");
+        // Canvas restore is serial: retain each mutable backing store, but only
+        // one decoder image/encoded working set exists at a time. readCanvasAsset
+        // streams into one buffer and closes the decoder image before continuing.
+        const plane = header.width * header.height * 4;
+        estimatedBytes += plane * count;
+        // Only fields that actually consume canvases qualify for streamed PNG
+        // scratch. Opaque/raw assets can contain a PNG signature too and must
+        // still reserve each retained byte payload, including repeated refs.
+        estimatedBytes += bytes! * 4 * (count - Math.min(count, canvasReferences.get(asset) ?? 0));
+        bitmapScratchBytes = Math.max(bitmapScratchBytes, plane + bytes! * 3);
+      } else {
+        estimatedBytes += bytes! * ((count - streamed) * 4 + (streamed ? 1 : 0));
+      }
+      if (!Number.isSafeInteger(estimatedBytes + bitmapScratchBytes) || estimatedBytes + bitmapScratchBytes > ceiling) {
+        throw new Error(`Project exceeds the aggregate decoded-memory ceiling (${Math.ceil((estimatedBytes + bitmapScratchBytes) / 1024 / 1024)} MiB required so far; ${Math.floor(ceiling / 1024 / 1024)} MiB limit; asset ${asset}, ${count} references). The document has not been saved or changed.`);
+      }
+    }
+  }
+  return estimatedBytes + bitmapScratchBytes;
+}
 
 type EncodeContext = {
   zip: JSZip;
@@ -272,10 +395,11 @@ async function addCanvasAsset(context: EncodeContext, canvas: HTMLCanvasElement)
 async function blobCanvas(blob: Blob) {
   if (typeof createImageBitmap === "function") {
     const image = await createImageBitmap(blob);
-    const canvas = newCanvas(image.width, image.height);
-    canvas.getContext("2d")!.drawImage(image, 0, 0);
-    image.close();
-    return canvas;
+    try {
+      const canvas = newCanvas(image.width, image.height);
+      canvas.getContext("2d")!.drawImage(image, 0, 0);
+      return canvas;
+    } finally { image.close(); }
   }
   const url = URL.createObjectURL(blob);
   try {
@@ -285,19 +409,26 @@ async function blobCanvas(blob: Blob) {
       element.onerror = reject;
       element.src = url;
     });
-    const canvas = newCanvas(image.naturalWidth, image.naturalHeight);
-    canvas.getContext("2d")!.drawImage(image, 0, 0);
-    return canvas;
+    try {
+      const canvas = newCanvas(image.naturalWidth, image.naturalHeight);
+      canvas.getContext("2d")!.drawImage(image, 0, 0);
+      return canvas;
+    } finally { image.src = ""; }
   } finally {
     URL.revokeObjectURL(url);
   }
 }
 
-async function readCanvasAsset(zip: JSZip, asset: string) {
+async function readCanvasAsset(zip: JSZip, asset: string, expected?: { width: number; height: number }) {
   if (!asset.startsWith("assets/")) throw new Error(`Invalid project asset: ${asset}`);
-  const file = zip.file(asset);
+  const file = zip.file(asset) as SizedZipEntry | null;
   if (!file) throw new Error(`Missing project asset: ${asset}`);
-  return blobCanvas(await file.async("blob"));
+  const bytes = await readProjectEntryBytes(file, file._data?.uncompressedSize ?? 0, LUMA_PROJECT_LIMITS.entryBytes);
+  const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: "image/png" });
+  const header = inspectRasterHeader(await blob.slice(0, 32).arrayBuffer());
+  if (!header || header.format !== "png" || !header.width || !header.height || exceedsBrowserCanvas(header.width, header.height)) throw new Error("Project bitmap has invalid or unsafe PNG dimensions; use tiled surfaces for large artwork.");
+  if (expected && (header.width !== expected.width || header.height !== expected.height)) throw new Error("3D committed render dimensions do not match its source.");
+  return blobCanvas(blob);
 }
 
 async function serializePrecisionSurface(
@@ -305,7 +436,8 @@ async function serializePrecisionSurface(
   context: EncodeContext,
 ): Promise<SerializedPrecisionSurface> {
   const tiles: SerializedPrecisionSurface["tiles"] = [];
-  for (const { key, data } of surface.store.entries()) {
+  const source = surface.store.sourceState();
+  for (const { key, data } of surface.store.editEntries()) {
     tiles.push({ key, asset: await addPrecisionAsset(context, data) });
   }
   return {
@@ -315,6 +447,7 @@ async function serializePrecisionSurface(
     colorSpace: surface.colorSpace,
     tileSize: surface.grid.tileSize,
     tiles,
+    ...(source ? { baseSource: { asset: await addPhotoshopAsset(context, source.base.source.bytes), layerIndex: source.base.source.layerIndex }, deleted: source.deleted } : {}),
   };
 }
 
@@ -339,9 +472,54 @@ async function readPrecisionAsset(zip: JSZip, asset: string) {
   return file.async("uint8array");
 }
 
+async function serializeSmartSource(context: EncodeContext, bytes: Uint8Array) {
+  if (bytes.byteLength < 4 || bytes.byteLength > 32 * 1024 * 1024 || bytes[0] !== 80 || bytes[1] !== 75) throw new Error("Invalid embedded Smart Object project");
+  return addPrecisionAsset(context, bytes);
+}
+async function deserializeSmartSource(zip: JSZip, asset: string) {
+  if (typeof asset !== "string" || !asset.startsWith("assets/precision/") || !asset.endsWith(".bin")) throw new Error("Invalid Smart Object source asset");
+  const file = zip.file(asset) as SizedZipEntry | null;
+  if (!file) throw new Error("Missing Smart Object source asset");
+  const bytes = await readProjectEntryBytes(file, file._data?.uncompressedSize ?? 0, 32 * 1024 * 1024);
+  if (bytes.byteLength < 4 || bytes[0] !== 80 || bytes[1] !== 75) throw new Error("Invalid embedded Smart Object project");
+  return bytes;
+}
+
+/** Keep repeated LUTs out of the JSON manifest; preserve every numeric sample. */
+async function serializeProAdjustment(adjustment: ProAdjustmentParams | undefined, context: EncodeContext) {
+  if (!adjustment) return {};
+  const proAdjustment = cloneProAdjustment(adjustment);
+  if (proAdjustment.kind !== "color-lookup" || !proAdjustment.lut) return { proAdjustment };
+  const values = proAdjustment.lut.values;
+  const bytes = new Uint8Array(values.length * 8);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < values.length; i++) view.setFloat64(i * 8, values[i], true);
+  proAdjustment.lut.values = [];
+  return { proAdjustment, proAdjustmentLutAsset: await addPrecisionAsset(context, bytes) };
+}
+
+async function deserializeProAdjustment(adjustment: ProAdjustmentParams | undefined, asset: string | undefined, zip: JSZip) {
+  if (asset === undefined) return adjustment ? cloneProAdjustment(adjustment) : undefined;
+  if (typeof asset !== "string" || !asset.startsWith("assets/precision/") || !asset.endsWith(".bin") ||
+      adjustment?.kind !== "color-lookup" || !adjustment.lut || !Array.isArray(adjustment.lut.values) ||
+      adjustment.lut.values.length !== 0 || !Number.isInteger(adjustment.lut.size) ||
+      adjustment.lut.size < 2 || adjustment.lut.size > MAX_CUBE_SIZE) throw new Error("Invalid project LUT asset");
+  const expectedBytes = adjustment.lut.size ** 3 * 3 * 8;
+  const file = zip.file(asset) as SizedZipEntry | null;
+  if (!file || file._data?.uncompressedSize !== expectedBytes) throw new Error("Missing or invalid project LUT samples");
+  const bytes = await readProjectEntryBytes(file, expectedBytes, expectedBytes);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const values = Array.from({ length: expectedBytes / 8 }, (_, i) => view.getFloat64(i * 8, true));
+  return cloneProAdjustment({ ...adjustment, lut: { ...adjustment.lut, values } });
+}
+
 async function digestBytes(data: Uint8Array) {
   if (globalThis.crypto?.subtle) {
-    const source = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+    // WebCrypto snapshots the supplied BufferSource. Passing the exact view
+    // avoids an extra full-size JS copy of a preserved PSD or RAW payload.
+    const source = data.buffer instanceof ArrayBuffer
+      ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+      : Uint8Array.from(data);
     const digest = await globalThis.crypto.subtle.digest("SHA-256", source);
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
@@ -371,7 +549,12 @@ async function readRawAsset(zip: JSZip, asset: string) {
   return file.async("uint8array");
 }
 
+const photoshopAssetIdentities = new WeakMap<EncodeContext, WeakMap<Uint8Array, string>>();
 async function addPhotoshopAsset(context: EncodeContext, data: Uint8Array) {
+  let identities = photoshopAssetIdentities.get(context);
+  if (!identities) { identities = new WeakMap(); photoshopAssetIdentities.set(context, identities); }
+  const known = identities.get(data);
+  if (known) return known;
   const digest = await digestBytes(data);
   let asset = context.photoshopAssets.get(digest);
   if (!asset) {
@@ -380,16 +563,26 @@ async function addPhotoshopAsset(context: EncodeContext, data: Uint8Array) {
     context.zip.file(asset, data);
     context.photoshopAssets.set(digest, asset);
   }
+  identities.set(data, asset);
   return asset;
 }
 
+const photoshopAssetReads = new WeakMap<JSZip, Map<string, Promise<Uint8Array<ArrayBuffer>>>>();
 async function readPhotoshopAsset(zip: JSZip, asset: string) {
   if (!asset.startsWith("assets/photoshop/") || !asset.endsWith(".bin")) {
     throw new Error(`Invalid Photoshop source asset: ${asset}`);
   }
   const file = zip.file(asset);
   if (!file) throw new Error(`Missing Photoshop source asset: ${asset}`);
-  return file.async("uint8array");
+  const size = (file as SizedZipEntry)._data?.uncompressedSize;
+  let reads = photoshopAssetReads.get(zip);
+  if (!reads) { reads = new Map(); photoshopAssetReads.set(zip, reads); }
+  let result = reads.get(asset);
+  if (!result) {
+    result = readProjectEntryBytes(file, size!, LUMA_PROJECT_LIMITS.entryBytes);
+    reads.set(asset, result);
+  }
+  return result;
 }
 
 async function deserializePrecisionSurface(source: SerializedPrecisionSurface, zip: JSZip) {
@@ -398,18 +591,20 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
       !["srgb", "display-p3", "linear-srgb"].includes(source.colorSpace) || !Array.isArray(source.tiles)) {
     throw new Error("Invalid precision surface");
   }
-  const tiles: Array<{ key: string; data: Uint8Array }> = [];
+  const surface = new PrecisionTileSurface(source.width, source.height, source.format, source.colorSpace, source.tileSize);
+  if (source.baseSource) {
+    if (source.format !== "rgba32f" || source.colorSpace !== "srgb" || source.tileSize !== 256 || !Array.isArray(source.deleted) || source.deleted.some(key => typeof key !== "string")) throw new Error("Invalid source-backed precision surface");
+    const bytes = await readPhotoshopAsset(zip, source.baseSource.asset);
+    surface.store.attachSource(getPhotoshopTileSource(bytes, source.baseSource.layerIndex), source.deleted);
+  } else if (source.deleted?.length) throw new Error("Deleted base tiles require a source");
+  const keys = new Set<string>();
   for (const tile of source.tiles) {
-    tiles.push({ key: tile.key, data: await readPrecisionAsset(zip, tile.asset) });
+    if (keys.has(tile.key)) throw new Error("Duplicate precision tile");
+    keys.add(tile.key);
+    surface.store.write(tile.key, await readPrecisionAsset(zip, tile.asset));
   }
-  return PrecisionTileSurface.fromTiles(
-    source.width,
-    source.height,
-    source.format,
-    source.colorSpace,
-    source.tileSize,
-    tiles,
-  );
+  surface.store.drainDirty();
+  return surface;
 }
 
 async function serializeAlphaSurface(
@@ -485,15 +680,25 @@ async function deserializeSelection(source: SerializedSelection, zip: JSZip): Pr
   throw new Error("Project selection has no alpha storage");
 }
 
+function validateMeshLayer(layer: Layer) {
+  validateFormMesh(layer.mesh3d);
+  if (layer.kind !== "smart-object" || layer.lettering3d || layer.text || layer.path || layer.raw || layer.spatial?.enabled ||
+    !layer.bitmap || layer.bitmap.width !== 1600 || layer.bitmap.height !== 1200) throw new Error("Mesh source has conflicting content or is missing its committed render.");
+}
+
 async function serializeLayer(layer: Layer, context: EncodeContext): Promise<SerializedLayer> {
+  if (layer.mesh3d) validateMeshLayer(layer);
+  if (layer.lettering3d) validateLetteringLayer(layer);
   // subjectMask is a canvas and derived data — recomputable from the layer by
   // the same model that produced it. Left in the spread it went through
   // JSON.stringify as `{}`, which is truthy but has no getContext, so a
   // reopened document threw the moment a subject-restricted effect drew.
-  const { bitmap, surface, mask, maskSurface, raw, subjectMask, ...metadata } = layer;
+  const { bitmap, surface, mask, maskSurface, raw, subjectMask, smartSource, ...metadata } = layer;
   void subjectMask;
   return {
     ...metadata,
+    smartSourceAsset: smartSource ? await serializeSmartSource(context, smartSource) : undefined,
+    ...await serializeProAdjustment(metadata.proAdjustment, context),
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
@@ -513,7 +718,13 @@ async function deserializeLayer(
   preserveId: boolean,
   idMap?: Map<string, string>,
 ): Promise<Layer> {
-  const { bitmapAsset, surface, maskAsset, maskSurface, raw, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, maskSurface, raw, proAdjustmentLutAsset, smartSourceAsset, ...metadata } = source;
+  metadata.proAdjustment = await deserializeProAdjustment(metadata.proAdjustment, proAdjustmentLutAsset, zip);
+  if (metadata.transform.skewX !== undefined && !Number.isFinite(metadata.transform.skewX)) throw new Error("Invalid layer shear in Luma project");
+  if (metadata.path) validateVectorPath(metadata.path);
+  if (metadata.vectorMask) validateVectorPath(metadata.vectorMask);
+  if (metadata.lettering3d) validateLetteringAsset(metadata.lettering3d);
+  if (metadata.mesh3d) validateFormMesh(metadata.mesh3d);
   const id = preserveId ? metadata.id : nextId(metadata.kind);
   if (preserveId) reserveId(id);
   else idMap?.set(metadata.id, id);
@@ -521,8 +732,11 @@ async function deserializeLayer(
     ...metadata,
     id,
     transform: { ...metadata.transform },
+    smartSource: smartSourceAsset === undefined ? undefined : await deserializeSmartSource(zip, smartSourceAsset),
   };
-  if (bitmapAsset) layer.bitmap = await readCanvasAsset(zip, bitmapAsset);
+  if (bitmapAsset) layer.bitmap = await readCanvasAsset(zip, bitmapAsset, metadata.lettering3d ?? metadata.mesh3d);
+  if (layer.mesh3d) validateMeshLayer(layer);
+  if (layer.lettering3d) validateLetteringLayer(layer);
   if (surface) layer.surface = await deserializePrecisionSurface(surface, zip);
   if (maskAsset) layer.mask = await readCanvasAsset(zip, maskAsset);
   if (maskSurface) layer.maskSurface = await deserializeAlphaSurface(maskSurface, zip);
@@ -538,21 +752,84 @@ async function deserializeLayer(
   return layer;
 }
 
+async function serializeAlphaChannels(channels: NonNullable<Document["alphaChannels"]>, context: EncodeContext): Promise<SerializedAlphaChannel[]> {
+  if (channels.length > 64) throw new Error("Too many saved alpha channels");
+  return serialMap(channels, async channel => ({ id: channel.id, name: channel.name, surface: await serializeAlphaSurface(channel.surface, context) }));
+}
+
+async function deserializeAlphaChannels(channels: SerializedAlphaChannel[], zip: JSZip, dimensions?: { width: number; height: number }) {
+  if (!Array.isArray(channels) || channels.length > 64) throw new Error("Invalid saved alpha channels");
+  const ids = new Set<string>();
+  return serialMap(channels, async channel => {
+    if (!channel || typeof channel.id !== "string" || !channel.id || channel.id.length > 120 || ids.has(channel.id) ||
+        typeof channel.name !== "string" || !channel.name.trim() || channel.name.length > 80) throw new Error("Invalid alpha channel identity");
+    ids.add(channel.id); reserveId(channel.id);
+    const surface = await deserializeAlphaSurface(channel.surface, zip);
+    if (dimensions && (surface.width !== dimensions.width || surface.height !== dimensions.height)) throw new Error("Alpha channel dimensions do not match the document");
+    return { id: channel.id, name: channel.name, surface };
+  });
+}
+
+const snapshotAssets = new WeakMap<EncodeContext, Map<Uint8Array, string>>();
+const snapshotReads = new WeakMap<JSZip, Map<string, Promise<Uint8Array>>>();
+async function serializeDesignSnapshots(values: DesignSnapshot[], context: EncodeContext): Promise<SerializedDesignSnapshot[]> {
+  validateDesignSnapshots(values);
+  let assets = snapshotAssets.get(context);
+  if (!assets) { assets = new Map(); snapshotAssets.set(context, assets); }
+  return serialMap(values, async value => {
+    let asset = assets!.get(value.bytes);
+    if (!asset) {
+      asset = `assets/design-variants/${assets!.size + 1}.luma`;
+      context.zip.file(asset, value.bytes); assets!.set(value.bytes, asset);
+    }
+    return { id: value.id, name: value.name, asset };
+  });
+}
+async function deserializeDesignSnapshots(values: SerializedDesignSnapshot[], zip: JSZip): Promise<DesignSnapshot[]> {
+  if (!Array.isArray(values) || values.length > DESIGN_SNAPSHOT_LIMITS.count) throw new Error("Invalid full variant count");
+  let bytes = 0;
+  // Validate the complete set before inflating even its first archive.
+  for (const value of values) {
+    if (!value || typeof value.asset !== "string" || !/^assets\/design-variants\/\d+\.luma$/.test(value.asset)) throw new Error("Invalid full variant asset");
+    const size = (zip.file(value.asset) as SizedZipEntry | null)?._data?.uncompressedSize;
+    if (!Number.isSafeInteger(size) || size! < 4) throw new Error("Missing or invalid full variant archive");
+    bytes += size!;
+    if (bytes > DESIGN_SNAPSHOT_LIMITS.bytes) throw new Error("Full variants exceed the 128 MiB archive budget");
+  }
+  validateDesignSnapshots(values.map(value => ({ ...value, bytes: new Uint8Array(4) })));
+  let reads = snapshotReads.get(zip);
+  if (!reads) { reads = new Map(); snapshotReads.set(zip, reads); }
+  const result = await serialMap(values, async value => {
+    let pending = reads!.get(value.asset);
+    if (!pending) {
+      const file = zip.file(value.asset)! as SizedZipEntry;
+      pending = readProjectEntryBytes(file, file._data!.uncompressedSize!, DESIGN_SNAPSHOT_LIMITS.bytes);
+      reads!.set(value.asset, pending);
+    }
+    return { id: value.id, name: value.name, bytes: await pending };
+  });
+  return validateDesignSnapshots(result);
+}
+
 async function serializeDocument(doc: Document, context: EncodeContext): Promise<SerializedDocument> {
-  const layers = await Promise.all(doc.layers.map((layer) => serializeLayer(layer, context)));
-  const capturedBrushes = await Promise.all((doc.capturedBrushes ?? []).map(async ({ bitmap, ...brush }) => ({
+  const layers = await serialMap(doc.layers, (layer) => serializeLayer(layer, context));
+  const capturedBrushes = await serialMap(doc.capturedBrushes ?? [], async ({ bitmap, ...brush }) => ({
     ...brush,
     bitmapAsset: await addCanvasAsset(context, bitmap),
-  })));
+  }));
   const photoshopMetadata = getPhotoshopDocumentMetadata(doc);
   const photoshopSource = photoshopMetadata?.originalSource;
   const selection = doc.selection ? await serializeSelection(doc.selection, context) : undefined;
   return {
+    alphaChannels: doc.alphaChannels ? await serializeAlphaChannels(doc.alphaChannels, context) : undefined,
+    campaign: validateCampaign(doc.campaign),
+    designSnapshots: doc.designSnapshots ? await serializeDesignSnapshots(doc.designSnapshots, context) : undefined,
     width: doc.width,
     height: doc.height,
     colorSpace: doc.colorSpace,
     bitDepth: doc.bitDepth,
     resolution: { ...doc.resolution },
+    globalLight: doc.globalLight ? { ...doc.globalLight } : undefined,
     guides: doc.guides.map((guide) => ({ ...guide })),
     proofing: { ...doc.proofing },
     capturedBrushes,
@@ -565,6 +842,7 @@ async function serializeDocument(doc: Document, context: EncodeContext): Promise
     selection,
     photoshopSourceAsset: photoshopSource ? await addPhotoshopAsset(context, photoshopSource) : undefined,
     photoshopImportMode: photoshopMetadata?.importMode,
+    photoshopPreservation: captureProjectPhotoshopPreservation(doc),
   };
 }
 
@@ -573,10 +851,10 @@ async function deserializeDocument(
   zip: JSZip,
   preserveIds: boolean,
 ): Promise<Document> {
+  if (source.globalLight && (!Number.isFinite(source.globalLight.angle) || !Number.isFinite(source.globalLight.altitude))) throw new Error("Invalid document global light");
   const idMap = preserveIds ? undefined : new Map<string, string>();
-  const layers = await Promise.all(
-    source.layers.map((layer) => deserializeLayer(layer, zip, preserveIds, idMap)),
-  );
+  const layers: Layer[] = [];
+  for (const layer of source.layers) layers.push(await deserializeLayer(layer, zip, preserveIds, idMap));
   if (idMap) {
     for (const layer of layers) {
       if (layer.parentId) layer.parentId = idMap.get(layer.parentId);
@@ -596,7 +874,7 @@ async function deserializeDocument(
   const capturedBrushSources = Array.isArray(source.capturedBrushes)
     ? source.capturedBrushes.slice(-MAX_CAPTURED_BRUSHES)
     : [];
-  const capturedBrushes = await Promise.all(capturedBrushSources.map(async (brush) => {
+  const capturedBrushes = await serialMap(capturedBrushSources, async (brush) => {
     if (!brush || typeof brush.id !== "string" || !brush.id || typeof brush.name !== "string" ||
         typeof brush.createdAt !== "string" || typeof brush.bitmapAsset !== "string" ||
         !Number.isFinite(brush.sourceDiameter) || brush.sourceDiameter <= 0) {
@@ -624,13 +902,15 @@ async function deserializeDocument(
       bitmap: await readCanvasAsset(zip, brush.bitmapAsset),
       liveSource,
     };
-  }));
+  });
   const doc: Document = {
+    alphaChannels: source.alphaChannels ? await deserializeAlphaChannels(source.alphaChannels, zip, source) : undefined,
     width: source.width,
     height: source.height,
     colorSpace: source.colorSpace ?? "srgb",
     bitDepth: source.bitDepth ?? 8,
     resolution: source.resolution ?? { x: 72, y: 72, unit: "ppi" },
+    globalLight: source.globalLight ? { ...source.globalLight } : undefined,
     guides: (source.guides ?? []).map((guide) => ({ ...guide })),
     proofing: source.proofing ? { ...source.proofing } : {
       profile: "none",
@@ -639,6 +919,8 @@ async function deserializeDocument(
       gamutWarning: false,
     },
     capturedBrushes,
+    campaign: remapCampaign(source.campaign,idMap),
+    designSnapshots: source.designSnapshots ? await deserializeDesignSnapshots(source.designSnapshots, zip) : undefined,
     layerComps: (Array.isArray(source.layerComps) ? source.layerComps : []).slice(-64).flatMap((comp) => {
       if (!comp || typeof comp.id !== "string" || typeof comp.name !== "string" ||
           typeof comp.createdAt !== "string" || !Array.isArray(comp.layers)) return [];
@@ -669,6 +951,9 @@ async function deserializeDocument(
   if (source.photoshopSourceAsset) {
     const originalSource = await readPhotoshopAsset(zip, source.photoshopSourceAsset);
     try {
+      if (source.photoshopPreservation) {
+        restoreProjectPhotoshopPreservation(doc, originalSource, source.photoshopImportMode, source.photoshopPreservation);
+      } else {
       const buffer = originalSource.buffer.slice(
         originalSource.byteOffset,
         originalSource.byteOffset + originalSource.byteLength,
@@ -692,9 +977,22 @@ async function deserializeDocument(
         const metadata = sourceLayer ? getPhotoshopLayerMetadata(sourceLayer) : undefined;
         if (metadata) setPhotoshopLayerMetadata(layer, metadata);
       }
-    } catch {
-      // The editable Luma state remains authoritative even if an optional
-      // preservation source cannot be rehydrated on this runtime.
+      }
+    } catch (error) {
+      // Never silently lose the preservation source on the next save. A
+      // metadata-only fallback has no fingerprints, so it cannot authorize
+      // stale source passthrough; compatibility preflight reports the loss.
+      const headerBytes = originalSource.slice(0, 26);
+      setPhotoshopDocumentMetadata(doc, {
+        header: inspectPhotoshopHeader(headerBytes.buffer),
+        originalSource,
+        importMode: source.photoshopImportMode,
+        rawImageResources: [],
+        importedIssues: [{
+          code: "PRESERVATION_RESTORE_FAILED", severity: "error",
+          message: `Photoshop preservation descriptors could not be restored. The original source is retained in this Luma project, but faithful Photoshop export is not available: ${error instanceof Error ? error.message : "decoder failure"}`,
+        }],
+      });
     }
   }
   return doc;
@@ -704,9 +1002,11 @@ async function serializeLayerSnapshot(
   snapshot: LayerSnapshot,
   context: EncodeContext,
 ): Promise<SerializedLayerSnapshot> {
-  const { bitmap, surface, mask, maskSurface, raw, ...metadata } = snapshot;
+  const { bitmap, surface, mask, maskSurface, raw, smartSource, ...metadata } = snapshot;
   return {
     ...metadata,
+    smartSourceAsset: smartSource ? await serializeSmartSource(context, smartSource) : smartSource,
+    ...await serializeProAdjustment(metadata.proAdjustment, context),
     bitmapAsset: bitmap ? await addCanvasAsset(context, bitmap) : undefined,
     surface: surface ? await serializePrecisionSurface(surface, context) : undefined,
     maskAsset: mask ? await addCanvasAsset(context, mask) : undefined,
@@ -724,10 +1024,21 @@ async function deserializeLayerSnapshot(
   source: SerializedLayerSnapshot,
   zip: JSZip,
 ): Promise<LayerSnapshot> {
-  const { bitmapAsset, surface, maskAsset, maskSurface, raw, ...metadata } = source;
+  const { bitmapAsset, surface, maskAsset, maskSurface, raw, proAdjustmentLutAsset, smartSourceAsset, ...metadata } = source;
+  metadata.proAdjustment = await deserializeProAdjustment(metadata.proAdjustment, proAdjustmentLutAsset, zip);
+  if (metadata.path) validateVectorPath(metadata.path);
+  if (metadata.lettering3d) {
+    validateLetteringAsset(metadata.lettering3d);
+    if (!bitmapAsset) throw new Error("3D history is missing its committed render.");
+  }
+  if (metadata.mesh3d) {
+    validateFormMesh(metadata.mesh3d);
+    if (!bitmapAsset) throw new Error("Mesh history is missing its committed render.");
+  }
   return {
     ...metadata,
-    bitmap: bitmapAsset ? await readCanvasAsset(zip, bitmapAsset) : undefined,
+    smartSource: smartSourceAsset == null ? smartSourceAsset : await deserializeSmartSource(zip, smartSourceAsset),
+    bitmap: bitmapAsset ? await readCanvasAsset(zip, bitmapAsset, metadata.lettering3d ?? metadata.mesh3d) : undefined,
     surface: surface ? await deserializePrecisionSurface(surface, zip) : undefined,
     mask: maskAsset ? await readCanvasAsset(zip, maskAsset) : undefined,
     maskSurface: maskSurface ? await deserializeAlphaSurface(maskSurface, zip) : undefined,
@@ -751,7 +1062,8 @@ async function addImageDataAsset(context: EncodeContext, image: ImageData) {
 
 async function readImageDataAsset(zip: JSZip, asset: string) {
   const canvas = await readCanvasAsset(zip, asset);
-  return canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height);
+  try { return canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height); }
+  finally { canvas.width = 1; canvas.height = 1; }
 }
 
 async function serializeAlphaTileRecord(
@@ -782,15 +1094,23 @@ async function serializeHistoryEntry(
   context: EncodeContext,
 ): Promise<SerializedHistoryEntry> {
   const serialized: SerializedHistoryEntry = {
+    designSnapshotsBefore: entry.designSnapshotsBefore ? await serializeDesignSnapshots(entry.designSnapshotsBefore, context) : undefined,
+    designSnapshotsAfter: entry.designSnapshotsAfter ? await serializeDesignSnapshots(entry.designSnapshotsAfter, context) : undefined,
+    ...(entry.campaignBefore!==undefined?{campaignBefore:entry.campaignBefore===null?null:validateCampaign(entry.campaignBefore)}:{}),
+    ...(entry.campaignAfter!==undefined?{campaignAfter:entry.campaignAfter===null?null:validateCampaign(entry.campaignAfter)}:{}),
+    artboardsBefore:entry.artboardsBefore,artboardsAfter:entry.artboardsAfter,
+    layoutBefore:entry.layoutBefore,layoutAfter:entry.layoutAfter,
+    channelsBefore: entry.channelsBefore ? await serializeAlphaChannels(entry.channelsBefore, context) : undefined,
+    channelsAfter: entry.channelsAfter ? await serializeAlphaChannels(entry.channelsAfter, context) : undefined,
     label: entry.label,
-    before: await Promise.all(entry.before.map((snapshot) => serializeLayerSnapshot(snapshot, context))),
-    after: await Promise.all(entry.after.map((snapshot) => serializeLayerSnapshot(snapshot, context))),
+    before: await serialMap(entry.before, (snapshot) => serializeLayerSnapshot(snapshot, context)),
+    after: await serialMap(entry.after, (snapshot) => serializeLayerSnapshot(snapshot, context)),
   };
   if (entry.layersBefore) {
-    serialized.layersBefore = await Promise.all(entry.layersBefore.map((layer) => serializeLayer(layer, context)));
+    serialized.layersBefore = await serialMap(entry.layersBefore, (layer) => serializeLayer(layer, context));
   }
   if (entry.layersAfter) {
-    serialized.layersAfter = await Promise.all(entry.layersAfter.map((layer) => serializeLayer(layer, context)));
+    serialized.layersAfter = await serialMap(entry.layersAfter, (layer) => serializeLayer(layer, context));
   }
   if (entry.layerOrderBefore) serialized.layerOrderBefore = [...entry.layerOrderBefore];
   if (entry.layerOrderAfter) serialized.layerOrderAfter = [...entry.layerOrderAfter];
@@ -852,15 +1172,31 @@ async function deserializeHistoryEntry(
   zip: JSZip,
 ): Promise<HistoryEntry> {
   const entry: HistoryEntry = {
+    designSnapshotsBefore: source.designSnapshotsBefore ? await deserializeDesignSnapshots(source.designSnapshotsBefore, zip) : undefined,
+    designSnapshotsAfter: source.designSnapshotsAfter ? await deserializeDesignSnapshots(source.designSnapshotsAfter, zip) : undefined,
+    ...(source.campaignBefore!==undefined?{campaignBefore:source.campaignBefore===null?null:remapCampaign(source.campaignBefore)}:{}),
+    ...(source.campaignAfter!==undefined?{campaignAfter:source.campaignAfter===null?null:remapCampaign(source.campaignAfter)}:{}),
+    channelsBefore: source.channelsBefore ? await deserializeAlphaChannels(source.channelsBefore, zip) : undefined,
+    channelsAfter: source.channelsAfter ? await deserializeAlphaChannels(source.channelsAfter, zip) : undefined,
     label: source.label,
-    before: await Promise.all((source.before ?? []).map((snapshot) => deserializeLayerSnapshot(snapshot, zip))),
-    after: await Promise.all((source.after ?? []).map((snapshot) => deserializeLayerSnapshot(snapshot, zip))),
+    before: await serialMap(source.before ?? [], (snapshot) => deserializeLayerSnapshot(snapshot, zip)),
+    after: await serialMap(source.after ?? [], (snapshot) => deserializeLayerSnapshot(snapshot, zip)),
   };
+  for(const key of ["artboardsBefore","artboardsAfter"] as const)if(source[key]!==undefined){
+    const boards=source[key]!;
+    if(!Array.isArray(boards)||boards.length>128||boards.some(a=>!a||typeof a.id!=="string"||typeof a.name!=="string"||a.name.length>80||![a.x,a.y,a.width,a.height].every(n=>Number.isFinite(n)&&n>=0&&n<=300000)||a.width<1||a.height<1))throw new Error("Invalid campaign artboard history");
+    boards.forEach(a=>reserveId(a.id));entry[key]=structuredClone(boards);
+  }
+  for(const key of ["layoutBefore","layoutAfter"] as const)if(source[key]!==undefined){
+    const size=source[key]!;
+    if(!size||![size.width,size.height].every(n=>Number.isSafeInteger(n)&&n>=1&&n<=300000))throw new Error("Invalid campaign canvas history");
+    entry[key]={...size};
+  }
   if (source.layersBefore) {
-    entry.layersBefore = await Promise.all(source.layersBefore.map((layer) => deserializeLayer(layer, zip, true)));
+    entry.layersBefore = await serialMap(source.layersBefore, (layer) => deserializeLayer(layer, zip, true));
   }
   if (source.layersAfter) {
-    entry.layersAfter = await Promise.all(source.layersAfter.map((layer) => deserializeLayer(layer, zip, true)));
+    entry.layersAfter = await serialMap(source.layersAfter, (layer) => deserializeLayer(layer, zip, true));
   }
   if (source.layerOrderBefore) entry.layerOrderBefore = [...source.layerOrderBefore];
   if (source.layerOrderAfter) entry.layerOrderAfter = [...source.layerOrderAfter];
@@ -884,14 +1220,14 @@ async function deserializeHistoryEntry(
     };
   }
   if (source.pixelPatches) {
-    entry.pixelPatches = await Promise.all(source.pixelPatches.map(async (patch) => ({
+    entry.pixelPatches = await serialMap(source.pixelPatches, async (patch) => ({
       layerId: patch.layerId,
       target: patch.target,
       x: patch.x,
       y: patch.y,
       before: await readImageDataAsset(zip, patch.beforeAsset),
       after: await readImageDataAsset(zip, patch.afterAsset),
-    })));
+    }));
   }
   if (source.surfacePatches) {
     entry.surfacePatches = await Promise.all(source.surfacePatches.map(async (patch) => ({
@@ -960,7 +1296,7 @@ export async function encodeLumaProject(
   actions: Action[],
   name: string,
   history?: OperationHistorySnapshot<HistoryEntry>,
-  options: { mode?: "project" | "recovery" } = {},
+  options: { mode?: "project" | "recovery"; maximumArchiveBytes?: number } = {},
 ): Promise<Blob> {
   const recovery = options.mode === "recovery";
   const zip = new JSZip();
@@ -984,16 +1320,36 @@ export async function encodeLumaProject(
     actions,
     history: history ? await serializeHistory(history, context) : undefined,
   };
+  assertManifest(manifest);
+  // Save and recovery must obey the same restore contract as untrusted input.
+  // Inspect existing entry data one at a time, without making a second ZIP or
+  // decoding canvases merely to validate our own output.
+  const sizes = new Map<string, number>();
+  const prefixes = new Map<string, Uint8Array>();
+  let expanded = 0;
+  const manifestText = recovery ? JSON.stringify(manifest) : JSON.stringify(manifest, null, 2);
+  const manifestBytes = new TextEncoder().encode(manifestText).byteLength;
+  if (manifestBytes > LUMA_PROJECT_LIMITS.manifestBytes) throw new Error("Project manifest exceeds the safety limit");
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir) continue;
+    const { size, prefix } = await inspectProjectEntry(entry, LUMA_PROJECT_LIMITS.entryBytes);
+    if (size > LUMA_PROJECT_LIMITS.entryBytes) throw new Error(`Project entry is too large: ${entry.name}`);
+    sizes.set(entry.name, size);
+    prefixes.set(entry.name, prefix);
+    expanded += size;
+    if (expanded + manifestBytes > LUMA_PROJECT_LIMITS.expandedBytes) throw new Error("Expanded Luma project exceeds the safety limit");
+  }
+  if (sizes.size + 1 > LUMA_PROJECT_LIMITS.entries) throw new Error("Luma project contains too many archive entries");
+  await assertProjectDecodeAdmission(zip, manifest, LUMA_PROJECT_LIMITS.decodedBytes, sizes, prefixes);
   // Recovery runs repeatedly and must finish quickly under memory pressure.
   // A compact manifest and low-cost deflate reduce both transient work and
   // checkpoint latency; explicit project saves keep the stronger compression.
-  zip.file("manifest.json", recovery ? JSON.stringify(manifest) : JSON.stringify(manifest, null, 2));
-  return zip.generateAsync({
-    type: "blob",
-    compression: "DEFLATE",
-    compressionOptions: { level: recovery ? 1 : 4 },
-    mimeType: "application/x-luma-project",
-  });
+  zip.file("manifest.json", manifestText);
+  const maximumArchiveBytes = Math.min(options.maximumArchiveBytes ?? LUMA_PROJECT_LIMITS.archiveBytes, LUMA_PROJECT_LIMITS.archiveBytes);
+  const blob = await generateBoundedProjectZip(zip, maximumArchiveBytes, recovery ? 1 : 4);
+  if (blob.size > LUMA_PROJECT_LIMITS.archiveBytes) throw new Error("Luma project exceeds the 1 GB archive limit");
+  if (expanded + manifestBytes > Math.max(256 * 1024 * 1024, blob.size * 250)) throw new Error("Luma project has an unsafe archive expansion ratio");
+  return blob;
 }
 
 function assertManifest(value: unknown): asserts value is ProjectManifest {
@@ -1042,6 +1398,9 @@ export async function decodeLumaProject(
   if (!manifestFile) throw new Error("Project manifest is missing");
   const manifest: unknown = JSON.parse(await manifestFile.async("string"));
   assertManifest(manifest);
+  const decodedBytes = await assertProjectDecodeAdmission(zip, options.restoreHistory === false ? { ...manifest, history: undefined } : manifest, options.maximumDecodedBytes);
+  const release = options.admitDecodedBytes?.(decodedBytes);
+  try {
   const preserveIds = manifest.version >= 2;
   return {
     name: manifest.name,
@@ -1051,4 +1410,5 @@ export async function decodeLumaProject(
       ? await deserializeHistory(manifest.history, zip)
       : undefined,
   };
+  } finally { release?.(); }
 }

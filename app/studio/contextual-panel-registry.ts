@@ -1,6 +1,7 @@
 import type { Layer } from "@/app/engine/document";
 
 export type ContextualPanelId =
+  | "campaign"
   | "document"
   | "channels"
   | "structure"
@@ -21,6 +22,7 @@ export type ContextualPanelId =
   | "actions";
 
 export const CONTEXTUAL_PANEL_CHOICES: ReadonlyArray<{ id: ContextualPanelId; label: string }> = [
+  { id: "campaign", label: "Campaign" },
   { id: "document", label: "Document & color" },
   { id: "channels", label: "Channels" },
   { id: "structure", label: "Comps & artboards" },
@@ -32,6 +34,7 @@ export const CONTEXTUAL_PANEL_CHOICES: ReadonlyArray<{ id: ContextualPanelId; la
 
 export function panelForLayer(layer: Layer | null): ContextualPanelId | null {
   if (!layer) return null;
+  if (layer.lettering3d || layer.mesh3d) return "vector";
   if (layer.raw) return "raw";
   switch (layer.kind) {
     case "adjustment-tone": return "tone";

@@ -32,9 +32,12 @@ export type Tool =
   | "perspective-warp" | "radial-warp" | "eyedropper" | "color-sampler"
   | "ruler";
 
-export type ToolOptionsKind = "general" | "paint" | "selection" | "type" | "crop";
+export type ToolOptionsKind = "general" | "paint" | "selection" | "type" | "crop" | "transform" | "shape" | "pen";
 export type ToolPointerKind = "move" | "paint" | "retouch" | "selection" | "vector" | "transform" | "sample" | "none";
 export type ToolOverlayKind = "transform" | "brush" | "selection" | "path" | "warp" | "sample" | "none";
+export type ToolCursorVisualKind =
+  | "precision" | "move" | "brush" | "selection" | "sample"
+  | "type" | "path" | "transform" | "fill" | "gradient";
 
 export type ToolDefinition = Readonly<{
   id: Tool;
@@ -43,6 +46,7 @@ export type ToolDefinition = Readonly<{
   label: string;
   shortcut: string;
   cursor: "default" | "crosshair" | "move";
+  cursorVisual: ToolCursorVisualKind;
   options: ToolOptionsKind;
   pointer: ToolPointerKind;
   overlay: ToolOverlayKind;
@@ -107,11 +111,29 @@ const typeTools = new Set<Tool>(["text", "paragraph-text", "vertical-text", "pat
 const vectorTools = new Set<Tool>([...typeTools, "rect", "ellipse", "triangle", "polygon", "line", "custom-shape", "frame", "pen", "path-select", "direct-select"]);
 const transformTools = new Set<Tool>(["crop", "perspective-crop", "straighten", "content-move", "perspective-warp", "radial-warp"]);
 const sampleTools = new Set<Tool>(["eyedropper", "color-sampler", "ruler"]);
+const brushCursorTools = new Set<Tool>([
+  "brush", "capture-brush", "pencil", "mixer", "erase", "mask-add", "mask-remove",
+  "clone", "heal", "spot-heal", "patch", "remove", "dodge", "burn", "blur-brush",
+  "sharpen-brush", "smudge", "sponge", "liquify", "sel-quick",
+]);
+
+function cursorVisualFor(id: Tool): ToolCursorVisualKind {
+  if (brushCursorTools.has(id)) return "brush";
+  if (id === "move" || id === "content-move" || id === "path-select") return "move";
+  if (id === "gradient") return "gradient";
+  if (id === "pattern" || id === "fill") return "fill";
+  if (selectionTools.has(id)) return "selection";
+  if (typeTools.has(id)) return "type";
+  if (id === "pen" || id === "direct-select" || vectorTools.has(id)) return "path";
+  if (transformTools.has(id)) return "transform";
+  if (sampleTools.has(id)) return "sample";
+  return "precision";
+}
 
 function definition([id, workspace, icon, label, shortcut]: Seed): ToolDefinition {
   const options: ToolOptionsKind = paintTools.has(id) || retouchTools.has(id) ? "paint"
-    : selectionTools.has(id) ? "selection" : typeTools.has(id) ? "type"
-      : id === "crop" || id === "perspective-crop" ? "crop" : "general";
+    : selectionTools.has(id) ? "selection" : typeTools.has(id) ? "type" : ["rect", "ellipse", "triangle", "polygon", "line", "custom-shape"].includes(id) ? "shape"
+      : id === "pen" ? "pen" : id === "crop" || id === "perspective-crop" ? "crop" : id === "move" || id === "path-select" ? "transform" : "general";
   const pointer: ToolPointerKind = id === "move" ? "move" : paintTools.has(id) ? "paint"
     : retouchTools.has(id) ? "retouch" : selectionTools.has(id) ? "selection"
       : vectorTools.has(id) ? "vector" : transformTools.has(id) ? "transform"
@@ -120,7 +142,7 @@ function definition([id, workspace, icon, label, shortcut]: Seed): ToolDefinitio
     : selectionTools.has(id) ? "selection" : vectorTools.has(id) ? "path"
       : transformTools.has(id) ? "warp" : sampleTools.has(id) ? "sample" : "none";
   const cursor = id === "move" ? "move" : pointer === "none" ? "default" : "crosshair";
-  return { id, workspace, icon, label, shortcut, cursor, options, pointer, overlay };
+  return { id, workspace, icon, label, shortcut, cursor, cursorVisual: cursorVisualFor(id), options, pointer, overlay };
 }
 
 export const TOOL_REGISTRY: Readonly<Record<Tool, ToolDefinition>> = Object.freeze(

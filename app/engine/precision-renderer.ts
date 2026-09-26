@@ -1,10 +1,13 @@
-import { Layer, drawLayerContent, newCanvas } from "./document";
+import { Layer, drawLayerContent, newCanvas, affineForLayerTransform } from "./document";
 import { PrecisionTileSurface } from "./tile-store";
 
 type PreviewEntry = {
   revision: number;
   canvas: HTMLCanvasElement;
   lastUsed: number;
+  bytes: number;
+  owner: WeakRef<SurfacePreviewCache>;
+  key: string;
 };
 
 type SurfacePreviewCache = {
@@ -12,11 +15,22 @@ type SurfacePreviewCache = {
 };
 
 const MAX_PREVIEW_TILES_PER_SURFACE = 96;
+const MAX_PREVIEW_BYTES = 32 * 1024 * 1024;
+const residentPreviews = new Set<PreviewEntry>();
+let residentPreviewBytes = 0;
 const surfaceCaches = new WeakMap<PrecisionTileSurface, SurfacePreviewCache>();
 let clock = 0;
 let previewHits = 0;
 let previewMisses = 0;
 let previewEvictions = 0;
+
+function evict(entry: PreviewEntry) {
+  entry.owner.deref()?.tiles.delete(entry.key);
+  residentPreviews.delete(entry);
+  residentPreviewBytes -= entry.bytes;
+  entry.canvas.width = 1; entry.canvas.height = 1;
+  previewEvictions += 1;
+}
 
 function previewTile(surface: PrecisionTileSurface, key: string) {
   let cache = surfaceCaches.get(surface);
@@ -41,7 +55,10 @@ function previewTile(surface: PrecisionTileSurface, key: string) {
   const image = context.createImageData(pixels.width, pixels.height);
   image.data.set(pixels.data);
   context.putImageData(image, 0, 0);
-  cache.tiles.set(key, { revision, canvas, lastUsed: clock });
+  if (existing) { residentPreviews.delete(existing); residentPreviewBytes -= existing.bytes; }
+  const next: PreviewEntry = { revision, canvas, lastUsed: clock, bytes: pixels.width * pixels.height * 4, owner: new WeakRef(cache), key };
+  cache.tiles.set(key, next);
+  residentPreviews.add(next); residentPreviewBytes += next.bytes;
 
   if (cache.tiles.size > MAX_PREVIEW_TILES_PER_SURFACE) {
     let oldestKey = "";
@@ -52,9 +69,14 @@ function previewTile(surface: PrecisionTileSurface, key: string) {
       oldestUse = entry.lastUsed;
     }
     if (oldestKey) {
-      cache.tiles.delete(oldestKey);
-      previewEvictions += 1;
+      evict(cache.tiles.get(oldestKey)!);
     }
+  }
+  while (residentPreviewBytes > MAX_PREVIEW_BYTES) {
+    let oldest: PreviewEntry | undefined;
+    for (const entry of residentPreviews) if (entry !== next && (!oldest || entry.lastUsed < oldest.lastUsed)) oldest = entry;
+    if (!oldest) break;
+    evict(oldest);
   }
   return canvas;
 }
@@ -70,13 +92,8 @@ export function drawLayerContentManaged(
     return;
   }
   const t = layer.transform;
-  const cos = Math.cos(t.rotation);
-  const sin = Math.sin(t.rotation);
   ctx.save();
-  const a = cos * t.sx;
-  const b = sin * t.sx;
-  const c = -sin * t.sy;
-  const d = cos * t.sy;
+  const { a, b, c, d } = affineForLayerTransform(t);
   if (projection) {
     ctx.setTransform(
       projection.a * a + projection.c * b,
@@ -89,13 +106,20 @@ export function drawLayerContentManaged(
   } else {
     ctx.setTransform(a, b, c, d, t.tx, t.ty);
   }
-  for (const { key } of layer.surface.store.entries()) {
+  const matrix = typeof ctx.getTransform === "function" ? ctx.getTransform() : null;
+  for (const key of layer.surface.store.keys()) {
     const address = layer.surface.grid.parseKey(key);
+    if (matrix) {
+      const corners = [[address.x, address.y], [address.x + address.width, address.y], [address.x, address.y + address.height], [address.x + address.width, address.y + address.height]];
+      const xs = corners.map(([x, y]) => matrix.a * x + matrix.c * y + matrix.e);
+      const ys = corners.map(([x, y]) => matrix.b * x + matrix.d * y + matrix.f);
+      if (Math.max(...xs) < -1 || Math.max(...ys) < -1 || Math.min(...xs) > ctx.canvas.width + 1 || Math.min(...ys) > ctx.canvas.height + 1) continue;
+    }
     ctx.drawImage(previewTile(layer.surface, key), address.x, address.y);
   }
   ctx.restore();
 }
 
 export function precisionPreviewCacheStats() {
-  return { hits: previewHits, misses: previewMisses, evictions: previewEvictions, maxTilesPerSurface: MAX_PREVIEW_TILES_PER_SURFACE };
+  return { hits: previewHits, misses: previewMisses, evictions: previewEvictions, maxTilesPerSurface: MAX_PREVIEW_TILES_PER_SURFACE, residentBytes: residentPreviewBytes, maxBytes: MAX_PREVIEW_BYTES };
 }

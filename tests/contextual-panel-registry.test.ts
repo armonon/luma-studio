@@ -21,9 +21,12 @@ test("manual panels and mask focus outrank generic workspace routing", () => {
   assert.equal(resolveContextualPanel({ ...base, override: null, inspector: "ai" }), "neural");
 });
 
-test("the manual Selection panel is mounted from resolved contextual state", () => {
+test("a docked Selection panel stays available independently of workspace and contextual routing", () => {
   const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /\{contextualPanel === "selection" && \(/);
+  const panel = page.split('<DockPanelContent panelId="selection">')[1]?.split("</DockPanelContent>")[0];
+  assert.ok(panel, "Selection is registered as dock content");
+  assert.match(panel, /\{doc && \(/);
+  assert.doesNotMatch(panel, /contextualPanel ===|workspace ===/);
   assert.doesNotMatch(
     page,
     /\{workspace === "select" && \(\s*<section[^>]*data-contextual-panel="selection"/,
