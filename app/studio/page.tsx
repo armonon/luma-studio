@@ -462,7 +462,6 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [selectionMode, setSelectionMode] = useState<SelectionCombineMode>("replace");
   const [toast, setToast] = useState("");
   const [projectSaveError, setProjectSaveError] = useState<string | null>(null);
-  const activePreset = 0;
   const [layerCompName, setLayerCompName] = useState("Layer Comp");
   const [artboardName, setArtboardName] = useState("Artboard");
   const [textDraft, setTextDraft] = useState("WANDER FARTHER");
