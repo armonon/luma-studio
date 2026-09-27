@@ -80,3 +80,34 @@ for (const depth of [16, 32] as const) for (const format of ["psd", "psb"] as co
     assert.equal(inspectPhotoshopHeader(second.buffer).bitsPerChannel, depth);
   });
 }
+
+test("16-bit export refuses samples it could only record by silently clipping them", () => {
+  // The working space is linear light and an rgba32f surface really does keep
+  // 1.5, -0.25 and NaN — verified: readPixel returns them unchanged. A 16-bit
+  // PSD channel cannot, and the line after this guard clamps with
+  // Math.max(0, Math.min(1, value)), so without the refusal an out-of-gamut
+  // float would be written as clipped data presented as faithful, and a NaN
+  // would be written as black. Nothing exercised it: the fixture only puts an
+  // out-of-range sample in the 32-bit case, where it is legal.
+  for (const [label, sample] of [["above one", 1.5], ["below zero", -0.25], ["not a number", NaN]] as Array<[string, number]>) {
+    const doc = fixture(16);
+    const base = doc.layers[doc.layers.length - 1];
+    base.surface!.updateFromWorkingFloat32({
+      width: 2, height: 1,
+      data: new Float32Array([sample, 0.2, 0.3, 1, 0.9, 0.1, 0.2, 1]),
+    });
+    assert.equal(highDepthEligibility(doc).eligible, true, `${label}: the document is otherwise exportable`);
+    assert.throws(
+      () => exportPhotoshopDocument(doc, { format: "psd" }),
+      /out-of-range samples|non-finite/,
+      `a sample ${label} must be refused, not clipped`,
+    );
+  }
+
+  // The same values at 32 bits are legitimate and must still export.
+  const float = fixture(32);
+  float.layers[float.layers.length - 1].surface!.updateFromWorkingFloat32({
+    width: 2, height: 1, data: new Float32Array([1.5, 0.2, 0.3, 1, 0.9, 0.1, 0.2, 1]),
+  });
+  assert.equal(inspectPhotoshopHeader(exportPhotoshopDocument(float, { format: "psd" }).buffer).bitsPerChannel, 32);
+});
