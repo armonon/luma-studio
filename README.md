@@ -51,6 +51,12 @@ system remain explicit fallbacks instead of being advertised as native support.
 
 Requires Node.js `>=22.13.0`.
 
+Poppler is optional but recommended: `brew install poppler`. Ten PDF vector
+tests validate exported pages with `pdftoppm` as an independent renderer
+rather than trusting our own compositor, and they *skip* rather than fail
+when it is absent — so without it the suite reports green while that
+verification never ran.
+
 ```bash
 npm install
 npm run dev

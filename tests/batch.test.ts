@@ -102,3 +102,23 @@ test("batch processing isolates each file, disposes workers, and reports failure
   assert.equal(replayed, 2);
   assert.ok(result.archive.size > 0);
 });
+
+test("a caller cannot raise the retained-output ceiling above the module's own limit", async () => {
+  // BATCH_MAX_OUTPUT_BYTES is only a ceiling because runBatch clamps the
+  // caller's request down to it. The existing budget test passes Infinity,
+  // which Number.isSafeInteger rejects long before the clamp is reached — so
+  // deleting the clamp broke nothing, and any large finite request would then
+  // have been honoured in full.
+  const oversized = { size: 200 * 1024 * 1024, arrayBuffer: async () => new ArrayBuffer(0) } as unknown as Blob;
+  const result = await runBatch(
+    [new File(["a"], "a.png")],
+    null,
+    undefined,
+    runtime({ encodePng: async () => oversized }),
+    { maxOutputBytes: 1024 * 1024 * 1024 },
+  );
+
+  // The refusal names the budget it actually enforced: 128 MB, not the 1 GB asked for.
+  assert.match(result.stoppedReason ?? "", /128 MB safety limit/);
+  assert.equal(result.succeeded, 0, "a 200 MiB output must not be retained under a 128 MiB ceiling");
+});
