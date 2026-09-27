@@ -1462,19 +1462,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
     if (activeTool === "pattern" || activeTool === "fill") {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("Fill needs a raster layer"); return; }
-      // patternFill refuses a document past the browser canvas ceiling before it
-      // ever looks at the lock, so reporting every false as "Layer is locked"
-      // sent people hunting for a lock that was not there.
-      const oversized = !!doc && exceedsBrowserCanvas(doc.width, doc.height);
-      if (activeTool === "pattern" && oversized) {
-        notify("Pattern fill is not available on a document this large yet");
+      // The engine owns the reason: patternFill returns one false for a document
+      // past the canvas ceiling, a locked layer, a 3D layer and a layer with no
+      // bitmap, and guessing here produced "Layer is locked" for all four.
+      if (activeTool === "pattern") {
+        const refusal = studio.generatedFillRefusal(activeLayer.id);
+        if (refusal) { notify(refusal); return; }
+        notify(studio.patternFill(activeLayer.id, patternKind, brushColor, secondaryColor, patternScale) ? "Pattern applied" : "Pattern could not be applied");
         return;
       }
-      const changed = activeTool === "pattern"
-        ? studio.patternFill(activeLayer.id, patternKind, brushColor, secondaryColor, patternScale)
-        : !activeLayer.locked;
-      if (activeTool === "fill" && changed) studio.fillLayer(activeLayer.id, brushColor, brushOpacity);
-      notify(changed ? (activeTool === "pattern" ? "Pattern applied" : "Selection filled") : "Layer is locked");
+      if (activeLayer.locked) { notify("Layer is locked"); return; }
+      studio.fillLayer(activeLayer.id, brushColor, brushOpacity);
+      notify("Selection filled");
       return;
     }
     if (marqueeTool || vectorDragTool || transformDragTool) {
@@ -1518,16 +1517,20 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (next.length === 4) {
         // Both refuse silently — past the canvas ceiling, on a locked or 3D
         // layer, or for a self-intersecting quad — and the success message used
-        // to be printed regardless, so a refusal read as a completed edit.
-        const applied = activeTool === "perspective-crop"
-          ? studio.perspectiveCrop(next as unknown as Quad) !== null
-          : studio.perspectiveWarpLayer(activeLayer!.id, next as unknown as Quad);
+        // to be printed regardless, so a refusal read as a completed edit. The
+        // engine names the reason so this cannot drift from what it enforces.
+        const quad = next as unknown as Quad;
+        const crop = activeTool === "perspective-crop";
+        const label = crop ? "Perspective crop" : "Perspective warp";
+        const refusal = crop
+          ? studio.perspectiveCropRefusal(quad)
+          : studio.perspectiveWarpRefusal(activeLayer!.id, quad);
         setPointDraft([]);
-        const label = activeTool === "perspective-crop" ? "Perspective crop" : "Perspective warp";
-        if (applied) notify(`${label} applied`);
-        else if (!!doc && exceedsBrowserCanvas(doc.width, doc.height)) notify(`${label} is not available on a document this large yet`);
-        else if (activeLayer?.locked) notify("Layer is locked");
-        else notify(`${label} needs four corners that form a shape without crossing sides`);
+        if (refusal) { notify(refusal); return; }
+        const applied = crop
+          ? studio.perspectiveCrop(quad) !== null
+          : studio.perspectiveWarpLayer(activeLayer!.id, quad);
+        notify(applied ? `${label} applied` : `${label} could not be applied`);
       } else {
         setPointDraft(next);
         notify(`Corner ${next.length}/4 placed`);
@@ -1857,7 +1860,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           intent.fill,
         )));
       } else if (intent?.kind === "frame") {
-        studio.addFrame(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.shifted);
+        const refusal = studio.addFrameRefusal();
+        if (refusal) notify(refusal);
+        else studio.addFrame(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height, intent.shifted);
       } else if (intent?.kind === "paragraph-text") {
         const layer = studio.addTextLayer(intent.text, {
           x: intent.bounds.x,
@@ -1870,7 +1875,9 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         });
         setActiveLayerId(layer.id);
       } else if (intent?.kind === "gradient") {
-        studio.gradientFill(intent.layerId, intent.from, intent.to, intent.startColor, intent.endColor, intent.gradientType);
+        const refusal = studio.gradientFillRefusal(intent.layerId);
+        if (refusal) notify(refusal);
+        else studio.gradientFill(intent.layerId, intent.from, intent.to, intent.startColor, intent.endColor, intent.gradientType);
       } else if (intent?.kind === "crop") {
         studio.cropRect(intent.bounds.x, intent.bounds.y, intent.bounds.width, intent.bounds.height);
       } else if (intent?.kind === "straighten") {
@@ -4970,7 +4977,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   </button>
                   <button onClick={runSubject}>Luma</button>
                   <button onClick={() => activeLayerId && studio?.invertMask(activeLayerId)}>Invert</button>
-                  <button onClick={() => activeLayerId && studio?.clearMask(activeLayerId)}>Reveal all</button>
+                  <button onClick={() => { if (!activeLayerId || !studio) return; const refusal = studio.clearMaskRefusal(activeLayerId); if (refusal) { notify(refusal); return; } studio.clearMask(activeLayerId); notify("Mask revealed"); }}>Reveal all</button>
                 </div>
               </section>
             )}
@@ -5488,7 +5495,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                 onNeuralSubject={runNeuralSubject}
                 onLumaMask={runSubject}
                 onInvertMask={() => activeLayerId && studio?.invertMask(activeLayerId)}
-                onRevealAll={() => activeLayerId && studio?.clearMask(activeLayerId)}
+                onRevealAll={() => { if (!activeLayerId || !studio) return; const refusal = studio.clearMaskRefusal(activeLayerId); if (refusal) { notify(refusal); return; } studio.clearMask(activeLayerId); notify("Mask revealed"); }}
               />
             </DockPanelContent>
             <DockPanelContent panelId="actions">
@@ -5756,7 +5763,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       {styleLayer && studio && (
         <ShellErrorBoundary title="Layer style" region="dialog" onDismiss={() => setStyleLayerId(null)}>
         <Suspense fallback={null}>
-          <LayerStyleDialog layer={styleLayer} studio={studio} onClose={() => setStyleLayerId(null)} />
+          <LayerStyleDialog layer={styleLayer} studio={studio} onClose={() => setStyleLayerId(null)} onNotify={notify} />
         </Suspense>
         </ShellErrorBoundary>
       )}

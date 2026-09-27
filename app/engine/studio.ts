@@ -1722,10 +1722,16 @@ export class Studio {
     return true;
   }
 
+  /** Why a perspective crop cannot run, or null if it can. */
+  perspectiveCropRefusal(quad: Quad): string | null {
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return "Perspective crop is not available on a document this large yet.";
+    if (!isValidTransformQuad(quad)) return "Place four corners that form a shape without crossing sides.";
+    return null;
+  }
+
   perspectiveCrop(quad: Quad) {
     if (this.doc.alphaChannels?.length) throw new Error("Perspective crop cannot yet transform saved alpha channels. Save a copy and remove its saved channels first.");
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return null;
-    if (!isValidTransformQuad(quad)) return null;
+    if (this.perspectiveCropRefusal(quad)) return null;
     const release = this.reserveOperationMemory(this.serializationMemory(this.doc) * 2 + this.doc.width * this.doc.height * 64);
     const original = this.doc;
     const node = this.history.current;
@@ -1864,8 +1870,66 @@ export class Studio {
     );
   }
 
+  /**
+   * The ceiling refusal shared by every operation that needs a real canvas.
+   *
+   * Past the browser canvas ceiling a raster layer holds a tile surface and no
+   * bitmap, so these operations cannot run. Each used to return a bare falsy
+   * value and the callers ignored it, so on a large document the gradient tool,
+   * the frame tool and the Layer Style buttons did nothing and said nothing.
+   */
+  private oversizedDocumentRefusal(operation: string): string | null {
+    return exceedsBrowserCanvas(this.doc.width, this.doc.height)
+      ? `${operation} is not available on a document this large yet.`
+      : null;
+  }
+
+  /** Why a gradient cannot be drawn into this layer, or null if it can. */
+  gradientFillRefusal(layerId: string): string | null {
+    return this.oversizedDocumentRefusal("Gradient fill") ?? this.generatedFillRefusal(layerId);
+  }
+
+  /** Why an artboard frame cannot be added, or null if it can. */
+  addFrameRefusal(): string | null {
+    return this.oversizedDocumentRefusal("Adding a frame");
+  }
+
+  /** Why a layer's effects cannot be cleared, or null if they can. */
+  clearLayerStyleRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    return this.oversizedDocumentRefusal("Clearing a layer style");
+  }
+
+  /** Why a layer style cannot be rasterized into layers, or null if it can. */
+  createLayersFromStyleRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer?.effects?.length) return "This layer has no effects to turn into layers.";
+    if (layer.locked) return "Unlock this layer first.";
+    return this.oversizedDocumentRefusal("Creating layers from a style");
+  }
+
+  /**
+   * Why a generated fill cannot be applied to this layer, or null if it can.
+   *
+   * patternFill returns a single false for a document past the canvas ceiling,
+   * a locked layer, a 3D layer and a layer with no bitmap, so the caller had to
+   * guess — and guessed "Layer is locked" for all of them, naming a lock that
+   * was not there.
+   */
+  generatedFillRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return "Generated fills are not available on a document this large yet.";
+    if (layer.lettering3d || layer.mesh3d) return "Flatten this 3D layer before filling it.";
+    if (!layer.bitmap) return "Select a raster layer to fill.";
+    if (layer.locked) return "Unlock this layer first.";
+    if (!inverseAffineForLayerTransform(layer.transform)) return "This layer's transform cannot be inverted.";
+    return null;
+  }
+
   patternFill(layerId: string, kind: PatternKind, foreground: string, background: string, scale = 16) {
-    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
+    if (this.generatedFillRefusal(layerId)) return false;
     return this.applyGeneratedFill(
       layerId,
       () => createPatternPixels(this.doc.width, this.doc.height, kind, foreground, background, scale),
@@ -1873,11 +1937,27 @@ export class Studio {
     );
   }
 
+  /** Why a perspective warp cannot run on this layer, or null if it can. */
+  perspectiveWarpRefusal(layerId: string, quad: Quad): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (layer.lettering3d || layer.mesh3d) return "Flatten this 3D layer before warping it.";
+    // The ceiling comes before the bitmap check on purpose: past it a raster
+    // layer holds a tile surface and no canvas, so testing the bitmap first
+    // answered "needs a raster layer" to someone who had selected exactly that.
+    if (exceedsBrowserCanvas(this.doc.width, this.doc.height)) return "Perspective warp is not available on a document this large yet.";
+    if (!layer.bitmap) return "Perspective warp needs a raster layer.";
+    if (layer.locked) return "Unlock this layer first.";
+    if (!isValidTransformQuad(quad)) return "Place four corners that form a shape without crossing sides.";
+    return null;
+  }
+
   perspectiveWarpLayer(layerId: string, quad: Quad) {
     const layer = this.findLayer(layerId);
     if (layer?.surface?.store.sourceState()) throw new Error("Perspective warp is not supported on source-backed layers yet. The original layer has not changed.");
-    if (layer?.lettering3d || layer?.mesh3d) return false;
-    if (!layer?.bitmap || layer.locked || exceedsBrowserCanvas(this.doc.width, this.doc.height)) return false;
+    if (this.perspectiveWarpRefusal(layerId, quad)) return false;
+    // Already covered by the refusal above; kept so the compiler can narrow.
+    if (!layer?.bitmap) return false;
     const release = this.reserveOperationMemory(this.doc.width * this.doc.height * 64);
     try {
     this.editRasterTransaction(layer, "Perspective warp", () => {
@@ -5790,10 +5870,26 @@ export class Studio {
     this.requestRender();
   }
 
+  /**
+   * Why this layer's mask cannot be cleared, or null if it can.
+   *
+   * clearMask returns void, so "Reveal all" on a locked layer did nothing and
+   * said nothing. The operation and the explanation have to share one set of
+   * conditions or they drift apart, which is why clearMask consults this rather
+   * than repeating the checks.
+   */
+  clearMaskRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (!hasLayerMask(layer)) return "This layer has no mask to reveal.";
+    if (layer.locked) return "Unlock this layer first.";
+    return null;
+  }
+
   clearMask(layerId: string) {
     const layer = this.findLayer(layerId);
     // A locked layer must not lose its mask — this is destructive.
-    if (!layer || !hasLayerMask(layer) || layer.locked) return;
+    if (!layer || this.clearMaskRefusal(layerId)) return;
     const before = [this.maskSnapshot(layer)];
     clearMaskInPlace(layer, this.doc.width, this.doc.height);
     this.commit({ label: "Mask cleared", before, after: [this.maskSnapshot(layer)] });

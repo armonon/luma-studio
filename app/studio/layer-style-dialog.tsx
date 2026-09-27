@@ -616,10 +616,12 @@ function BlendingOptions({ layer, studio, light }: { layer: Layer; studio: Studi
   );
 }
 
-export default function LayerStyleDialog({ layer, studio, onClose }: {
+export default function LayerStyleDialog({ layer, studio, onClose, onNotify }: {
   layer: Layer;
   studio: Studio;
   onClose: () => void;
+  /** Surface a refusal the studio explained; the dialog has no toast of its own. */
+  onNotify?: (message: string) => void;
 }) {
   const [pane, setPane] = useState<Pane>("blending");
   const effects = layer.effects ?? [];
@@ -672,11 +674,11 @@ export default function LayerStyleDialog({ layer, studio, onClose }: {
             <button type="button" onClick={() => studio.scaleLayerEffects(layer.id, 2)} disabled={!effects.length} title="Double every effect size">+100%</button>
             <button
               type="button"
-              onClick={() => studio.createLayersFromStyle(layer.id)}
+              onClick={() => { const refusal = studio.createLayersFromStyleRefusal(layer.id); if (refusal) { onNotify?.(refusal); return; } studio.createLayersFromStyle(layer.id); }}
               disabled={!effects.length}
               title="Rasterize each effect into its own layer"
             >To layers</button>
-            <button type="button" onClick={() => studio.clearLayerStyle(layer.id)} disabled={!effects.length} title="Remove every effect">Clear</button>
+            <button type="button" onClick={() => { const refusal = studio.clearLayerStyleRefusal(layer.id); if (refusal) { onNotify?.(refusal); return; } studio.clearLayerStyle(layer.id); }} disabled={!effects.length} title="Remove every effect">Clear</button>
           </div>
           <button type="button" onClick={onClose} aria-label="Close layer style">×</button>
         </header>

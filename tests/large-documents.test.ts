@@ -12,6 +12,7 @@ import {
 } from "../app/engine/large-documents.ts";
 import { CAPABILITY_STATUS, hasCapability } from "../app/engine/edition.ts";
 import { newCanvas } from "../app/engine/document.ts";
+import { layerMaskSurface } from "../app/engine/layer-mask.ts";
 import { Studio } from "../app/engine/studio.ts";
 
 // ---------------------------------------------------------------------------
@@ -280,6 +281,87 @@ test("the studio page reports a perspective refusal instead of claiming success"
   // did not depend on the return value, so no message could ever be wrong.
   const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
   const handler = page.slice(page.indexOf("if (quadTool) {"));
-  assert.match(handler.slice(0, 1400), /perspectiveCrop\([^)]*\) !== null/, "the crop result must be consulted");
-  assert.match(handler.slice(0, 1400), /if \(applied\) notify/, "success must be conditional on it");
+  const branch = handler.slice(0, 1800);
+  assert.match(branch, /perspectiveCropRefusal\(/, "the engine must be asked why it would refuse");
+  assert.match(branch, /perspectiveCrop\([^)]*\) !== null/, "the crop result must be consulted");
+  assert.match(branch, /notify\(applied \?/, "the message must depend on the result");
+});
+
+test("the studio names why an operation refused instead of leaving the UI to guess", () => {
+  // Each of these returned one indistinguishable falsy value for several
+  // different refusals, so the caller invented a reason: pattern fill reported
+  // "Layer is locked" on an unlocked layer past the ceiling, and Reveal all did
+  // nothing and said nothing on a locked one. The reason companions exist so
+  // the explanation comes from whatever actually enforced the refusal, and the
+  // operations consult them rather than repeating the conditions — two copies
+  // of one rule is how the plugin validator drifted from its installer.
+  const big = new Studio(BIG.width, BIG.height, newCanvas(8, 8));
+  const layer = big.addBlankRaster("big");
+  const square: Parameters<Studio["perspectiveCropRefusal"]>[0] =
+    [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }] as never;
+
+  assert.match(String(big.generatedFillRefusal(layer.id)), /document this large/);
+  // The same class, found by asking which ceiling refusals the UI dropped: the
+  // gradient tool, the frame tool and both Layer Style buttons each ignored a
+  // bare falsy return, so on a large document they did nothing and said nothing.
+  assert.match(String(big.gradientFillRefusal(layer.id)), /document this large/);
+  assert.match(String(big.addFrameRefusal()), /document this large/);
+  assert.match(String(big.clearLayerStyleRefusal(layer.id)), /document this large/);
+  big.addLayerEffect(layer.id, "drop-shadow");
+  assert.match(String(big.createLayersFromStyleRefusal(layer.id)), /document this large/);
+  assert.match(String(big.perspectiveCropRefusal(square)), /document this large/);
+  assert.match(String(big.perspectiveWarpRefusal(layer.id, square)), /document this large/);
+  // And the refusal really is what stops the operation.
+  assert.equal(big.patternFill(layer.id, "dots", "#fff", "#000", 16), false);
+  big.dispose();
+
+  // On a document the canvas can hold, the reasons name the real obstacle.
+  const small = new Studio(64, 48, newCanvas(64, 48));
+  const raster = small.addBlankRaster("small");
+  assert.equal(small.generatedFillRefusal(raster.id), null, "an ordinary raster layer can be filled");
+  assert.equal(small.gradientFillRefusal(raster.id), null);
+  assert.equal(small.addFrameRefusal(), null);
+  assert.equal(small.clearLayerStyleRefusal(raster.id), null);
+  assert.match(String(small.createLayersFromStyleRefusal(raster.id)), /no effects/);
+  assert.equal(small.perspectiveWarpRefusal(raster.id, square), null);
+  assert.match(String(small.clearMaskRefusal(raster.id)), /no mask/);
+
+  small.setLayerProp(raster.id, "locked", true);
+  assert.match(String(small.generatedFillRefusal(raster.id)), /Unlock/);
+  assert.match(String(small.perspectiveWarpRefusal(raster.id, square)), /Unlock/);
+
+  // And the destructive one honours its own refusal: clearing a mask cannot be
+  // undone by unlocking afterwards, so a locked layer must keep it. Naming the
+  // reason is no use if the operation goes ahead anyway.
+  small.setLayerProp(raster.id, "locked", false);
+  // Reveal-all fills the mask rather than removing it, so the surviving
+  // evidence has to be the coverage itself: hide a corner and check it is still
+  // hidden. Asserting only that a mask still exists passes either way.
+  const mask = layerMaskSurface(small.findLayer(raster.id)!, small.doc.width, small.doc.height, true)!;
+  mask.fillRect({ x: 0, y: 0, width: 8, height: 8 }, 0);
+  assert.equal(mask.sample(0, 0), 0, "precondition: the corner is masked out");
+  assert.equal(small.clearMaskRefusal(raster.id), null, "an unlocked masked layer can be revealed");
+
+  small.setLayerProp(raster.id, "locked", true);
+  small.clearMask(raster.id);
+  assert.equal(
+    layerMaskSurface(small.findLayer(raster.id)!, small.doc.width, small.doc.height)!.sample(0, 0), 0,
+    "a locked layer keeps its mask coverage: clearing cannot be undone by unlocking afterwards",
+  );
+  assert.match(String(small.clearMaskRefusal(raster.id)), /Unlock/);
+
+  // Unlocked, the same call really does reveal it — otherwise the assertion
+  // above would pass against a clearMask that never works at all.
+  small.setLayerProp(raster.id, "locked", false);
+  small.clearMask(raster.id);
+  assert.equal(
+    layerMaskSurface(small.findLayer(raster.id)!, small.doc.width, small.doc.height)!.sample(0, 0), 255,
+    "an unlocked layer's mask is revealed",
+  );
+
+  // A self-intersecting quad is named as such rather than as a lock.
+  const bowtie = [{ x: 0, y: 0 }, { x: 100, y: 100 }, { x: 100, y: 0 }, { x: 0, y: 100 }] as never;
+  assert.match(String(small.perspectiveCropRefusal(bowtie)), /crossing sides/);
+  assert.equal(small.clearMaskRefusal("no-such-layer"), "Select a layer first.");
+  small.dispose();
 });
