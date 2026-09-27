@@ -58,9 +58,15 @@ export const CAPABILITY_STATUS: Readonly<Record<Capability, CapabilityStatus>> =
   "gpu-export": "shipped",
   "on-device-models": "shipped",
   "filesystem-access": "shipped",
-  // The tiled viewport and precision paint master are shipped, but selections,
-  // masks and every transform/export path are not sparse yet. Do not sell the
-  // partial workflow as full large-document support.
+  // Sparse selections and sparse masks shipped, so the old note here — that
+  // they were the blockers — is no longer true. What remains is narrower and
+  // more stubborn: past the ceiling a raster layer has a tile surface and no
+  // canvas, so PNG export streams band by band but JPEG and WebP have no
+  // tile-streaming encoder to use, and the operations that need a real canvas
+  // (gradient and pattern fill, perspective crop and warp, distort, frames,
+  // layer-style rasterization, bitmap merge) refuse and say why. That is a
+  // usable large-document workflow, not a complete one, and "shipped" would
+  // promise the complete one. See docs/release/large-documents-decision.md.
   "large-documents": "planned",
   // DNG development and macOS camera-codec fallback are shipped; a complete
   // nondestructive proprietary-RAW pipeline is not.
