@@ -1462,6 +1462,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
     if (activeTool === "pattern" || activeTool === "fill") {
       if (!activeLayer || activeLayer.kind !== "raster") { notify("Fill needs a raster layer"); return; }
+      // patternFill refuses a document past the browser canvas ceiling before it
+      // ever looks at the lock, so reporting every false as "Layer is locked"
+      // sent people hunting for a lock that was not there.
+      const oversized = !!doc && exceedsBrowserCanvas(doc.width, doc.height);
+      if (activeTool === "pattern" && oversized) {
+        notify("Pattern fill is not available on a document this large yet");
+        return;
+      }
       const changed = activeTool === "pattern"
         ? studio.patternFill(activeLayer.id, patternKind, brushColor, secondaryColor, patternScale)
         : !activeLayer.locked;
@@ -1508,10 +1516,18 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       if (activeTool === "perspective-warp" && (!activeLayer || activeLayer.kind !== "raster")) { notify("Perspective warp needs a raster layer"); return; }
       const next = [...pointDraft, p];
       if (next.length === 4) {
-        if (activeTool === "perspective-crop") studio.perspectiveCrop(next as unknown as Quad);
-        else studio.perspectiveWarpLayer(activeLayer!.id, next as unknown as Quad);
+        // Both refuse silently — past the canvas ceiling, on a locked or 3D
+        // layer, or for a self-intersecting quad — and the success message used
+        // to be printed regardless, so a refusal read as a completed edit.
+        const applied = activeTool === "perspective-crop"
+          ? studio.perspectiveCrop(next as unknown as Quad) !== null
+          : studio.perspectiveWarpLayer(activeLayer!.id, next as unknown as Quad);
         setPointDraft([]);
-        notify(activeTool === "perspective-crop" ? "Perspective crop applied" : "Perspective warp applied");
+        const label = activeTool === "perspective-crop" ? "Perspective crop" : "Perspective warp";
+        if (applied) notify(`${label} applied`);
+        else if (!!doc && exceedsBrowserCanvas(doc.width, doc.height)) notify(`${label} is not available on a document this large yet`);
+        else if (activeLayer?.locked) notify("Layer is locked");
+        else notify(`${label} needs four corners that form a shape without crossing sides`);
       } else {
         setPointDraft(next);
         notify(`Corner ${next.length}/4 placed`);

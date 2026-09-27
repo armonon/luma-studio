@@ -249,3 +249,37 @@ test("a document too large to flatten says so rather than failing on an allocati
   // An ordinary document is unaffected.
   assert.doesNotThrow(() => new Studio(64, 48, newCanvas(8, 8)).flatten());
 });
+
+test("operations that a large document cannot support refuse, and the studio says which", () => {
+  // Three operations bail out past the canvas ceiling. They return falsy rather
+  // than throwing, which is fine — but the UI mapped every falsy patternFill to
+  // "Layer is locked" (patternFill checks the ceiling *before* the lock, so the
+  // message named a lock that did not exist), and printed "Perspective crop
+  // applied" without consulting the result at all. A refusal read as a
+  // completed edit. These assertions pin the contract those messages rely on.
+  const studio = new Studio(BIG.width, BIG.height, newCanvas(8, 8));
+  const layer = studio.addBlankRaster("big");
+  assert.ok(exceedsBrowserCanvas(studio.doc.width, studio.doc.height), "precondition: past the ceiling");
+  assert.ok(!layer.locked, "precondition: the layer is not locked, so 'locked' would be the wrong reason");
+  // The mechanism, so this does not read as a claim about the explicit ceiling
+  // check in patternFill: past the ceiling a raster layer holds a tile surface
+  // and no bitmap, and every one of these refuses a layer without a bitmap.
+  // patternFill's own exceedsBrowserCanvas guard is therefore belt-and-braces,
+  // not the thing doing the work.
+  assert.equal(layer.bitmap, undefined, "a layer this size has no canvas to fill");
+
+  assert.equal(studio.patternFill(layer.id, "dots", "#fff", "#000", 16), false);
+  assert.equal(studio.perspectiveCrop([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }] as never), null);
+  assert.equal(studio.perspectiveWarpLayer(layer.id, [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }] as never), false);
+  studio.dispose();
+});
+
+test("the studio page reports a perspective refusal instead of claiming success", () => {
+  // A source assertion because the branch lives inside the pointer handler of a
+  // component this suite cannot mount. The bug was structural: the notify call
+  // did not depend on the return value, so no message could ever be wrong.
+  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const handler = page.slice(page.indexOf("if (quadTool) {"));
+  assert.match(handler.slice(0, 1400), /perspectiveCrop\([^)]*\) !== null/, "the crop result must be consulted");
+  assert.match(handler.slice(0, 1400), /if \(applied\) notify/, "success must be conditional on it");
+});
