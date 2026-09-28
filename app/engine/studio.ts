@@ -2000,11 +2000,28 @@ export class Studio {
     return this.perspectiveWarpLayer(layerId, quad);
   }
 
+  /**
+   * Why a radial warp cannot run on this layer, or null if it can.
+   *
+   * Covers the obstacles worth explaining. A warp with no displacement also
+   * returns false, and that one stays inside the method: refusing to do
+   * nothing needs no message.
+   */
+  radialWarpRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (layer.lettering3d || layer.mesh3d) return "Flatten this 3D layer before warping it.";
+    if (!layer.bitmap) return "Radial warp needs a raster layer.";
+    if (layer.locked) return "Unlock this layer first.";
+    return null;
+  }
+
   radialWarpLayer(layerId: string, from: Point, to: Point, radius: number, label = "Radial warp") {
     const layer = this.findLayer(layerId);
     if (layer?.surface?.store.sourceState()) throw new Error("Radial warp is not supported on source-backed layers yet. The original layer has not changed.");
-    if (layer?.lettering3d || layer?.mesh3d) return false;
-    if (!layer?.bitmap || layer.locked) return false;
+    if (this.radialWarpRefusal(layerId)) return false;
+    // Already covered above; kept so the compiler can narrow.
+    if (!layer?.bitmap) return false;
     if (![from.x, from.y, to.x, to.y, radius].every(Number.isFinite)) throw new Error("Radial warp requires finite coordinates and radius");
     const dx = to.x - from.x, dy = to.y - from.y;
     if (![dx, dy].every(Number.isFinite)) throw new Error("Radial warp requires a finite displacement");
@@ -2030,12 +2047,24 @@ export class Studio {
     } finally { release(); }
   }
 
+  /** Why selected content cannot be moved on this layer, or null if it can. */
+  moveSelectionContentRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (layer.lettering3d || layer.mesh3d) return "Flatten this 3D layer before moving its content.";
+    if (!layer.bitmap) return "Content-aware move needs a raster layer.";
+    if (layer.locked) return "Unlock this layer first.";
+    if (!this.doc.selection) return "Make a selection first.";
+    return null;
+  }
+
   moveSelectionContent(layerId: string, deltaX: number, deltaY: number, healSource = true) {
     const layer = this.findLayer(layerId);
     if (layer?.surface?.store.sourceState()) throw new Error("Content-aware move is not supported on source-backed layers yet. Use Copy/Paste to move selected pixels on a new layer.");
-    if (layer?.lettering3d || layer?.mesh3d) return false;
+    if (this.moveSelectionContentRefusal(layerId)) return false;
     const selection = this.doc.selection;
-    if (!layer?.bitmap || !selection || layer.locked) return false;
+    // Already covered above; kept so the compiler can narrow.
+    if (!layer?.bitmap || !selection) return false;
     selectionSurface(this.doc);
     const selectionBefore = cloneSelection(selection);
     const plan = planSelectionContentMove(
@@ -3570,13 +3599,22 @@ export class Studio {
     this.ungroupLayers([groupId]);
   }
 
+  /** Why a smart filter cannot be added to this layer, or null if it can. */
+  smartFilterRefusal(layerId: string): string | null {
+    const layer = this.findLayer(layerId);
+    if (!layer) return "Select a layer first.";
+    if (layer.kind === "group") return "Select a content layer, not a group.";
+    if (layer.locked) return "Unlock this layer first.";
+    return null;
+  }
+
   addSmartFilter(
     layerId: string,
     kind: SmartFilter["kind"],
     params: Record<string, number> = {},
   ) {
     const layer = this.findLayer(layerId);
-    if (!layer || layer.kind === "group" || layer.locked) return null;
+    if (!layer || this.smartFilterRefusal(layerId)) return null;
     const before: LayerSnapshot = { layerId, filters: cloneFilters(layer.filters ?? []) };
     const filter: SmartFilter = {
       id: nextId("filter"),

@@ -324,11 +324,23 @@ test("the studio names why an operation refused instead of leaving the UI to gue
   assert.equal(small.clearLayerStyleRefusal(raster.id), null);
   assert.match(String(small.createLayersFromStyleRefusal(raster.id)), /no effects/);
   assert.equal(small.perspectiveWarpRefusal(raster.id, square), null);
+  assert.equal(small.smartFilterRefusal(raster.id), null);
+  assert.equal(small.radialWarpRefusal(raster.id), null);
+  // No selection yet, so this one names that rather than the layer.
+  assert.match(String(small.moveSelectionContentRefusal(raster.id)), /selection/);
   assert.match(String(small.clearMaskRefusal(raster.id)), /no mask/);
 
   small.setLayerProp(raster.id, "locked", true);
   assert.match(String(small.generatedFillRefusal(raster.id)), /Unlock/);
   assert.match(String(small.perspectiveWarpRefusal(raster.id, square)), /Unlock/);
+  // Three more of the same shape, found by checking which studio results the UI
+  // dropped. The smart-filter one was a false success: runFilter guarded the
+  // group case but not the lock, so a locked layer was told its filter had been
+  // added while addSmartFilter had returned null.
+  assert.match(String(small.smartFilterRefusal(raster.id)), /Unlock/);
+  assert.match(String(small.radialWarpRefusal(raster.id)), /Unlock/);
+  assert.match(String(small.moveSelectionContentRefusal(raster.id)), /Unlock/);
+  assert.equal(small.addSmartFilter(raster.id, "blur", { radius: 4 }), null, "and the operation really does refuse");
 
   // And the destructive one honours its own refusal: clearing a mask cannot be
   // undone by unlocking afterwards, so a locked layer must keep it. Naming the

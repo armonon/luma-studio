@@ -1883,9 +1883,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       } else if (intent?.kind === "straighten") {
         studio.straightenDocument(intent.radians);
       } else if (intent?.kind === "content-move") {
-        studio.moveSelectionContent(intent.layerId, intent.deltaX, intent.deltaY);
+        const refusal = studio.moveSelectionContentRefusal(intent.layerId);
+        if (refusal) notify(refusal);
+        else studio.moveSelectionContent(intent.layerId, intent.deltaX, intent.deltaY);
       } else if (intent?.kind === "radial-warp") {
-        studio.radialWarpLayer(intent.layerId, intent.from, intent.to, intent.radius);
+        const refusal = studio.radialWarpRefusal(intent.layerId);
+        if (refusal) notify(refusal);
+        else studio.radialWarpLayer(intent.layerId, intent.from, intent.to, intent.radius);
       } else if (intent?.kind === "measurement") {
         setMeasurement({ start: intent.start, end: intent.end });
       }
@@ -2778,7 +2782,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const runFilter = (kind: SmartFilterKind, opts: Record<string, number> = {}) => {
-    if (!studio || !activeLayer || activeLayer.kind === "group") { notify("Select a content layer"); return; }
+    if (!studio || !activeLayer) { notify("Select a content layer"); return; }
+    // The group check was here but the lock check was not, so a locked layer
+    // was told its filter had been added when addSmartFilter had returned null.
+    const refusal = studio.smartFilterRefusal(activeLayer.id);
+    if (refusal) { notify(refusal); return; }
     studio.addSmartFilter(activeLayer.id, kind, { ...SMART_FILTER_SPECS[kind].defaults, ...opts });
     notify(`${SMART_FILTER_SPECS[kind].label} added as a Smart Filter`);
   };
