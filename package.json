@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
+    "@momentium/live-review": "file:vendor/momentium-live-review-0.2.1.tgz",
     "@xmldom/xmldom": "0.9.12",
     "ag-psd": "^31.0.2",
     "bidi-js": "1.1.0",

@@ -1,4 +1,10 @@
 "use client";
+import { openCollaboration, previewImage } from "@momentium/live-review";
+import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
+import { useTabletWorkspace } from "./use-tablet-workspace";
+import { useTabletCanvas } from "./use-tablet-canvas";
+import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
+import { PHONE_VIEWPORT_LIMITS } from "./phone-workspace";
 import { FONT_CHOICES } from "./font-catalog";
 import { ShellErrorBoundary } from "./shell-error-boundary";
 import { WorkspaceRulers, useWorkspaceRulers } from "./workspace-rulers";
@@ -311,7 +317,11 @@ function formatBytes(bytes: number) {
   return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
-export default function SpatialStudio({ desktop = false }: { desktop?: boolean }) {
+
+export default function SpatialStudio({ desktop = false, tabletMode = false, phoneMode = false }: { desktop?: boolean; tabletMode?: boolean; phoneMode?: boolean }) {
+  const { tablet: detectedTablet, phone, drawWithTouch, toggleFingerDrawing } = useTabletWorkspace(phoneMode);
+  const tablet = tabletMode || detectedTablet;
+  const [tabletPanel, setTabletPanel] = useState<PanelId | null>(null);
   const initialPresentation = initialStudioPresentation(desktop);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -368,9 +378,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   const [customDockWorkspaces, setCustomDockWorkspaces] = useState<Record<string, DockLayout>>({});
   const selectInspectorTab = useCallback((tab: "layers" | "properties" | "ai") => {
     const panelId: PrimaryPanelId = tab === "ai" ? "neural" : tab;
-    setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
+    setTabletPanel(panelId);
+    if (!tablet) setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
     setInspectorTab(tab);
-  }, []);
+  }, [tablet]);
   const [nativePanelOverride, setNativePanelOverride] = useState<ContextualPanelId | null>(null);
   const [assetsOpen, setAssetsOpen] = useState(initialPresentation.assetsOpen);
   const [dropActive, setDropActive] = useState(false);
@@ -519,6 +530,10 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   // View transform (zoom + pan). 1.0 = fit-to-stage size. Pan is in stage pixels.
   const openDocuments = studio?.listDocuments() ?? [];
   const activeDocumentId = openDocuments.find(document => document.active)?.id ?? null;
+  const reviewSession = useRef<(() => void) | null>(null);
+  const reviewDocument = useRef(activeDocumentId);
+  useEffect(() => { reviewDocument.current = activeDocumentId; }, [activeDocumentId]);
+  useEffect(() => () => { reviewSession.current?.(); }, []);
   const [alphaDraftState, setAlphaDraftState] = useState<{ documentId: string | null; draft: AlphaChannelDraft }>({ documentId: null, draft: EMPTY_ALPHA_DRAFT });
   const alphaDraft = alphaDraftState.documentId === activeDocumentId ? alphaDraftState.draft : EMPTY_ALPHA_DRAFT;
   const updateAlphaDraft = (draft: AlphaChannelDraft) => setAlphaDraftState({ documentId: activeDocumentId, draft });
@@ -1093,6 +1108,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         canvasRect.height,
         view,
         window.devicePixelRatio,
+        phone ? PHONE_VIEWPORT_LIMITS : tablet ? TABLET_VIEWPORT_LIMITS : undefined,
       );
       setDisplayViewport(next);
       studio.setVirtualViewport(next);
@@ -1101,7 +1117,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     const observer = new ResizeObserver(updatePlan);
     observer.observe(stageRef.current);
     return () => observer.disconnect();
-  }, [studio, doc, view]);
+  }, [studio, doc, view, tablet, phone]);
 
   const eventToDoc = useCallback((e: {
     clientX: number;
@@ -1123,6 +1139,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       rect.height,
       view,
       window.devicePixelRatio,
+      phone ? PHONE_VIEWPORT_LIMITS : tablet ? TABLET_VIEWPORT_LIMITS : undefined,
     );
     const point = viewportPointToDocument(
       viewport,
@@ -1140,7 +1157,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
       ? e.azimuthAngle
       : (tiltX || tiltY ? Math.atan2(tiltY, tiltX) : 0);
     return { x, y, p, tiltX, tiltY, azimuth, time: e.timeStamp };
-  }, [doc, displayViewport, view]);
+  }, [doc, displayViewport, view, tablet, phone]);
 
   const currentBrushMode = (): BrushParams["mode"] => {
     if (activeTool === "erase") return "erase";
@@ -2876,7 +2893,8 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
   };
 
   const openStudioPanel = (panelId: PanelId) => {
-    setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
+    setTabletPanel(panelId);
+    if (!tablet) setDockLayout((current) => openDockPanel(current, panelId, STUDIO_PANEL_REGISTRY));
     if (panelId === "layers" || panelId === "properties" || panelId === "neural") {
       setInspectorTab(panelId === "neural" ? "ai" : panelId);
     }
@@ -4335,8 +4353,14 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
     );
   })();
 
+  const tabletCanvas = useTabletCanvas({
+    enabled: tablet, drawWithTouch, documentId: activeDocumentId, view, fitScale, stage: stageRef, setView,
+    down: onPointerDown, move: onPointerMove, up: onPointerUp,
+    cancel: event => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); },
+  });
+
   return (
-    <AppShell>
+    <AppShell tablet={tablet} phone={phone}>
       <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
       <div className="spatial-aura aura-violet" />
@@ -4347,6 +4371,11 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
             desktop={desktop}
+            tabletControls={tablet ? <>
+              <button className="tablet-touch-mode" aria-pressed={drawWithTouch} onClick={toggleFingerDrawing} title={drawWithTouch ? "Finger edits with the active tool. Turn off to pan and pinch." : "Fingers pan and pinch. Pencil edits with the active tool."}>{drawWithTouch ? "Touch: draw" : "Touch: navigate"}</button>
+              <button aria-label="Toggle layers panel" aria-pressed={tabletPanel === "layers"} onClick={() => setTabletPanel(current => current === "layers" ? null : "layers")}>Layers</button>
+              <button aria-label="Toggle properties panel" aria-pressed={tabletPanel === "properties"} onClick={() => setTabletPanel(current => current === "properties" ? null : "properties")}>Properties</button>
+            </> : undefined}
             projectName={projectName}
             saveState={saveState}
             dirty={openDocuments.find(document => document.active)?.dirty ?? true}
@@ -4359,6 +4388,21 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
             onBack={() => history.back()}
             onCommand={executeStudioCommand}
             commandEnabled={commandRegistry.enabled}
+            onReview={studio && activeDocumentId ? () => {
+              try {
+                reviewSession.current?.();
+                reviewSession.current = openCollaboration({
+                  product: "Luma Studio", title: projectName,
+                  isCurrent: () => reviewDocument.current === activeDocumentId && studio.activeDocumentState().id === activeDocumentId,
+                  read: () => lumaSharedFields(studio),
+                  apply: values => applyLumaSharedFields(studio, values),
+                  capture: async () => {
+                    if (!canvasRef.current) throw new Error("Open a document before publishing a preview.");
+                    return previewImage(canvasRef.current);
+                  },
+                });
+              } catch (error) { window.alert(error instanceof Error ? error.message : "Could not open live review."); }
+            } : undefined}
           />
         </Suspense>
         </ShellErrorBoundary>
@@ -4372,12 +4416,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               groups={toolPaletteGroups}
               activeWorkspace={workspace}
               activeTool={activeTool}
-              compactDesktop={desktop}
+              compactDesktop={desktop && !tablet}
+              touchWorkspace={tablet}
               foreground={brushColor}
               background={secondaryColor}
               onForegroundChange={setBrushColor}
               onSwapColors={() => { setBrushColor(secondaryColor); setSecondaryColor(brushColor); }}
-              onSelect={(tool, nextWorkspace) => activateTool(tool as Tool, nextWorkspace as WorkspaceMode)}
+              onSelect={(tool, nextWorkspace) => { activateTool(tool as Tool, nextWorkspace as WorkspaceMode); if (phone) setTabletPanel(null); }}
               onAiSelect={() => { activateTool("sel-sam", "select"); focusInspector("ai"); }}
               onCommand={executeStudioCommand}
               commandEnabled={commandRegistry.enabled}
@@ -4386,7 +4431,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
           </ShellErrorBoundary>
           </ToolRailRegion>
 
-          <DocumentAreaRegion data-assets-open={assetsOpen}>
+          <DocumentAreaRegion data-assets-open={phone ? false : assetsOpen}>
             <ContextualTaskBarRegion>
             <ShellErrorBoundary title="Tool options" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<div className="studio-contextbar" />}>
@@ -4561,11 +4606,13 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                   key={activeDocumentId}
                   ref={bindDisplayCanvas}
                   onPointerEnter={updateDynamicCursorFromEvent}
-                  onPointerDown={onPointerDown}
-                  onPointerMove={onPointerMove}
-                  onPointerUp={onPointerUp}
-                  onPointerCancel={(event) => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); }}
-                  onLostPointerCapture={() => {
+                  onPointerDown={tabletCanvas.onPointerDown}
+                  onPointerMove={tabletCanvas.onPointerMove}
+                  onPointerUp={tabletCanvas.onPointerUp}
+                  onPointerCancel={tabletCanvas.onPointerCancel}
+                  onLostPointerCapture={(event) => {
+                    const wasEditor = tabletCanvas.onLostPointerCapture(event);
+                    if (tablet && !wasEditor) return;
                     if (brushGestureRef.current) { studio?.cancelStroke(); brushGestureRef.current = null; }
                     if (quickSelectionRef.current) { studio?.cancelSelectionGesture(); quickSelectionRef.current = null; }
                   }}
@@ -4689,7 +4736,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
                     ))}
                   </div>
                 )}
-                {desktop && passDeckOpen && (
+                {(desktop || tablet) && passDeckOpen && (
                   <DesktopCanvasHud
                     activeLayer={activeLayer}
                     context={spaceDeckContext}
@@ -4753,6 +4800,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
 
           <DockRegion>
           <DockManager
+            tablet={tablet ? { panel: tabletPanel, select: setTabletPanel, close: () => setTabletPanel(null) } : undefined}
             layout={dockLayout}
             onLayoutChange={setDockLayout}
             onActivePanelChange={(panel) => {
@@ -4796,7 +4844,7 @@ export default function SpatialStudio({ desktop = false }: { desktop?: boolean }
               />
             </DockPanelContent>
 
-            {desktop && (
+            {(desktop || tablet) && (
               <DockPanelContent panelId="properties">
                 {selectedLayerIds.length > 1 ? <section className="layer-selection-summary" aria-label="Multiple layer properties">
                   <strong>{selectedLayerIds.length} layers selected</strong>

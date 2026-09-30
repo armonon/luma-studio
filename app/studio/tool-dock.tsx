@@ -47,6 +47,7 @@ export default function ToolDock({
   onCommand,
   commandEnabled,
   compactDesktop = false,
+  touchWorkspace = false,
   foreground,
   background,
   onForegroundChange,
@@ -60,6 +61,7 @@ export default function ToolDock({
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
   compactDesktop?: boolean;
+  touchWorkspace?: boolean;
   foreground?: string;
   background?: string;
   onForegroundChange?: (color: string) => void;
@@ -146,7 +148,7 @@ export default function ToolDock({
             <button
               key={category.id}
               className={activeCategory === category.id || (category.id === "ai" && flyout === "ai") ? "active" : ""}
-              onClick={() => chooseCategory(category.id)}
+              onClick={() => { if (touchWorkspace) setFlyout(category.id); else chooseCategory(category.id); }}
               onContextMenu={(event) => { event.preventDefault(); setFlyout(category.id); }}
               onPointerDown={() => { stopHold(); holdTimer.current = setTimeout(() => setFlyout(category.id), 480); }}
               onPointerUp={stopHold}
@@ -155,7 +157,7 @@ export default function ToolDock({
               aria-label={`${category.label} tools`}
               aria-pressed={activeCategory === category.id}
               aria-haspopup="menu"
-              title={`${category.label} · right-click for related tools`}
+              title={`${category.label} · ${touchWorkspace ? "tap" : "right-click"} for related tools`}
             >
               <CategoryIcon id={category.id} />
               <span>{category.label}</span>

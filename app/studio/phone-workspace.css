@@ -1,0 +1,66 @@
+/* Phone-only overrides: same commands, document engine and registered panels. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-form-factor="phone"] {
+  position: fixed; left: 0; right: 0; top: var(--phone-viewport-top, 0px);
+  height: var(--phone-viewport-height, 100dvh);
+  & .spatial-window { grid-template-rows: 98px minmax(0, 1fr); }
+  & .studio-titlebar.spatial-topbar { display: flex; height: 98px; min-height: 98px; padding: 4px 8px; }
+  & .studio-project-title { display: none; }
+  & .spatial-share-actions { display: flex; flex-wrap: wrap; gap: 2px 6px; justify-content: flex-end; width: 100%; }
+  & .tablet-title-controls { order: 2; flex: 0 0 100%; display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 6px; }
+  & .tablet-title-controls button { font-size: 13px; padding: 0 8px; }
+  & .studio-icon-button[aria-label="Redo"] { display: inline-flex; }
+  & .studio-fit-button { display: inline-flex; }
+  & .spatial-export { font-size: 13px; padding: 0 12px; }
+  & .spatial-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 60px; }
+  & .spatial-canvas-column, & .spatial-canvas-column[data-assets-open="false"] { grid-column: 1; grid-row: 1; grid-template-rows: 52px 44px minmax(0, 1fr); }
+  & .layer-focus-panel, & .desktop-statusbar { display: none; }
+  & .spatial-toolbar {
+    grid-column: 1; grid-row: 2; width: 100%; min-width: 0; height: 60px;
+    display: flex; flex-direction: row; padding: 4px; overflow-x: auto; overflow-y: hidden;
+    border-top: 1px solid var(--ui-border); border-right: 0;
+  }
+  & .primary-tool-categories { display: flex; flex-direction: row; gap: 2px; width: 100%; min-width: 322px; flex: 1 0 auto; }
+  & .primary-tool-categories > button { width: 44px; min-width: 44px; height: 50px; min-height: 50px; flex: 1; margin: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
+  & .primary-tool-categories > button > span { display: block; font-size: 10px; line-height: 12px; }
+  & .tool-rail-colors { display: none; } /* Foreground color stays in contextual options. */
+  & .spatial-canvas-stage { padding: 8px; }
+  & .spatial-canvas { background: var(--ui-bg); border-color: var(--ui-border); }
+  & .studio-contextbar { padding: 0 8px; gap: 8px; }
+  & .studio-context-identity { padding-right: 8px; }
+  & .studio-context-identity strong { display: none; }
+  & .spatial-document-tabs > div { min-width: 100px; max-width: 220px; }
+  & .tablet-panel { left: 4px; right: 4px; top: 4px; bottom: 64px; width: auto; max-width: none; border-radius: 12px; }
+  & .tablet-panel .dock-panel-body { padding: 8px; }
+  & .tool-family-scrim, & .tool-palette-scrim { position: fixed; inset: 0; padding: 8px; display: flex; align-items: flex-end; justify-content: center; }
+  & .tool-family-menu { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: 100%; max-width: 440px; max-height: calc(var(--phone-viewport-height, 100dvh) - 32px); overflow-y: auto; margin: 0 0 env(safe-area-inset-bottom); }
+  & .tool-family-menu > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  & .tool-family-menu button { min-height: 48px; min-width: 0; white-space: normal; }
+  & .tool-family-menu kbd { display: none; }
+  & .tool-palette { width: 100%; max-width: 440px; max-height: calc(var(--phone-viewport-height, 100dvh) - 24px); border-radius: 12px; }
+  & .tool-palette :is(input, button) { min-height: 44px; }
+  & .tool-palette-groups { overflow: auto; }
+  & .tool-palette-group > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  & .studio-app-menu > div { right: 0; width: min(300px, calc(100vw - 24px)); max-height: calc(var(--phone-viewport-height, 100dvh) - 110px); overflow: auto; }
+  & .studio-export-popover { position: fixed; inset: auto 8px 8px; margin: auto; width: calc(100% - 16px); max-height: calc(var(--phone-viewport-height, 100dvh) - 16px); overflow: auto; }
+  & .studio-export-popover article { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  & .studio-export-popover article > .export-format-mark { display: none; }
+  & .studio-export-popover article > :is(div, p) { grid-column: 1 / -1; }
+  & .studio-export-popover article:first-child > button { grid-column: 1 / -1; }
+  & .studio-export-popover :is(button, select) { min-height: 44px; min-width: 0; font-size: 14px; }
+  & .studio-export-popover select { width: 100%; font-size: 16px; }
+  & .spatial-modal { padding: 8px; max-height: var(--phone-viewport-height, 100dvh); overflow: auto; }
+  & :is(.unsaved-document-dialog, .new-document-dialog) { box-sizing: border-box; max-width: 100%; max-height: calc(var(--phone-viewport-height, 100dvh) - 16px); overflow: auto; }
+  & :is(.unsaved-document-dialog, .new-document-dialog) button { min-height: 44px; }
+  & .desktop-canvas-hud { max-width: calc(100% - 16px); }
+  @media (orientation: landscape) and (min-width: 600px) {
+    & .spatial-window { grid-template-rows: 52px minmax(0, 1fr); }
+    & .studio-titlebar.spatial-topbar { height: 52px; min-height: 52px; }
+    & .spatial-share-actions { flex-wrap: nowrap; }
+    & .tablet-title-controls { order: 0; flex: 1 1 auto; display: flex; }
+    & .tablet-title-controls button { padding: 0 6px; }
+    & .spatial-workspace { grid-template-rows: minmax(0, 1fr) 54px; }
+    & .spatial-toolbar { height: 54px; }
+    & .primary-tool-categories > button { height: 44px; min-height: 44px; }
+    & .tablet-panel { left: auto; width: min(400px, calc(100% - 8px)); bottom: 58px; }
+  }
+}

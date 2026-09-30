@@ -31,6 +31,7 @@ import { STUDIO_PANEL_REGISTRY, type PanelId } from "./panel-registry";
 import PanelIcon from "./panel-icon";
 import { PanelErrorBoundary } from "./panel-error-boundary";
 import { ChevronDown, ChevronUp, Ellipsis, X } from "lucide-react";
+import { TabletPanel } from "./tablet-panel";
 
 export function DockPanelContent({ children }: { panelId: PanelId; children: ReactNode }) {
   return <>{children}</>;
@@ -54,12 +55,14 @@ export default function DockManager({
   onLayoutChange,
   onActivePanelChange,
   contextualPanel,
+  tablet,
   children,
 }: {
   layout: DockLayout;
   onLayoutChange: (layout: DockLayout) => void;
   onActivePanelChange: (panel: PanelId) => void;
   contextualPanel: PanelId;
+  tablet?: { panel: PanelId | null; select: (panel: PanelId) => void; close: () => void };
   children: ReactNode;
 }) {
   const [dragging, setDragging] = useState<PanelId | null>(null);
@@ -271,6 +274,8 @@ export default function DockManager({
 
   const groupsFor = (dock: DockGroup["dock"]) => layout.groups.filter((group) => group.dock === dock);
   const hasDockedPanels = layout.groups.length > 0;
+
+  if (tablet) return tablet.panel ? <TabletPanel panel={tablet.panel} onSelect={tablet.select} onClose={tablet.close}>{panelContent(tablet.panel)}</TabletPanel> : null;
 
   return (
     <div className="dock-system" data-dragging={dragging ? "true" : undefined}>

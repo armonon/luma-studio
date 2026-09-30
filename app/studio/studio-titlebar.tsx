@@ -1,12 +1,13 @@
 "use client";
 import { saveStatusLabel } from "./save-status";
 
-import { useRef } from "react";
-import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft } from "lucide-react";
+import { useRef, type ReactNode } from "react";
+import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft, Users } from "lucide-react";
 import type { StudioCommand } from "../desktop/menu-model";
 
 export default function StudioTitlebar({
   desktop,
+  tabletControls,
   projectName,
   saveState,
   dirty,
@@ -19,8 +20,10 @@ export default function StudioTitlebar({
   onBack,
   onCommand,
   commandEnabled,
+  onReview,
 }: {
   desktop: boolean;
+  tabletControls?: ReactNode;
   projectName: string;
   saveState: "saved" | "unsaved" | "saving" | "error";
   dirty: boolean;
@@ -33,6 +36,7 @@ export default function StudioTitlebar({
   onBack: () => void;
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
+  onReview?: () => void;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   const run = (action: () => void) => {
@@ -54,6 +58,8 @@ export default function StudioTitlebar({
       </div>
 
       <div className="spatial-share-actions">
+        {onReview && <button className="studio-icon-button" onClick={onReview} title="Shared layer editing (alpha)" aria-label="Start shared editing"><Users size={16} /></button>}
+        {tabletControls && <div className="tablet-title-controls">{tabletControls}</div>}
         <button className="studio-header-button studio-workspace-button" onClick={() => onCommand("workspace-settings")} title="Workspaces & shortcuts" aria-label="Workspaces & shortcuts" disabled={!commandEnabled("workspace-settings")}><PanelsTopLeft size={15} /><span>Workspace</span></button>
         <span className="studio-action-divider" />
         <button className="studio-icon-button" onClick={() => onCommand("undo")} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo || !commandEnabled("undo")}><Undo2 /></button>

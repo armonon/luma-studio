@@ -1,0 +1,11 @@
+{
+  "id": "/iphone",
+  "name": "Luma for iPhone",
+  "short_name": "Luma",
+  "start_url": "/iphone",
+  "scope": "/iphone",
+  "display": "standalone",
+  "background_color": "#141619",
+  "theme_color": "#141619",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

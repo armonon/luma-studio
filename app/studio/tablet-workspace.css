@@ -1,0 +1,71 @@
+/* Capability-selected tablet presentation. Desktop docking and styling stay intact. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface="tablet"] {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  box-sizing: border-box;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+  & .spatial-window { grid-template-rows: 60px minmax(0, 1fr) 26px; }
+  & .spatial-workspace { position: relative; grid-template-columns: 60px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  & .spatial-canvas-column { grid-column: 2; grid-row: 1; grid-template-rows: 52px 44px minmax(0, 1fr) auto; }
+  & .spatial-canvas-column[data-assets-open="false"] { grid-template-rows: 52px 44px minmax(0, 1fr); }
+  & .studio-titlebar.spatial-topbar { height: 60px; min-height: 60px; gap: 8px; padding: 0 8px; }
+  & .studio-brand-area { display: none; }
+  & .studio-project-title { min-width: 60px; flex: 1; }
+  & .studio-project-title strong { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .spatial-share-actions { gap: 4px; }
+  & :is(.studio-workspace-button, .studio-action-divider, .studio-zoom-readout) { display: none; }
+  & :is(.studio-titlebar button, .studio-app-menu summary) { min-width: 44px; min-height: 44px; height: 44px; }
+  & .tablet-title-controls { display: flex; gap: 4px; }
+  & .tablet-title-controls button { padding: 0 10px; color: var(--ui-text); border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-field); font-size: 12px; white-space: nowrap; }
+  & .tablet-title-controls button[aria-pressed="true"] { background: var(--ui-selected); border-color: var(--ui-accent); }
+  & .spatial-toolbar { grid-column: 1; grid-row: 1; width: 60px; min-width: 60px; padding: 6px; overflow-y: auto; overscroll-behavior: contain; }
+  & .primary-tool-categories { gap: 6px; }
+  & .primary-tool-categories > button { width: 48px; min-height: 48px; height: 48px; }
+  & .tool-rail-colors :is(input, button) { width: 44px; height: 44px; }
+  & .studio-contextbar { height: 52px; min-height: 52px; padding: 0 10px; touch-action: pan-x; }
+  & .studio-contextbar :is(button, select, input) { min-height: 44px; }
+  & .studio-contextbar input[type="range"] { min-width: 90px; }
+  & .context-range { grid-template-columns: auto 90px 42px !important; flex: 0 0 auto; gap: 8px !important; }
+  & .context-range output { min-width: 42px; }
+  & .context-color { width: 44px; height: 44px; flex: 0 0 44px; background: var(--ui-field); }
+  & .context-color input { box-sizing: border-box; width: 44px; height: 44px; padding: 4px; }
+  & .studio-context-summary { display: none; }
+  & .spatial-document-tabs { height: 44px; min-height: 44px; }
+  & .spatial-document-tabs > div { height: 44px; }
+  & .spatial-document-tabs button { min-height: 44px; min-width: 44px; }
+  & .spatial-document-tabs button:last-child:not(:first-child) { width: 44px; }
+  & .spatial-document-tabs > .document-new-button { height: 44px; width: 44px; }
+  & .spatial-canvas-stage { touch-action: none; overscroll-behavior: none; }
+  & .tool-family-menu { left: 68px; width: min(340px, calc(100vw - 84px)); max-height: calc(100dvh - 100px); overflow-y: auto; }
+  & .tool-family-menu button { min-height: 44px; }
+  & .tablet-panel {
+    position: absolute; right: 8px; top: 8px; bottom: 8px; z-index: 80;
+    width: min(360px, calc(100% - 76px)); display: flex; flex-direction: column;
+    background: var(--ui-panel); border: 1px solid var(--ui-border); border-radius: 10px;
+    box-shadow: 0 12px 36px #0006; overflow: hidden; color: var(--ui-text);
+  }
+  & .tablet-panel > header { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); }
+  & .tablet-panel > header select { flex: 1; min-width: 0; }
+  & .tablet-panel > header button { min-width: 44px; font-size: 24px; }
+  & .tablet-panel .dock-panel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
+  & .tablet-panel :is(button, select, input:not([type="checkbox"]):not([type="radio"])) { min-height: 44px; }
+  & .tablet-panel :is(input, select, textarea) { font-size: 16px; }
+  & .tablet-panel :is(select, input, button) { color: var(--ui-text); background-color: var(--ui-field); }
+  & .tablet-panel button { touch-action: manipulation; }
+  & .tablet-panel .desktop-space-hint :is(kbd, small) { display: none; }
+  & .studio-app-menu > div button { min-height: 44px; }
+  & .dynamic-canvas-cursor { pointer-events: none; }
+  & :is(button, summary) { touch-action: manipulation; }
+  & :is(input:not([type="range"]), select, textarea) { font-size: 16px; }
+  @media (max-width: 850px) {
+    & .studio-project-title { display: none; }
+    & .spatial-share-actions { width: 100%; justify-content: space-between; }
+    & .studio-fit-button { display: none; }
+    & .tablet-title-controls button { padding: 0 6px; }
+  }
+  @media (max-width: 600px) {
+    & .tablet-title-controls button { font-size: 11px; }
+    & .studio-icon-button[aria-label="Redo"] { display: none; }
+    & .spatial-export { padding: 0 6px; font-size: 12px; }
+  }
+}

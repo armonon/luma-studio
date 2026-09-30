@@ -1,0 +1,11 @@
+{
+  "id": "/ipad",
+  "name": "Luma for iPad",
+  "short_name": "Luma",
+  "start_url": "/ipad",
+  "scope": "/ipad",
+  "display": "standalone",
+  "background_color": "#141619",
+  "theme_color": "#141619",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
