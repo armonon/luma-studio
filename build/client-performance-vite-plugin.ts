@@ -1,4 +1,4 @@
-import type { Plugin } from "vite";
+import { defaultClientConditions, type Plugin } from "vite";
 
 /**
  * Production-only client settings that are awkward to express through
@@ -12,6 +12,9 @@ export function clientPerformance(): Plugin {
       if (name !== "client") return;
 
       return {
+        // Neural runtime explicitly selects our paired local MJS/WASM files.
+        // Avoid emitting ONNX's unused 25MB+ bundled WebGPU fallback as well.
+        resolve: { conditions: ["onnxruntime-web-use-extern-wasm", ...defaultClientConditions] },
         build: {
           // All supported production browsers implement modulepreload. Avoid
           // paying for Vite's compatibility shim on every studio visit.
