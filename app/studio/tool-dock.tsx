@@ -5,7 +5,8 @@ import ToolPalette, { type ToolPaletteGroup } from "./tool-palette";
 import { CategoryIcon, ToolIcon } from "./studio-icons";
 import type { StudioCommand } from "../desktop/menu-model";
 import { DESKTOP_TOOL_RAIL } from "./desktop-presentation";
-import { ArrowLeftRight } from "lucide-react";
+import { ArrowLeftRight, X } from "lucide-react";
+import { allowToolHold } from "./pointer-intent";
 
 const RAIL_FAMILIES: Record<string, readonly string[]> = {
   move: ["move", "content-move", "ruler"],
@@ -71,9 +72,16 @@ export default function ToolDock({
   const [flyout, setFlyout] = useState<CategoryId | null>(null);
   const [recent, setRecent] = useState<Record<string, string>>({});
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const familyRef = useRef<HTMLElement>(null);
   const tools = useMemo(() => groups.flatMap((group) => group.tools.map((tool) => ({ ...tool, workspace: group.id }))), [groups]);
   const activeCategory = categoryForTool(activeTool);
   useEffect(() => () => { if (holdTimer.current) clearTimeout(holdTimer.current); }, []);
+  useEffect(() => {
+    if (!flyout) return;
+    const previous = document.activeElement;
+    (familyRef.current?.querySelector<HTMLButtonElement>('button.active') ?? familyRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]') ?? familyRef.current)?.focus({ preventScroll: true });
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
+  }, [flyout]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -96,14 +104,19 @@ export default function ToolDock({
     .tools.map((id) => tools.find((tool) => tool.id === id))
     .filter((tool): tool is (typeof tools)[number] => Boolean(tool));
 
+  const chooseTool = (tool: string, workspace: string) => {
+    const category = categoryForTool(tool);
+    if (category) setRecent(value => ({ ...value, [category]: tool }));
+    onSelect(tool, workspace);
+  };
+
   const chooseCategory = (category: CategoryId) => {
     if (category === "ai") onAiSelect();
     const choices = related(category);
     const preferredId = activeCategory === category ? activeTool : recent[category];
     const preferred = choices.find((tool) => tool.id === preferredId) ?? choices[0];
     if (preferred) {
-      setRecent((value) => ({ ...value, [category]: preferred.id }));
-      onSelect(preferred.id, preferred.workspace);
+      chooseTool(preferred.id, preferred.workspace);
     }
   };
 
@@ -127,9 +140,9 @@ export default function ToolDock({
               <button
                 key={toolId}
                 className={activeTool === tool.id ? "active" : ""}
-                onClick={() => onSelect(tool.id, tool.workspace)}
-                onContextMenu={(event) => { event.preventDefault(); openFamily(); }}
-                onPointerDown={() => { stopHold(); holdTimer.current = setTimeout(openFamily, 480); }}
+                onClick={() => chooseTool(tool.id, tool.workspace)}
+                onContextMenu={(event) => { event.preventDefault(); if (!touchWorkspace) openFamily(); }}
+                onPointerDown={(event) => { stopHold(); if (allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(openFamily, 480); }}
                 onPointerUp={stopHold}
                 onPointerLeave={stopHold}
                 onPointerCancel={stopHold}
@@ -148,16 +161,17 @@ export default function ToolDock({
             <button
               key={category.id}
               className={activeCategory === category.id || (category.id === "ai" && flyout === "ai") ? "active" : ""}
-              onClick={() => { if (touchWorkspace) setFlyout(category.id); else chooseCategory(category.id); }}
-              onContextMenu={(event) => { event.preventDefault(); setFlyout(category.id); }}
-              onPointerDown={() => { stopHold(); holdTimer.current = setTimeout(() => setFlyout(category.id), 480); }}
+              onClick={() => chooseCategory(category.id)}
+              onContextMenu={(event) => { event.preventDefault(); if (!touchWorkspace) setFlyout(category.id); }}
+              onPointerDown={(event) => { stopHold(); if (allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(() => setFlyout(category.id), 480); }}
               onPointerUp={stopHold}
               onPointerCancel={stopHold}
               onPointerLeave={stopHold}
+              onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); setFlyout(category.id); } }}
               aria-label={`${category.label} tools`}
               aria-pressed={activeCategory === category.id}
-              aria-haspopup="menu"
-              title={`${category.label} · ${touchWorkspace ? "tap" : "right-click"} for related tools`}
+              aria-haspopup={touchWorkspace ? undefined : "menu"}
+              title={`${category.label} · ${touchWorkspace ? "Tap to select · More for all tools" : "Right-click for related tools"}`}
             >
               <CategoryIcon id={category.id} />
               <span>{category.label}</span>
@@ -182,17 +196,36 @@ export default function ToolDock({
 
       {flyout && (
         <div className="tool-family-scrim" onPointerDown={() => setFlyout(null)}>
-          <section className="tool-family-menu" role="menu" aria-label={`${flyout} tools`} onPointerDown={(event) => event.stopPropagation()}>
+          <section ref={familyRef} tabIndex={-1} className="tool-family-menu" role="dialog" aria-modal="true" aria-label={`${flyout} tools`} onPointerDown={(event) => event.stopPropagation()} onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === "Escape") { event.preventDefault(); setFlyout(null); return; }
+            const buttons = [...(familyRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+            const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+            if (event.key === "Tab") {
+              if (event.shiftKey && index <= 0) { event.preventDefault(); buttons.at(-1)?.focus(); }
+              else if (!event.shiftKey && (index < 0 || index === buttons.length - 1)) { event.preventDefault(); buttons[0]?.focus(); }
+            }
+            if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+              event.preventDefault();
+              const choices = buttons.filter(button => button.getAttribute("role") === "menuitem");
+              const current = choices.indexOf(document.activeElement as HTMLButtonElement);
+              const next = event.key === "Home" ? 0 : event.key === "End" ? choices.length - 1
+                : current < 0 ? (event.key === "ArrowDown" ? 0 : choices.length - 1)
+                : (current + (event.key === "ArrowDown" ? 1 : -1) + choices.length) % choices.length;
+              choices[next]?.focus();
+            }
+          }}>
             <header>
               <CategoryIcon id={flyout} size={18} />
               <div><strong>{categories.find((category) => category.id === flyout)?.label}</strong><span>Related tools</span></div>
+              <button className="tool-family-close" onClick={() => setFlyout(null)} aria-label="Close related tools"><X size={18} /></button>
             </header>
-            <div>
+            <div role="menu" aria-label={`${flyout} tools`}>
               {related(flyout).map((tool) => (
                 <button
                   key={tool.id}
                   className={activeTool === tool.id ? "active" : ""}
-                  onClick={() => { setRecent((value) => ({ ...value, [flyout]: tool.id })); onSelect(tool.id, tool.workspace); setFlyout(null); }}
+                  onClick={() => { chooseTool(tool.id, tool.workspace); setFlyout(null); }}
                   role="menuitem"
                 >
                   <ToolIcon id={tool.id} size={17} />
@@ -207,11 +240,12 @@ export default function ToolDock({
 
       {libraryOpen && (
         <ToolPalette
+          autoFocusSearch={!touchWorkspace}
           commandEnabled={commandEnabled}
           groups={groups}
           activeTool={activeTool}
           onSelect={(tool, workspace) => {
-            onSelect(tool, workspace);
+            chooseTool(tool, workspace);
             setLibraryOpen(false);
           }}
           onCommand={(command) => { onCommand(command); setLibraryOpen(false); }}

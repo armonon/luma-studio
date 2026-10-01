@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { releaseSourceId } from "./release-source-id.mjs";
+import { validateMacosCandidate } from "./macos-release-policy.mjs";
 
 const appPath = resolve(process.argv.find((arg) => arg.endsWith(".app")) ?? "src-tauri/target/release/bundle/macos/Luma Studio.app");
 function commandOutput(command, args) {
@@ -23,6 +25,8 @@ const stapler = commandOutput("xcrun", ["stapler", "validate", appPath]);
 const executable = join(appPath, "Contents/MacOS", info.CFBundleExecutable);
 const executableSha256 = createHash("sha256").update(await readFile(executable)).digest("hex");
 const build = JSON.parse(await readFile("artifacts/native-build-report.json", "utf8"));
+const expected = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
+validateMacosCandidate({ info, signature, build, sourceSha256: releaseSourceId(), executableSha256, appPath, expected });
 if (build.appPath !== appPath || build.executableSha256 !== executableSha256 || !/^[a-f0-9]{64}$/.test(build.sourceSha256 ?? "")) {
   throw new Error("Native bundle does not match its source-bound build receipt; rebuild with npm run pro:build");
 }

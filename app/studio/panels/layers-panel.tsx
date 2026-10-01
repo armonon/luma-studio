@@ -18,6 +18,7 @@ const BlendStackEditor = lazy(() => import("../blend-stack-editor"));
 const SmartFilterEditor = lazy(() => import("../layer-editors").then((module) => ({ default: module.SmartFilterEditor })));
 
 export type LayersPanelProps = Readonly<{
+  touch?: boolean;
   studio: Studio | null;
   layers: Layer[];
   activeLayerId: string | null;
@@ -43,6 +44,7 @@ export type LayersPanelProps = Readonly<{
 }>;
 
 export default function LayersPanel({
+  touch = false,
   studio,
   layers,
   activeLayerId,
@@ -66,6 +68,7 @@ export default function LayersPanel({
   onRenameLayer,
 }: LayersPanelProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [selecting, setSelecting] = useState(false);
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
   return (
     <section className="glass-card layers-card">
@@ -99,8 +102,14 @@ export default function LayersPanel({
           </select>
         </div>
       </header>
+      {touch && <div className="touch-layer-toolbar">
+        <button aria-pressed={selecting} onClick={() => setSelecting(value => !value)}>{selecting ? "Done selecting" : "Select layers"}</button>
+        <button disabled={!selectedLayerIds.length} onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setContextMenu({ x: rect.left, y: rect.bottom }); }}>Actions · {selectedLayerIds.length}</button>
+      </div>}
       <Suspense fallback={<div className="layer-stack" aria-label="Loading layers" />}>
         <VirtualLayerStack
+          touch={touch}
+          selecting={selecting}
           layers={layers}
           activeLayerId={activeLayerId}
           selectedLayerIds={selectedLayerIds}
@@ -140,8 +149,8 @@ export default function LayersPanel({
         <button disabled={!commandEnabled("layer-style")} onClick={() => onCommand("layer-style")} title="Layer styles and advanced blending" aria-label="Open layer styles">fx</button>
         <button disabled={!commandEnabled("delete-layer")} className="danger" onClick={() => onCommand("delete-layer")} title="Delete selected layers" aria-label="Delete selected layers"><Trash2 size={15} /></button>
       </div>
-      {selectedLayerIds.length > 1 && <div className="layer-selection-summary"><span>Shift-click a range · ⌘/Ctrl-click to toggle</span><button disabled={!commandEnabled("merge-layers")} title={studio?.layerBatchReason(selectedLayerIds, "merge") ?? "Rasterize selected layers · ⌘E · undo restores originals"} onClick={() => onCommand("merge-layers")}>Merge selected</button></div>}
-      {contextMenu && <LayerContextMenu {...contextMenu} count={selectedLayerIds.length} enabled={commandEnabled} execute={onCommand} close={closeContextMenu} mergeReason={studio?.layerBatchReason(selectedLayerIds, "merge")} />}
+      {selectedLayerIds.length > 1 && <div className="layer-selection-summary"><span>{touch ? "Tap layers in Select mode to toggle selection" : "Shift-click a range · ⌘/Ctrl-click to toggle"}</span><button disabled={!commandEnabled("merge-layers")} title={studio?.layerBatchReason(selectedLayerIds, "merge") ?? "Rasterize selected layers · ⌘E · undo restores originals"} onClick={() => onCommand("merge-layers")}>Merge selected</button></div>}
+      {contextMenu && <LayerContextMenu {...contextMenu} touch={touch} count={selectedLayerIds.length} enabled={commandEnabled} execute={onCommand} close={closeContextMenu} mergeReason={studio?.layerBatchReason(selectedLayerIds, "merge")} />}
       {activeLayer && selectedLayerIds.length <= 1 && (
         <div className="layer-controls">
           <label>

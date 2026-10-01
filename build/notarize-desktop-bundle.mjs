@@ -11,17 +11,20 @@
  * Credentials are the operator's, never this script's. Store them once with
  *   xcrun notarytool store-credentials luma-notary \
  *     --apple-id <id> --team-id <team> --password <app-specific-password>
- * and pass `--keychain-profile luma-notary` (the default).
+ * and pass `--keychain-profile luma-notary`. This workspace defaults to the
+ * existing ScenePilot-Notarization profile; no credential is read or printed.
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { releaseSourceId } from "./release-source-id.mjs";
+import { validateMacosCandidate } from "./macos-release-policy.mjs";
 
 const appPath = resolve(process.argv.find((arg) => arg.endsWith(".app")) ?? "src-tauri/target/release/bundle/macos/Luma Studio.app");
 const profileIndex = process.argv.indexOf("--keychain-profile");
-const profile = profileIndex > 0 ? process.argv[profileIndex + 1] : "luma-notary";
+const profile = profileIndex > 0 ? process.argv[profileIndex + 1] : process.env.MAC_RELEASE_NOTARY_PROFILE || "ScenePilot-Notarization";
+if (!profile || profile.startsWith("--")) throw new Error("Missing Keychain profile name");
 
 function run(command, args, { allowFailure = false } = {}) {
   const result = spawnSync(command, args, { encoding: "utf8" });
@@ -48,6 +51,11 @@ const authority = signature.match(/^Authority=(Developer ID Application: .+)$/m)
 if (!teamId) throw new Error("Bundle is not signed with a Developer ID team identifier (an ad-hoc signature cannot be notarized). Set bundle.macOS.signingIdentity in src-tauri/tauri.release.conf.json and rebuild.");
 if (!authority) throw new Error("Bundle is not signed by a Developer ID Application certificate.");
 if (!hardenedRuntime) throw new Error("Bundle is not signed with the hardened runtime, which notarization requires.");
+run("codesign", ["--verify", "--deep", "--strict", appPath]);
+const executableSha256 = createHash("sha256").update(await readFile(executable)).digest("hex");
+const build = JSON.parse(await readFile("artifacts/native-build-report.json", "utf8"));
+const expected = JSON.parse(await readFile("src-tauri/tauri.conf.json", "utf8"));
+validateMacosCandidate({ info, signature, build, sourceSha256: releaseSourceId(), executableSha256, appPath, expected });
 
 // notarytool takes an archive, not a directory.
 const zipPath = `${appPath}.notarize.zip`;
@@ -57,7 +65,7 @@ const submission = run("xcrun", ["notarytool", "submit", zipPath, "--keychain-pr
 let verdict;
 try { verdict = JSON.parse(submission.output.slice(submission.output.indexOf("{"))); }
 catch { throw new Error(`notarytool did not return JSON. Store credentials first with 'xcrun notarytool store-credentials ${profile}'.\n${submission.output.trim()}`); }
-if (verdict.status !== "Accepted") {
+if (submission.status !== 0 || verdict.status !== "Accepted") {
   throw new Error(`Notarization was ${verdict.status ?? "not completed"} (id ${verdict.id ?? "unknown"}). Run 'xcrun notarytool log ${verdict.id} --keychain-profile ${profile}' for the reasons.`);
 }
 
@@ -65,12 +73,12 @@ run("xcrun", ["stapler", "staple", appPath]);
 // Read the ticket back rather than trusting that stapling reported success.
 const stapledTicket = run("xcrun", ["stapler", "validate", appPath], { allowFailure: true }).status === 0;
 // The question Gatekeeper answers for a user opening a download.
-const assessment = run("spctl", ["--assess", "--type", "install", "-vvv", appPath], { allowFailure: true });
+const assessment = run("spctl", ["--assess", "--type", "execute", "-vvv", appPath], { allowFailure: true });
 const gatekeeperAccepted = assessment.status === 0 && /accepted/i.test(assessment.output);
 
 const report = {
   generatedAt: new Date().toISOString(),
-  sourceSha256: releaseSourceId(),
+  sourceSha256: build.sourceSha256,
   appPath,
   bundleId: info.CFBundleIdentifier,
   version: info.CFBundleShortVersionString,
@@ -82,7 +90,7 @@ const report = {
   stapledTicket,
   gatekeeperAccepted,
   gatekeeperAssessment: assessment.output.trim(),
-  executableSha256: createHash("sha256").update(await readFile(executable)).digest("hex"),
+  executableSha256,
 };
 if (!stapledTicket || !gatekeeperAccepted) {
   throw new Error(`Notarization succeeded but the bundle is not yet accepted locally: ${JSON.stringify({ stapledTicket, gatekeeperAccepted }, null, 2)}`);

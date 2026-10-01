@@ -11,13 +11,26 @@ const STORE_NAME = "recovery";
 const closedDocuments = new Set<string>();
 let recoveryExitPending = false;
 let recoveryExitError: Error | null = null;
+// A failed startup read must never be followed by a new authoritative index
+// hiding the very checkpoints we could not inspect. Explicit file saves remain
+// independent; only a successful re-read (or restart) can release this guard.
+let recoveryReadError: Error | null = null;
+
+export function recoveryReadFailure() { return recoveryReadError?.message ?? null; }
+
+function assertRecoveryReadable() {
+  if (recoveryReadError) throw new Error(`Recovery is paused to protect existing checkpoints. Save a .luma file and restart. ${recoveryReadError.message}`, { cause: recoveryReadError });
+}
 
 type StorageWithDirectory = StorageManager & {
   getDirectory?: () => Promise<FileSystemDirectoryHandle>;
 };
 
 async function opfsRoot() {
-  return (navigator.storage as StorageWithDirectory).getDirectory?.() ?? null;
+  try { return await (navigator.storage as StorageWithDirectory | undefined)?.getDirectory?.() ?? null; }
+  catch (error) {
+    throw new Error("Browser private-file storage could not be opened. A legacy recovery file may still exist; it has not been replaced. Save your current work as a .luma file and restart.", { cause: error });
+  }
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -157,10 +170,12 @@ function checkedStoredWorkspace(stored: unknown): StoredDocument[] {
 }
 
 async function updateWorkspace(update: (documents: StoredDocument[], store: IDBObjectStore) => StoredDocument[] | null) {
+  assertRecoveryReadable();
   // Keep the old Blob-bearing index immutable during migration. New metadata
   // references its payloads until those documents receive fresh checkpoints.
   const legacy = checkedRecoveryWorkspace(await idbGetValue(LEGACY_WORKSPACE_KEY));
   await idbUpdateValue(WORKSPACE_KEY, (current, store) => {
+    assertRecoveryReadable();
     const previous: StoredDocument[] = current === null ? legacy.map(entry => ({ ...storedMetadata(entry), blobKey: `${LEGACY_PAYLOAD_PREFIX}${entry.id}` })) : checkedStoredWorkspace(current);
     const next = update(previous, store);
     if (next === null) return current;
@@ -188,6 +203,7 @@ function storeCheckpoint(store: IDBObjectStore, document: RecoveryWorkspaceDocum
 }
 
 export async function writeRecovery(blob: Blob) {
+  assertRecoveryReadable();
   const root = await opfsRoot();
   if (!root) return idbPutValue(blob, AUTOSAVE_FILE);
   const handle = await root.getFileHandle(AUTOSAVE_FILE, { create: true });
@@ -257,6 +273,7 @@ export async function removeRecoveryDocument(id: string) {
  * The returned compensation is used if native termination itself fails.
  */
 export async function discardRecoveryDocuments(ids: readonly string[]) {
+  assertRecoveryReadable();
   if (recoveryExitPending) throw new Error("A recovery disposition is already pending");
   recoveryExitPending = true;
   const targets = new Set(ids.filter(Boolean));
@@ -314,6 +331,17 @@ export async function finalizePreviousDiscard() {
 }
 
 export async function readRecoveryWorkspace(): Promise<RecoveryWorkspaceDocument[]> {
+  try {
+    const workspace = await loadRecoveryWorkspace();
+    recoveryReadError = null;
+    return workspace;
+  } catch (error) {
+    recoveryReadError = error instanceof Error ? error : new Error(String(error));
+    throw recoveryReadError;
+  }
+}
+
+async function loadRecoveryWorkspace(): Promise<RecoveryWorkspaceDocument[]> {
   const disposition = await idbGetValue(DISCARD_KEY);
   const excluded = new Set(checkedDisposition(disposition));
   const stored = await idbGetValue<unknown>(WORKSPACE_KEY);

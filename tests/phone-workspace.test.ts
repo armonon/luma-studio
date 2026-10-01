@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { phoneInterface, phoneViewport, PHONE_DRAW_KEY, PHONE_VIEWPORT_LIMITS } from "../app/studio/phone-workspace";
+import { phoneInterface, phoneViewport, phoneKeyboardOpen, PHONE_DRAW_KEY, PHONE_VIEWPORT_LIMITS } from "../app/studio/phone-workspace";
 import { TABLET_DRAW_KEY } from "../app/studio/tablet-input";
 import { calculateDisplayViewport } from "../app/engine/viewport";
 
@@ -33,4 +33,15 @@ test("phone display budget does not grow with document dimensions", () => {
     assert.ok(plan.outputWidth * plan.outputHeight <= 2_000_000);
     assert.ok(plan.outputWidth <= 2048 && plan.outputHeight <= 2048);
   }
+});
+
+test("keyboard layout requires a focused text field and excludes pinch zoom", () => {
+  assert.equal(phoneKeyboardOpen(844, 420, 1, true), true);
+  assert.equal(phoneKeyboardOpen(390, 210, 1, true), true);
+  assert.equal(phoneKeyboardOpen(844, 420, 2, true), false);
+  assert.equal(phoneKeyboardOpen(844, 420, 1, false), false);
+  assert.equal(phoneKeyboardOpen(844, 800, 1, true), false);
+  assert.equal(phoneKeyboardOpen(844, NaN, 1, true), false);
+  assert.equal(phoneKeyboardOpen(844, 360, 1, false, true), true);
+  assert.equal(phoneKeyboardOpen(844, 844, 1, false, true), false);
 });

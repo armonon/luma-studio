@@ -6,6 +6,7 @@ import type { TransformMode } from "./canvas-geometry";
 import { FONT_CHOICES } from "./font-catalog";
 import ShapeOptions, { type ShapeOptionsProps } from "./shape-options";
 import PenOptions, { type PenOptionsProps } from "./pen-options";
+import { MIRROR_MODES } from "./brush-library";
 
 export type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect";
 
@@ -47,6 +48,7 @@ export default function ContextToolbar({
   transformControls,
   shapeControls,
   penControls,
+  onOpenBrushes,
 }: {
   tool: string;
   label: string;
@@ -56,6 +58,7 @@ export default function ContextToolbar({
   mode: "paint" | "selection" | "type" | "crop" | "general" | "transform" | "shape" | "pen";
   shapeControls?: ShapeOptionsProps;
   penControls?: PenOptionsProps;
+  onOpenBrushes?: () => void;
   transformControls?: {
     mode: TransformMode; enabled: boolean; autoSelect: boolean; handles: boolean; snap: boolean;
     draft: boolean; distortionReason: string | null;
@@ -73,7 +76,7 @@ export default function ContextToolbar({
   onToggleAssets: () => void;
 }) {
   const range = (label: string, key: keyof ContextValues, min: number, max: number, suffix = "", step = 1) => (
-    <label className="context-range">
+    <label className="context-range" data-option={key}>
       <span>{label}</span>
       <input type="range" min={min} max={max} step={step} value={Number(values[key])} onChange={(event) => onValue(key, Number(event.target.value))} />
       <output>{values[key]}{suffix}</output>
@@ -81,21 +84,22 @@ export default function ContextToolbar({
   );
 
   return (
-    <div className="studio-contextbar" aria-label={`${tool} options`}>
+    <div className="studio-contextbar" data-tool-mode={mode} aria-label={`${tool} options`}>
       <div className="studio-context-identity">
         <span><ToolIcon id={tool} size={17} /></span>
-        <div><strong>{label}</strong><small>{description}</small></div>
+        <div><strong>{label}</strong><small>{description}</small><small className="phone-options-hint">Swipe options →</small></div>
       </div>
 
       {mode === "paint" && (
         <div className="studio-context-controls">
+          {onOpenBrushes && <button onClick={onOpenBrushes} aria-label="Open brush library">Brushes</button>}
           <label className="context-color" title="Foreground color"><input type="color" value={values.color} onChange={(event) => onValue("color", event.target.value)} aria-label="Foreground color" /></label>
           {range("Size", "size", 1, tool === "capture-brush" ? 1200 : 400, "px")}
           {range("Hard", "hardness", 0, 100, "%")}
           {range("Flow", "flow", 1, 100, "%")}
           {range("Opacity", "opacity", 0, 100, "%")}
           {range("Smooth", "smoothing", 0, 95, "%")}
-          <label className="context-select"><span>Symmetry</span><select value={values.symmetry} onChange={(event) => onValue("symmetry", event.target.value)}><option value="none">Off</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="radial">Radial · 6</option></select></label>
+          {["brush", "pencil", "capture-brush", "erase", "mask-add", "mask-remove"].includes(tool) && <label className="context-select"><span>Mirror</span><select value={values.symmetry} onChange={(event) => onValue("symmetry", event.target.value)}>{MIRROR_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label>}
         </div>
       )}
 

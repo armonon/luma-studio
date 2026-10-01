@@ -1,5 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { resolve } from "node:path";
+import { notarizationMatchesCandidate } from "./macos-release-policy.mjs";
 import { validUpdaterConfiguration } from "./release-config.mjs";
 import { releaseSourceId, evidenceMatchesSource } from "./release-source-id.mjs";
 import { completedCorpusEvidence, independentPhotoshopCorpusEvidence } from "./corpus-evidence.mjs";
@@ -41,6 +44,12 @@ const cleanInstall = await json("artifacts/clean-install-report.json");
 const cleanMachines = Array.isArray(cleanInstall?.results) ? cleanInstall.results : [];
 const uniqueCleanMachines = new Set(cleanMachines.map((entry) => entry?.machineId).filter(Boolean));
 const sourceSha256 = releaseSourceId();
+const nativeBuild = await json("artifacts/native-build-report.json");
+const appPath = resolve("src-tauri/target/release/bundle/macos/Luma Studio.app");
+const executableBytes = await readFile(resolve(appPath, "Contents/MacOS/luma-studio")).catch(() => null);
+const executableSha256 = executableBytes ? createHash("sha256").update(executableBytes).digest("hex") : null;
+const notarizationQualified = notarizationMatchesCandidate({ report: notarization, build: nativeBuild,
+  sourceSha256, executableSha256, appPath, expected: tauri });
 const local = await json("artifacts/local-hardening-report.json");
 const localQualified = evidenceMatchesSource(local, sourceSha256) && local.unchanged === true &&
   ["types", "engine-regressions", "lint", "native-bridge", "native-core"].every(id => local.checks?.some(check => check.id === id && check.pass === true && check.exitCode === 0));
@@ -83,11 +92,8 @@ const checks = [
   {
     phase: 2,
     name: "Apple signing and notarization",
-    pass: evidenceMatchesSource(notarization, sourceSha256) && notarization?.status === "Accepted" && notarization?.bundleId === tauri.identifier &&
-      notarization?.gatekeeperAccepted === true && notarization?.stapledTicket === true &&
-      notarization?.hardenedRuntime === true && /^[A-Z0-9]{10}$/.test(notarization?.teamId ?? "") &&
-      /^[a-f0-9]{64}$/.test(notarization?.executableSha256 ?? ""),
-    detail: notarization ? String(notarization.status ?? "invalid report") : "report missing",
+    pass: notarizationQualified,
+    detail: notarizationQualified ? "exact current-source native candidate accepted" : "missing or stale native-candidate notarization evidence",
   },
   {
     phase: 2,

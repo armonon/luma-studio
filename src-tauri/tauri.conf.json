@@ -38,6 +38,7 @@
     "active": true,
     "targets": "all",
     "macOS": {
+      "hardenedRuntime": true,
       "signingIdentity": "-"
     },
     "fileAssociations": [

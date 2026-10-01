@@ -29,6 +29,8 @@ function layerDetails(layer: Layer) {
 }
 
 export default function VirtualLayerStack({
+  touch = false,
+  selecting = false,
   layers: allLayers,
   activeLayerId,
   selectedLayerIds,
@@ -45,6 +47,8 @@ export default function VirtualLayerStack({
   onContextMenu,
   onDeleteSelection,
 }: {
+  touch?: boolean;
+  selecting?: boolean;
   layers: Layer[];
   activeLayerId: string | null;
   selectedLayerIds: string[];
@@ -82,7 +86,7 @@ export default function VirtualLayerStack({
     return ids;
   };
   const layers = allLayers.filter(layer => !ancestors(layer).some(id => collapsed.has(id)));
-  const select = (layer: Layer, event: LayerSelectionModifiers) => onSelect(layer, { shiftKey: event.shiftKey, metaKey: event.metaKey, ctrlKey: event.ctrlKey, orderedIds: layers.map(item => item.id) });
+  const select = (layer: Layer, event: LayerSelectionModifiers) => onSelect(layer, { shiftKey: event.shiftKey, metaKey: (touch && selecting) || event.metaKey, ctrlKey: event.ctrlKey, orderedIds: layers.map(item => item.id) });
   const [viewportHeight, setViewportHeight] = useState(360);
   const [scrollTop, setScrollTop] = useState(0);
   const range = virtualRange({
@@ -125,6 +129,7 @@ export default function VirtualLayerStack({
     <div
       ref={hostRef}
       className="layer-stack virtual-layer-stack"
+      style={touch ? { height: Math.min(6, Math.max(2, layers.length)) * ROW_HEIGHT } : undefined}
       role="listbox"
       aria-label="Document layers"
       aria-multiselectable="true"
@@ -143,11 +148,11 @@ export default function VirtualLayerStack({
                 aria-selected={selectedLayerIds.includes(layer.id)}
                 data-primary={activeLayerId === layer.id}
                 tabIndex={activeLayerId === layer.id || (!activeLayerId && targetIndex === 0) ? 0 : -1}
-                style={{ height: ROW_HEIGHT, top: localIndex * ROW_HEIGHT, paddingLeft: 7 + Math.min(ancestors(layer).length, 5) * 12, ...(layer.kind === "group" ? { gridTemplateColumns: "16px 34px minmax(0, 1fr) auto" } : {}) } as CSSProperties}
+                style={{ height: ROW_HEIGHT, top: localIndex * ROW_HEIGHT, paddingLeft: 7 + Math.min(ancestors(layer).length, 5) * 12, ...(layer.kind === "group" ? { gridTemplateColumns: `${touch ? 44 : 16}px 34px minmax(0, 1fr) auto` } : {}) } as CSSProperties}
                 title={layer.ai
                   ? `${layer.ai.operation} · ${layer.ai.model}${layer.ai.requestId ? ` · request ${layer.ai.requestId}` : ""}`
                   : layer.name}
-                draggable={selectedLayerIds.length <= 1}
+                draggable={!touch && selectedLayerIds.length <= 1}
                 onDragStart={() => onDragStart(layer.id)}
                 onDragEnd={onDragEnd}
                 onDragOver={(event) => event.preventDefault()}
@@ -200,7 +205,7 @@ export default function VirtualLayerStack({
                   >
                     {layer.visible ? <Eye /> : <EyeOff />}
                   </button>
-                  <button
+                  {touch ? <button type="button" aria-label={`Actions for ${layer.name}`} onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextMenu(layer, { x: rect.left, y: rect.bottom }); }}>•••</button> : <button
                     type="button"
                     className="spatial-layer-delete"
                     disabled={!canDelete(layer)}
@@ -209,7 +214,7 @@ export default function VirtualLayerStack({
                     onClick={(event) => { event.stopPropagation(); onDelete(layer); }}
                   >
                     <X />
-                  </button>
+                  </button>}
                 </span>
               </div>
             );

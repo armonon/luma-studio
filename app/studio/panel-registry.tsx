@@ -20,6 +20,7 @@ export type PanelDefinition = Readonly<{
   singleton: boolean;
   closable: boolean;
   resizable: boolean;
+  mobileGroup?: "Essentials" | "Adjustments" | "Production";
 }>;
 
 function RegisteredPanelHost({ children }: PanelComponentProps) {
@@ -91,5 +92,7 @@ export const STUDIO_PANEL_REGISTRY = entries.reduce((registry, [id, title, icon,
     singleton: true,
     closable: true,
     resizable: true,
+    mobileGroup: ["layers", "properties", "paint", "vector", "selection", "mask", "transform", "history"].includes(id) ? "Essentials"
+      : ["raw", "curves", "levels", "hsl", "pro-adjustment", "tone", "neural"].includes(id) ? "Adjustments" : "Production",
   })
 ), new PanelRegistry());

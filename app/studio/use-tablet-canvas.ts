@@ -5,17 +5,20 @@ import type { CanvasView } from "../engine/viewport";
 import { navigateTouches, TabletPointerSession } from "./tablet-input";
 
 type CanvasEvent = ReactPointerEvent<HTMLCanvasElement>;
-export function useTabletCanvas({ enabled, drawWithTouch, documentId, view, fitScale, stage, setView, down, move, up, cancel }: {
+export function useTabletCanvas({ enabled, drawWithTouch, documentId, view, fitScale, stage, setView, down, move, up, cancel, canCancelTouch }: {
+  canCancelTouch?: () => boolean;
   enabled: boolean; drawWithTouch: boolean; documentId: string | null; view: CanvasView; fitScale: number;
   stage: RefObject<HTMLDivElement | null>; setView: (view: CanvasView) => void;
   down: (event: CanvasEvent) => void; move: (event: CanvasEvent) => void;
   up: (event: CanvasEvent) => void; cancel: (event: CanvasEvent) => void;
 }) {
   const session = useRef(new TabletPointerSession());
+  const editorEvent = useRef<CanvasEvent | null>(null);
   const frame = useRef<number | null>(null);
   const pendingView = useRef<CanvasView | null>(null);
   useEffect(() => {
     session.current = new TabletPointerSession();
+    editorEvent.current = null;
     pendingView.current = null;
     return () => { if (frame.current !== null) cancelAnimationFrame(frame.current); frame.current = null; };
   }, [documentId, enabled]);
@@ -33,6 +36,7 @@ export function useTabletCanvas({ enabled, drawWithTouch, documentId, view, fitS
     if (!enabled) { (cancelled ? cancel : up)(event); return; }
     const s = session.current;
     if (s.editor === event.pointerId) (cancelled ? cancel : up)(event);
+    if (s.editor === event.pointerId) editorEvent.current = null;
     s.up(event.pointerId);
     flush();
   };
@@ -40,15 +44,19 @@ export function useTabletCanvas({ enabled, drawWithTouch, documentId, view, fitS
     onPointerDown: (event: CanvasEvent) => {
       if (!enabled) { down(event); return; }
       event.preventDefault();
-      const route = session.current.down(event.pointerId, event.pointerType, drawWithTouch, point(event));
+      const route = session.current.down(event.pointerId, event.pointerType, drawWithTouch, point(event), canCancelTouch?.() ?? false);
       event.currentTarget.setPointerCapture(event.pointerId);
-      if (route === "edit") { flush(); down(event); }
+      if (route === "cancel-edit" && editorEvent.current) {
+        cancel({ ...editorEvent.current, type: "pointercancel" });
+        editorEvent.current = null;
+      }
+      if (route === "edit") { editorEvent.current = { ...event, currentTarget: event.currentTarget, target: event.target }; flush(); down(event); }
     },
     onPointerMove: (event: CanvasEvent) => {
       if (!enabled) { move(event); return; }
       const s = session.current;
       if (s.blocked.has(event.pointerId)) return;
-      if (s.editor !== null) { if (s.editor === event.pointerId) move(event); return; }
+      if (s.editor !== null) { if (s.editor === event.pointerId) { s.updateEditor(event.pointerId, point(event)); move(event); } return; }
       if (!s.touches.has(event.pointerId)) { if (event.pointerType !== "touch") move(event); return; }
       event.preventDefault();
       const previous = [...s.touches.values()];

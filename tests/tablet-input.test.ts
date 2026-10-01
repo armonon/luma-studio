@@ -54,3 +54,23 @@ test("tablet backing buffers stay within budget even for extreme projects and hi
     assert.ok(plan.outputWidth <= 3072 && plan.outputHeight <= 3072);
   }
 });
+
+test("second finger promotes a rollback-capable stroke to navigation at current coordinates", () => {
+  const session = new TabletPointerSession();
+  assert.equal(session.down(1, "touch", true, { x: 10, y: 10 }), "edit");
+  session.updateEditor(1, { x: 30, y: 20 });
+  assert.equal(session.down(2, "touch", true, { x: 90, y: 20 }, true), "cancel-edit");
+  assert.equal(session.editor, null);
+  assert.deepEqual([...session.touches.values()], [{ x: 30, y: 20 }, { x: 90, y: 20 }]);
+  session.up(2);
+  assert.equal(session.down(3, "touch", true, { x: 100, y: 20 }), "navigate");
+  session.up(1); session.up(3);
+  assert.equal(session.down(4, "touch", true, { x: 10, y: 10 }), "edit");
+});
+
+test("gesture promotion never cancels Pencil ownership", () => {
+  const session = new TabletPointerSession();
+  session.down(1, "pen", true, { x: 0, y: 0 });
+  assert.equal(session.down(2, "touch", true, { x: 10, y: 10 }, true), "ignore");
+  assert.equal(session.editor, 1);
+});

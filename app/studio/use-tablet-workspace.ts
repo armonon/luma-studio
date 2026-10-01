@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { TABLET_DRAW_KEY, tabletInterface } from "./tablet-input";
-import { PHONE_DRAW_KEY, phoneInterface } from "./phone-workspace";
+import { PHONE_DRAW_KEY, phoneInterface, compactPhoneViewport } from "./phone-workspace";
 
 function subscribe(callback: () => void) {
   const query = window.matchMedia("(any-pointer: coarse)");
@@ -22,6 +22,8 @@ function readTablet() {
     navigator.platform, new URLSearchParams(window.location.search).get("interface"));
 }
 function readPhone() {
+  const override = new URLSearchParams(window.location.search).get("interface");
+  if (!override && compactPhoneViewport(window.innerWidth, window.innerHeight)) return true;
   return phoneInterface(navigator.maxTouchPoints, window.matchMedia("(any-pointer: coarse)").matches,
     navigator.platform, screen.width, screen.height, new URLSearchParams(window.location.search).get("interface"));
 }

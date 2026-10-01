@@ -9949,7 +9949,7 @@ html[data-luma-platform="desktop"] [contenteditable="true"] {
 /* Luma Studio production workspace — native light creative application */
 
 body:has(.spatial-studio) {
-  min-width: 1080px;
+  min-width: 0;
   color-scheme: light;
   background: #f5f6f8;
 }

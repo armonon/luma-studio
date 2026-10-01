@@ -25,6 +25,7 @@ export default function ToolPalette({
   onCommand,
   commandEnabled,
   onClose,
+  autoFocusSearch = true,
 }: {
   groups: ToolPaletteGroup[];
   activeTool: string;
@@ -32,6 +33,7 @@ export default function ToolPalette({
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
   onClose: () => void;
+  autoFocusSearch?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
@@ -39,9 +41,11 @@ export default function ToolPalette({
 
   useEffect(() => {
     const previous = document.activeElement;
-    searchRef.current?.focus();
-    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
-  }, []);
+    // Touch users often browse rather than search. Don't cover their tools with
+    // the software keyboard until they actually tap the search field.
+    (autoFocusSearch ? searchRef.current : dialogRef.current)?.focus({ preventScroll: true });
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus({ preventScroll: true }); };
+  }, [autoFocusSearch]);
 
   const visibleGroups = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
@@ -77,6 +81,7 @@ export default function ToolPalette({
     <div className="tool-palette-scrim" onPointerDown={onClose}>
       <section
         ref={dialogRef}
+        tabIndex={-1}
         className="tool-palette"
         role="dialog"
         aria-modal="true"
@@ -94,8 +99,8 @@ export default function ToolPalette({
           if (event.key === "Tab") {
             const targets = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, [tabindex="0"]') ?? [])];
             const first = targets[0]; const last = targets.at(-1);
-            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialogRef.current)) { event.preventDefault(); first?.focus(); }
           }
         }}
       >

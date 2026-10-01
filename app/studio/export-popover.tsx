@@ -19,6 +19,7 @@ type ExportPopoverProps = {
   onExportPrint: () => void;
   printAvailable: boolean;
   onToggleGL: () => void;
+  onSaveProject?: () => void;
 };
 
 export default function ExportPopover({
@@ -36,6 +37,7 @@ export default function ExportPopover({
   onExportPrint,
   printAvailable,
   onToggleGL,
+  onSaveProject,
 }: ExportPopoverProps) {
   const dialogRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -62,20 +64,6 @@ export default function ExportPopover({
 
         <div className="studio-export-options">
           <article>
-            <span className="export-format-mark">ICC</span>
-            <div><strong>CMYK print PDF</strong><small>Desktop · printer ICC conversion · flattened</small></div>
-            <button disabled={!printAvailable} onClick={onExportPrint}>Configure print output</button>
-            <p>sRGB 8-bit input, up to 4 MP. Embedded output profile; not PDF/X certified.</p>
-          </article>
-          <article>
-            <span className="export-format-mark">SVG</span>
-            <div><strong>Editable vectors</strong><small>Paths, groups and vector masks · sRGB / 8-bit</small></div>
-            <button onClick={() => onExportVector("svg")}>Export SVG</button>
-            <button onClick={() => onExportVector("pdf")}>Export vector PDF</button>
-            <p>Review affected objects and conversion limits before export. Unsupported content is never silently omitted.</p>
-            <p>PDF: RGB paths with layer and paint opacity. Not PDF/X or color-certified print output.</p>
-          </article>
-          <article>
             <span className="export-format-mark">IMG</span>
             <div><strong>Raster image</strong><small>Flattened, color-managed output</small></div>
             <select value={rasterFormat} onChange={(event) => onRasterFormatChange(event.target.value as RasterFormat)} aria-label="Raster export format">
@@ -85,6 +73,12 @@ export default function ExportPopover({
             </select>
             <button onClick={onExportRaster}>Export {rasterFormat.toUpperCase()}</button>
           </article>
+
+          {onSaveProject && <article>
+            <span className="export-format-mark">L</span>
+            <div><strong>Luma project</strong><small>Keep layers and editing controls</small></div>
+            <button onClick={onSaveProject}>Save .luma project</button>
+          </article>}
 
           <article>
             <span className="export-format-mark psd">PS</span>
@@ -97,6 +91,20 @@ export default function ExportPopover({
             </select>
             <button onClick={onExportPhotoshop}>Export {photoshopFormat === "psb" ? "PSB" : "PSD"}</button>
             <p>{compatibilityWarnings ? `${compatibilityWarnings} compatibility note${compatibilityWarnings === 1 ? "" : "s"} will be shown` : "Compatibility is checked during export"}</p>
+          </article>
+          <article>
+            <span className="export-format-mark">SVG</span>
+            <div><strong>Editable vectors</strong><small>Paths, groups and vector masks · sRGB / 8-bit</small></div>
+            <button onClick={() => onExportVector("svg")}>Export SVG</button>
+            <button onClick={() => onExportVector("pdf")}>Export vector PDF</button>
+            <p>Review affected objects and conversion limits before export. Unsupported content is never silently omitted.</p>
+            <p>PDF: RGB paths with layer and paint opacity. Not PDF/X or color-certified print output.</p>
+          </article>
+          <article>
+            <span className="export-format-mark">ICC</span>
+            <div><strong>CMYK print PDF</strong><small>{printAvailable ? "Printer ICC conversion · flattened" : "Available in the desktop app"}</small></div>
+            {printAvailable && <button onClick={onExportPrint}>Configure print output</button>}
+            <p>sRGB 8-bit input, up to 4 MP. Embedded output profile; not PDF/X certified.</p>
           </article>
         </div>
 

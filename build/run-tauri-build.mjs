@@ -33,7 +33,12 @@ if (result.status === 0 && process.platform === "darwin") {
     config = { ...config, ...JSON.parse(value.startsWith("{") ? value : readFileSync(value, "utf8")) };
   }
   const profile = args.includes("--debug") ? "debug" : "release";
-  const appPath = resolve("src-tauri/target", profile, "bundle/macos", `${config.productName}.app`);
+  const targetIndex = args.indexOf("--target");
+  const target = targetIndex >= 0 ? args[targetIndex + 1] : args.find(arg => arg.startsWith("--target="))?.slice(9);
+  if (target && !["aarch64-apple-darwin", "x86_64-apple-darwin", "universal-apple-darwin"].includes(target)) {
+    throw new Error(`Unexpected macOS build target: ${target}`);
+  }
+  const appPath = resolve("src-tauri/target", target ?? "", profile, "bundle/macos", `${config.productName}.app`);
   const executable = resolve(appPath, "Contents/MacOS/luma-studio");
   if (existsSync(executable)) {
     if (sourceSha256 !== releaseSourceId()) throw new Error("Source changed during native build; rebuild before qualification");

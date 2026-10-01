@@ -31,17 +31,29 @@ export function navigateTouches(view: CanvasView, previous: readonly TouchPoint[
 export class TabletPointerSession {
   readonly touches = new Map<number, TouchPoint>();
   editor: number | null = null;
+  private editorTouch = false;
+  private editorPoint: TouchPoint | null = null;
   blocked = new Set<number>();
-  down(id: number, type: string, drawWithTouch: boolean, point: TouchPoint): "edit" | "navigate" | "ignore" {
+  down(id: number, type: string, drawWithTouch: boolean, point: TouchPoint, canCancelTouch = false): "edit" | "navigate" | "ignore" | "cancel-edit" {
+    if (this.editor !== null && this.editorTouch && type === "touch" && canCancelTouch && this.editorPoint) {
+      this.touches.set(this.editor, this.editorPoint);
+      this.touches.set(id, point);
+      this.editor = null;
+      this.editorTouch = false;
+      this.editorPoint = null;
+      return "cancel-edit";
+    }
     if (this.editor !== null) { this.blocked.add(id); return "ignore"; }
+    if (type === "touch" && this.touches.size) { this.touches.set(id, point); return "navigate"; }
     if (type !== "touch" || drawWithTouch) {
       for (const touchId of this.touches.keys()) this.blocked.add(touchId);
-      this.touches.clear(); this.editor = id; return "edit";
+      this.touches.clear(); this.editor = id; this.editorTouch = type === "touch"; this.editorPoint = point; return "edit";
     }
     this.touches.set(id, point); return "navigate";
   }
+  updateEditor(id: number, point: TouchPoint) { if (this.editor === id) this.editorPoint = point; }
   up(id: number) {
     this.touches.delete(id); this.blocked.delete(id);
-    if (this.editor === id) this.editor = null;
+    if (this.editor === id) { this.editor = null; this.editorTouch = false; this.editorPoint = null; }
   }
 }

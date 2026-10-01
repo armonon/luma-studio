@@ -150,6 +150,9 @@ test("aborted workspace read does not return success or silently fall back to a 
   };
   try { await assert.rejects(readRecoveryWorkspace(), /abort/i); }
   finally { IDBObjectStore.prototype.get = get; }
+  await assert.rejects(writeRecoveryDocument(checkpoint("must-not-hide-existing-work")), /Recovery is paused/);
+  await assert.rejects(discardRecoveryDocuments(["safe"]), /Recovery is paused/);
+  assert.deepEqual((await readRecoveryWorkspace()).map(item => item.id), ["safe"]);
 });
 
 test("closing the final recovered tab never resurrects a legacy checkpoint", async () => {

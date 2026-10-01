@@ -3,8 +3,13 @@ import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
 import { useTabletCanvas } from "./use-tablet-canvas";
+import DownloadConfirmation from "./download-confirmation";
+import { canvasPointerIntent } from "./pointer-intent";
 import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
 import { PHONE_VIEWPORT_LIMITS } from "./phone-workspace";
+import BrushToolbox, { type PaintSection } from "./brush-toolbox";
+import { BrushMirrorGuides } from "./brush-mirror-guides";
+import { brushMirror, type BrushRecipe, type MirrorMode } from "./brush-library";
 import { FONT_CHOICES } from "./font-catalog";
 import { ShellErrorBoundary } from "./shell-error-boundary";
 import { WorkspaceRulers, useWorkspaceRulers } from "./workspace-rulers";
@@ -59,6 +64,7 @@ import {
 import { BrushParams, brushPointerPressure, type ImageBrushMode } from "@/app/engine/brush";
 import {
   readRecoveryWorkspace,
+  recoveryReadFailure,
   removeRecoveryDocument,
   discardRecoveryDocuments,
   finalizePreviousDiscard,
@@ -95,6 +101,7 @@ import {
 } from "@/app/engine/advanced-tools";
 import {
   calculateDisplayViewport,
+  sameDisplayViewport,
   viewportFitScale,
   zoomViewToScale,
   viewportPointToDocument,
@@ -322,6 +329,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const { tablet: detectedTablet, phone, drawWithTouch, toggleFingerDrawing } = useTabletWorkspace(phoneMode);
   const tablet = tabletMode || detectedTablet;
   const [tabletPanel, setTabletPanel] = useState<PanelId | null>(null);
+  const [phoneFocus, setPhoneFocus] = useState(false);
+  const [downloadConfirmation, setDownloadConfirmation] = useState<{ name: string; resolve: (saved: boolean) => void } | null>(null);
   const initialPresentation = initialStudioPresentation(desktop);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
@@ -432,7 +441,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [brushTexture, setBrushTexture] = useState(0);
   const [brushBuildUp, setBrushBuildUp] = useState(true);
   const [brushBlendMode, setBrushBlendMode] = useState<NonNullable<BrushParams["blendMode"]>>("normal");
-  const [brushSymmetry, setBrushSymmetry] = useState<"none" | "horizontal" | "vertical" | "radial">("none");
+  const [brushSymmetry, setBrushSymmetry] = useState<MirrorMode>("none");
+  const [brushSymmetrySegments, setBrushSymmetrySegments] = useState(6);
+  const [brushSymmetryCenter, setBrushSymmetryCenter] = useState({ x: 0.5, y: 0.5 });
   const [brushColor, setBrushColor] = useState("#ffffff");
   const [activeCapturedBrushId, setActiveCapturedBrushId] = useState<string | null>(null);
   const [capturedBrushMode, setCapturedBrushMode] = useState<ImageBrushMode>("color");
@@ -540,6 +551,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [view, setView] = useDocumentView(activeDocumentId, openDocuments.map(document => document.id), { zoom: initialPresentation.zoom, panX: 0, panY: 0 });
   const viewAnimationRef = useRef<number | null>(null);
   const [displayViewport, setDisplayViewport] = useState<DisplayViewport | null>(null);
+  const [touchPaintSection, setTouchPaintSection] = useState<PaintSection>("library");
   const spaceHeld = useRef(false);
   const [passDeckOpen, setPassDeckOpen] = useState(false);
   const [passDeckPinned, setPassDeckPinned] = useState(false);
@@ -859,6 +871,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         await finalizePreviousDiscard().catch(error => console.warn("Discard cleanup deferred", error));
       } catch (error) {
         if (cancelled) return;
+        setSaveState("error");
         notify(error instanceof Error ? `Recovery needs attention: ${error.message}` : "Recovery needs attention");
         if (s.doc.layers.length) return;
         const img = await loadImage(filmstrip[0].src);
@@ -1110,7 +1123,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         window.devicePixelRatio,
         phone ? PHONE_VIEWPORT_LIMITS : tablet ? TABLET_VIEWPORT_LIMITS : undefined,
       );
-      setDisplayViewport(next);
+      setDisplayViewport(current => sameDisplayViewport(current, next) ? current : next);
       studio.setVirtualViewport(next);
     };
     updatePlan();
@@ -1185,13 +1198,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     pressureCurve: 1.15,
     minimumPressureSize: 0.08,
     seed: 1731,
-    symmetry: brushSymmetry === "none" || !doc ? undefined : {
-      centerX: doc.width / 2,
-      centerY: doc.height / 2,
-      horizontal: brushSymmetry === "horizontal",
-      vertical: brushSymmetry === "vertical",
-      radialSegments: brushSymmetry === "radial" ? 6 : 1,
-    },
+    symmetry: doc ? brushMirror({ mode: brushSymmetry, segments: brushSymmetrySegments, ...brushSymmetryCenter }, doc.width, doc.height) : undefined,
     color: brushColor,
     mode: currentBrushMode(),
     imageTip: activeTool === "capture-brush" ? capturedBrushTip ?? undefined : undefined,
@@ -1260,6 +1267,13 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     const element = dynamicCursorRef.current;
     const canvas = canvasRef.current;
     if (!element || !canvas) return;
+    // Fingers have no hover cursor. Avoid layout reads and a dozen style writes
+    // for every touch sample; pen and mouse keep their precise feedback.
+    if (pointer.pointerType === "touch") {
+      element.dataset.visible = "false";
+      lastCursorPointerRef.current = null;
+      return;
+    }
     const rect = canvas.getBoundingClientRect();
     const presentation = dynamicCursorPresentation(activeTool, {
       selectionMode,
@@ -1394,13 +1408,15 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (brushGestureRef.current) return;
     if (!studio) return;
+    const intent = canvasPointerIntent(e.button, e.pointerType, spaceHeld.current);
+    if (intent === "ignore") return;
     updateDynamicCursorFromEvent(e);
     if (passDeckOpen && !passDeckPinned && !spaceHeld.current) {
       setPassDeckOpen(false);
       spaceGestureRef.current = "idle";
     }
     // Middle mouse or space+left = pan.
-    if (e.button === 1 || (spaceHeld.current && e.button === 0)) {
+    if (intent === "pan") {
       if (spaceOpenTimerRef.current) clearTimeout(spaceOpenTimerRef.current);
       spaceOpenTimerRef.current = null;
       spaceGestureRef.current = "panning";
@@ -1971,6 +1987,17 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     if (tool === "capture-brush" && !capturedBrushTip) setCaptureSampling(true);
   };
 
+  const applyBrushRecipe = (recipe: BrushRecipe) => {
+    setBrushSize(recipe.size); setHardness(recipe.hardness); setBrushOpacity(recipe.opacity);
+    setBrushFlow(recipe.flow); setBrushSpacing(recipe.spacing); setBrushRoundness(recipe.roundness);
+    setBrushAngle(recipe.angle); setBrushSmoothing(recipe.smoothing); setBrushScatter(recipe.scatter);
+    setBrushTilt(recipe.tilt); setBrushTexture(recipe.texture); setPressureSize(recipe.pressureSize);
+    setPressureOpacity(recipe.pressureOpacity); setBrushBuildUp(recipe.buildUp); setBrushBlendMode(recipe.blendMode);
+    activateTool("brush", "edit");
+    // Tool activation updates Properties, but choosing a recipe stays in Brushes.
+    if (tablet) setTabletPanel("paint");
+  };
+
   const importDocumentFile = async (file: File, nativePath?: string) => {
     if (!file || !studio) return;
     if (/\.lumaformmesh$/i.test(file.name)) {
@@ -2419,16 +2446,21 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       } else {
         const saved = await downloadOrSave(blob, fileName);
         if (!saved) { setSaveState("unsaved"); return false; }
+        const verified = await new Promise<boolean>(resolve => setDownloadConfirmation({ name: fileName, resolve }));
+        if (!verified) { setSaveState("unsaved"); notify("Download not confirmed. Your document remains open and unsaved."); return false; }
       }
       const settled = studio.completeProjectSave(ticket, savedPath);
       if (!settled) { setSaveState("unsaved"); notify("Saved the earlier version. Newer changes still need saving."); return false; }
-      try { await writeRecoveryDocument(await studio.exportRecoveryDocument(ticket.documentId)); }
-      catch { notify("Project saved; recovery checkpoint could not be updated"); }
+      let checkpointUpdated = false;
+      if (!recoveryReadFailure()) {
+        try { await writeRecoveryDocument(await studio.exportRecoveryDocument(ticket.documentId)); checkpointUpdated = true; }
+        catch { /* Explicit file save succeeded; report recovery separately below. */ }
+      }
       if (studio.listDocuments().find(document => document.id === ticket.documentId)?.dirty) {
         setSaveState("unsaved"); notify("New changes arrived after saving. Save again before closing."); return false;
       }
-      setSaveState("saved");
-      notify("Project + version history saved");
+      setSaveState(checkpointUpdated ? "saved" : "error");
+      notify(checkpointUpdated ? "Project + version history saved" : "Project file saved. Automatic recovery is unavailable; keep saving .luma backups.");
       return true;
     } catch (error) {
       setSaveState("error");
@@ -2592,6 +2624,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
 
   useEffect(() => {
     if (!studio || !startupReady) return;
+    // No repeated ZIP encoding while storage is blocked. Existing checkpoints
+    // are protected by the engine guard; explicit file Save remains available.
+    if (recoveryReadFailure()) return; // Startup's asynchronous catch owns the error status.
     let timer = 0;
     let active = true;
     const queue = new CoalescedSaveQueue<Awaited<ReturnType<Studio["exportRecoveryDocument"]>>>({
@@ -4356,11 +4391,15 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const tabletCanvas = useTabletCanvas({
     enabled: tablet, drawWithTouch, documentId: activeDocumentId, view, fitScale, stage: stageRef, setView,
     down: onPointerDown, move: onPointerMove, up: onPointerUp,
+    // Only interrupt transactions with a proven rollback path. Never undo an
+    // unrelated operation or cancel an already-committed one-shot tool.
+    canCancelTouch: () => Boolean(brushGestureRef.current || quickSelectionRef.current || dragRef.current?.shapeGesture || dragRef.current?.kind === "move-layer"),
     cancel: event => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); },
   });
 
   return (
-    <AppShell tablet={tablet} phone={phone}>
+    <AppShell tablet={tablet} phone={phone} focus={phone && phoneFocus}>
+      {phone && phoneFocus && <button className="phone-focus-exit" onClick={() => setPhoneFocus(false)}>Show controls</button>}
       <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
       <div className="spatial-aura aura-violet" />
@@ -4371,6 +4410,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
             desktop={desktop}
+            phone={phone}
+            onFocusCanvas={() => { setPhoneFocus(true); setTabletPanel(null); }}
+            recoveryUnavailable={Boolean(recoveryReadFailure())}
             tabletControls={tablet ? <>
               <button className="tablet-touch-mode" aria-pressed={drawWithTouch} onClick={toggleFingerDrawing} title={drawWithTouch ? "Finger edits with the active tool. Turn off to pan and pinch." : "Fingers pan and pinch. Pencil edits with the active tool."}>{drawWithTouch ? "Touch: draw" : "Touch: navigate"}</button>
               <button aria-label="Toggle layers panel" aria-pressed={tabletPanel === "layers"} onClick={() => setTabletPanel(current => current === "layers" ? null : "layers")}>Layers</button>
@@ -4436,6 +4478,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             <ShellErrorBoundary title="Tool options" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<div className="studio-contextbar" />}>
               <ContextToolbar
+                onOpenBrushes={() => executeStudioCommand("panel-paint")}
                 tool={activeTool}
                 label={activeToolMeta?.[2] ?? "Tool"}
                 description={activeWorkspaceMeta[2]}
@@ -4509,7 +4552,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             </ShellErrorBoundary>
             </ContextualTaskBarRegion>
 
-            <div className="spatial-document-tabs" aria-label="Open documents">
+            <div className="spatial-document-tabs" aria-label="Open documents" data-single={openDocuments.length === 1}>
               {openDocuments.map((documentTab) => (
                 <div
                   key={documentTab.id}
@@ -4660,6 +4703,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                     }}
                   >
                     {dragOverlay}
+                    {paintingTool && brushSymmetry !== "none" && <BrushMirrorGuides width={doc.width} height={doc.height} settings={{ mode: brushSymmetry, segments: brushSymmetrySegments, ...brushSymmetryCenter }} />}
                     {desktop && activeTool === "radial-warp" && showRadialOverlay && (
                       <div
                         ref={warpOverlayRef}
@@ -4812,6 +4856,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           >
             <DockPanelContent panelId="layers">
               <LayersPanel
+                touch={tablet}
                 key={activeDocumentId}
                 studio={studio}
                 layers={layers}
@@ -5005,7 +5050,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   ))}
                 </div>
                 <p style={{ padding: "0 12px", fontSize: 11, opacity: 0.65 }}>
-                  Hold ⇧ to add · ⌥ to subtract · ⌘ (with wand) for non-contiguous
+                  {tablet ? "Use New, Add, Subtract or Intersect in the tool options above." : "Hold ⇧ to add · ⌥ to subtract · ⌘ (with wand) for non-contiguous"}
                 </p>
               </section>
             )}
@@ -5193,6 +5238,19 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             <DockPanelContent panelId="paint">
             {doc && (
               <section className="glass-card tone-card" data-contextual-panel="paint">
+                <BrushToolbox
+                  activeBrush={activeTool === "brush"}
+                  mirrorAvailable={paintingTool}
+                  settings={{ size: brushSize, hardness, opacity: brushOpacity, flow: brushFlow, spacing: brushSpacing, roundness: brushRoundness, angle: brushAngle, smoothing: brushSmoothing, scatter: brushScatter, tilt: brushTilt, texture: brushTexture, pressureSize, pressureOpacity, buildUp: brushBuildUp, blendMode: brushBlendMode }}
+                  onPreset={applyBrushRecipe}
+                  section={tablet ? touchPaintSection : undefined}
+                  onSection={setTouchPaintSection}
+                  mirror={{ mode: brushSymmetry, segments: brushSymmetrySegments, ...brushSymmetryCenter }}
+                  onMirror={next => { setBrushSymmetry(next.mode); setBrushSymmetrySegments(next.segments); setBrushSymmetryCenter({ x: next.x, y: next.y }); }}
+                  onCapture={() => { activateTool("capture-brush", "edit"); if (tablet) { setTouchPaintSection("settings"); setTabletPanel("paint"); } }}
+                  onDone={tablet ? () => setTabletPanel(null) : undefined}
+                />
+                <div className="brush-tool-settings" hidden={tablet && touchPaintSection !== "settings"}>
                 <header>
                   <strong>{modeTools[workspace].find(([tool]) => tool === activeTool)?.[2] ?? "Brush"}</strong>
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Brush color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
@@ -5351,7 +5409,6 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   <label><span>Scatter</span><input type="range" min="0" max="200" value={Math.round(brushScatter * 100)} onChange={(e) => setBrushScatter(Number(e.target.value) / 100)} /><output>{Math.round(brushScatter * 100)}%</output></label>
                   <label><span>Texture</span><input type="range" min="0" max="100" value={Math.round(brushTexture * 100)} onChange={(e) => setBrushTexture(Number(e.target.value) / 100)} /><output>{Math.round(brushTexture * 100)}%</output></label>
                   <label><span>Blend</span><select value={brushBlendMode} onChange={(e) => setBrushBlendMode(e.target.value as NonNullable<BrushParams["blendMode"]>)}><option value="normal">Normal</option><option value="multiply">Multiply</option><option value="screen">Screen</option><option value="overlay">Overlay</option></select><output>{brushBlendMode}</output></label>
-                  <label><span>Symmetry</span><select value={brushSymmetry} onChange={(e) => setBrushSymmetry(e.target.value as typeof brushSymmetry)}><option value="none">Off</option><option value="horizontal">Horizontal</option><option value="vertical">Vertical</option><option value="radial">Radial · 6</option></select><output>{brushSymmetry}</output></label>
                 </div>
                 <div className="mask-segmented" style={{ paddingBottom: 9 }}>
                   <button className={pressureSize ? "active" : ""} onClick={() => setPressureSize((value) => !value)}>Pressure size</button>
@@ -5359,6 +5416,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   <button className={brushBuildUp ? "active" : ""} onClick={() => setBrushBuildUp((value) => !value)}>Airbrush buildup</button>
                 </div>
                 </>)}
+                </div>
               </section>
             )}
 
@@ -5605,6 +5663,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         <ShellErrorBoundary title="Export" region="dialog" onDismiss={() => setShowExportMenu(false)}>
         <Suspense fallback={null}>
           <ExportPopover
+            onSaveProject={() => { setShowExportMenu(false); executeStudioCommand("save"); }}
             rasterFormat={exportFormat}
             photoshopFormat={photoshopFormat}
             compatibilityWarnings={photoshopReport?.issues.filter((issue) => issue.severity === "warning").length ?? 0}
@@ -6157,6 +6216,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         </div>
       )}
       {toast && <div className="spatial-toast" role="status">{toast}</div>}
+      {downloadConfirmation && <DownloadConfirmation name={downloadConfirmation.name} onResolve={saved => { downloadConfirmation.resolve(saved); setDownloadConfirmation(null); }} />}
       {projectSaveError && <section className="project-save-error" role="alert" aria-label="Project not saved">
         <strong>Project not saved — keep this document open</strong>
         <p>{projectSaveError}</p>
