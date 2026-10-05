@@ -1,0 +1,263 @@
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Download, FileImage, ImagePlus, Package, RotateCcw, Upload, X } from "lucide-react";
+import JSZip from "jszip";
+import { mockupFileName, normalizePlacement, sceneDeltaToOffset, type MockupPlacement, type MockupSceneId, type Quad, type RasterImage } from "../engine/mockup";
+import { MOCKUP_SCENES, sceneInfo } from "../engine/mockup-scenes";
+import { MockupClient } from "./mockup-client";
+import type { MockupRenderResult } from "./mockup-renderer";
+import "./creative-tools.css";
+
+const PREVIEW_SIZE = 760, THUMB_SIZE = 200, MAX_ART = 2048;
+const EXPORT_SIZES = [1200, 1600, 2000] as const;
+type ExportType = "image/png" | "image/jpeg";
+type SceneState = { placement: MockupPlacement; color: string; ink: number };
+
+function initialStates(): Record<MockupSceneId, SceneState> {
+  return Object.fromEntries(MOCKUP_SCENES.map(info => [info.id, { placement: { ...info.defaultPlacement }, color: info.defaultColor, ink: 0.94 }])) as Record<MockupSceneId, SceneState>;
+}
+
+/** Decode to RGBA, bounded: the print area never needs more than ~2k pixels of artwork. */
+async function decodeArt(blob: Blob): Promise<RasterImage> {
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const scale = Math.min(1, MAX_ART / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale)), height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    const image = ctx.getImageData(0, 0, width, height);
+    return { width, height, data: image.data };
+  } finally { bitmap.close(); }
+}
+
+function toBlob(result: MockupRenderResult, type: ExportType, quality = 0.92): Promise<Blob> {
+  const canvas = document.createElement("canvas"); canvas.width = result.width; canvas.height = result.height;
+  const ctx = canvas.getContext("2d")!;
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(result.data), result.width, result.height), 0, 0);
+  return new Promise((resolve, reject) => canvas.toBlob(blob => (blob ? resolve(blob) : reject(new Error("Could not encode the mockup"))), type, quality));
+}
+
+function paint(canvas: HTMLCanvasElement | null, result: MockupRenderResult) {
+  if (!canvas) return;
+  canvas.width = result.width; canvas.height = result.height;
+  canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(result.data), result.width, result.height), 0, 0);
+}
+
+function Slider({ label, value, min, max, step = 1, format, onChange }: { label: string; value: number; min: number; max: number; step?: number; format: (v: number) => string; onChange: (value: number) => void }) {
+  return <label className="ct-slider"><span>{label}</span><input type="range" aria-label={label} min={min} max={max} step={step} value={value} onChange={event => onChange(Number(event.target.value))} /><output>{format(value)}</output></label>;
+}
+
+export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocument, onSave, onClose }: {
+  projectName: string;
+  getDocumentArt: () => Promise<Blob>;
+  onOpenAsDocument: (file: File) => Promise<void> | void;
+  onSave: (blob: Blob, fileName: string) => Promise<boolean | void>;
+  onClose: () => void;
+}) {
+  // Created lazily outside render; disposal nulls it so a remount (React
+  // strict mode) gets a fresh worker instead of a terminated one.
+  const clientRef = useRef<MockupClient | null>(null);
+  const client = useCallback(() => (clientRef.current ??= new MockupClient()), []);
+  useEffect(() => () => { clientRef.current?.dispose(); clientRef.current = null; }, []);
+  const getArtRef = useRef(getDocumentArt);
+  const [art, setArt] = useState<RasterImage | null>(null);
+  const [sceneId, setSceneId] = useState<MockupSceneId>("tshirt");
+  const [states, setStates] = useState(initialStates);
+  const [artLabel, setArtLabel] = useState("Loading the current document…");
+  const [artRevision, setArtRevision] = useState(0);
+  const [hasArt, setHasArt] = useState(false);
+  const [quad, setQuad] = useState<Quad | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [exportType, setExportType] = useState<ExportType>("image/png");
+  const [exportSize, setExportSize] = useState<number>(1600);
+  const [progress, setProgress] = useState<number | null>(null);
+  const cancelExport = useRef(false);
+  const root = useRef<HTMLElement>(null), preview = useRef<HTMLCanvasElement>(null), fileInput = useRef<HTMLInputElement>(null);
+  const thumbs = useRef(new Map<MockupSceneId, HTMLCanvasElement>());
+  const state = states[sceneId], info = sceneInfo(sceneId);
+
+  const loadArt = useCallback(async (source: () => Promise<Blob>, label: string) => {
+    setError(""); setArtLabel(`Loading ${label}…`);
+    try {
+      const decoded = await decodeArt(await source());
+      setArt(decoded); setArtLabel(`${label} · ${decoded.width} × ${decoded.height}`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not read that artwork");
+      setArtLabel("No artwork");
+    }
+  }, []);
+
+  useEffect(() => { void loadArt(getArtRef.current, "Current document"); }, [loadArt]);
+  useEffect(() => {
+    if (!art) return;
+    let cancelled = false;
+    client().setArt(art).then(() => { if (!cancelled) { setHasArt(true); setArtRevision(r => r + 1); } }, reason => { if (!cancelled) setError(String(reason)); });
+    return () => { cancelled = true; };
+  }, [art, client]);
+
+  // Main preview: re-render on any change to the active scene.
+  useEffect(() => {
+    if (!artRevision) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void client().render({ scene: sceneId, size: PREVIEW_SIZE, color: state.color, placement: state.placement, inkOpacity: state.ink, cache: true })
+        .then(result => { if (!cancelled) { paint(preview.current, result); setQuad(result.quad); } })
+        .catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); });
+    }, 16);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [client, sceneId, state, artRevision]);
+
+  // Thumbnails: refresh every scene after the art changes, and the active one as it is edited.
+  const renderThumb = useCallback((id: MockupSceneId, s: SceneState) => {
+    return client().render({ scene: id, size: THUMB_SIZE, color: s.color, placement: s.placement, inkOpacity: s.ink, cache: true })
+      .then(result => paint(thumbs.current.get(id) ?? null, result)).catch(() => {});
+  }, [client]);
+  const statesRef = useRef(states);
+  useEffect(() => { statesRef.current = states; }, [states]);
+  useEffect(() => {
+    if (!artRevision) return;
+    let chain = Promise.resolve();
+    for (const scene of MOCKUP_SCENES) chain = chain.then(() => renderThumb(scene.id, statesRef.current[scene.id]));
+  }, [artRevision, renderThumb]);
+  useEffect(() => {
+    if (!artRevision) return;
+    const timer = setTimeout(() => void renderThumb(sceneId, state), 250);
+    return () => clearTimeout(timer);
+  }, [sceneId, state, artRevision, renderThumb]);
+
+  const patch = (value: Partial<SceneState>) => setStates(current => ({ ...current, [sceneId]: { ...current[sceneId], ...value } }));
+  const place = (value: Partial<MockupPlacement>) => patch({ placement: normalizePlacement({ ...state.placement, ...value }, info.defaultPlacement) });
+
+  // Drag the artwork directly on the product; the wheel scales it.
+  const drag = useRef<{ x: number; y: number; start: MockupPlacement } | null>(null);
+  const scenePoint = (event: React.PointerEvent<HTMLCanvasElement>): [number, number] => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return [(event.clientX - rect.left) / rect.width * PREVIEW_SIZE, (event.clientY - rect.top) / rect.height * PREVIEW_SIZE];
+  };
+
+  useEffect(() => {
+    const previous = document.activeElement; root.current?.focus();
+    return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
+  }, []);
+
+  const exportOne = async (id: MockupSceneId, s: SceneState) => {
+    const result = await client().render({ scene: id, size: exportSize, color: s.color, placement: s.placement, inkOpacity: s.ink, cache: false });
+    return toBlob(result, exportType);
+  };
+
+  const run = async (label: string, task: () => Promise<void>) => {
+    setBusy(label); setError("");
+    try { await task(); } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(null); setProgress(null); }
+  };
+
+  const downloadCurrent = () => run("Rendering…", async () => {
+    const blob = await exportOne(sceneId, state);
+    await onSave(blob, mockupFileName(projectName, sceneId, exportType));
+  });
+
+  const downloadAll = () => run("Rendering all mockups…", async () => {
+    cancelExport.current = false;
+    const zip = new JSZip();
+    for (const [index, scene] of MOCKUP_SCENES.entries()) {
+      if (cancelExport.current) throw new Error("Export cancelled");
+      setProgress(index / MOCKUP_SCENES.length);
+      zip.file(mockupFileName(projectName, scene.id, exportType), await exportOne(scene.id, statesRef.current[scene.id]));
+    }
+    setProgress(1);
+    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    await onSave(blob, `${mockupFileName(projectName, "tshirt", exportType).replace(/-tshirt\.(png|jpg)$/, "")}s.zip`);
+  });
+
+  const openAsDocument = () => run("Rendering…", async () => {
+    const blob = await exportOne(sceneId, state);
+    const name = mockupFileName(projectName, sceneId, "image/png");
+    await onOpenAsDocument(new File([blob], name, { type: exportType }));
+    onClose();
+  });
+
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  return <div className="ct-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
+    <section ref={root} tabIndex={-1} className="ct-dialog mk-dialog" role="dialog" aria-modal="true" aria-labelledby="mockup-title" onKeyDown={event => {
+      event.stopPropagation();
+      if (event.key === "Escape" && !busy) { event.preventDefault(); onClose(); }
+    }}>
+      <header>
+        <div><span className="ct-eyebrow">MOCKUP · ALPHA</span><h2 id="mockup-title">Mockups</h2><p>{artLabel}</p></div>
+        <div className="ct-header-actions"><button disabled={!!busy} onClick={onClose} aria-label="Close Mockups"><X size={18} /></button></div>
+      </header>
+      <div className="mk-body">
+        <nav className="mk-scenes" aria-label="Mockup scenes">
+          {MOCKUP_SCENES.map(scene => <button key={scene.id} aria-pressed={scene.id === sceneId} onClick={() => setSceneId(scene.id)} title={scene.description}>
+            <canvas ref={node => { if (node) thumbs.current.set(scene.id, node); else thumbs.current.delete(scene.id); }} width={THUMB_SIZE} height={THUMB_SIZE} aria-hidden="true" />
+            <span>{scene.name}</span>
+          </button>)}
+        </nav>
+        <div className="mk-stage">
+          <canvas ref={preview} width={PREVIEW_SIZE} height={PREVIEW_SIZE} aria-label={`${info.name} mockup preview. Drag to move the artwork, scroll to scale.`}
+            onPointerDown={event => { if (!quad) return; event.currentTarget.setPointerCapture(event.pointerId); const [x, y] = scenePoint(event); drag.current = { x, y, start: state.placement }; }}
+            onPointerMove={event => {
+              if (!drag.current || !quad) return;
+              const [x, y] = scenePoint(event), [du, dv] = sceneDeltaToOffset({ quad }, [drag.current.x, drag.current.y], [x, y]);
+              place({ offsetX: drag.current.start.offsetX + du, offsetY: drag.current.start.offsetY + dv });
+            }}
+            onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
+            onWheel={event => { if (!hasArt) return; place({ scale: state.placement.scale * (event.deltaY < 0 ? 1.05 : 1 / 1.05) }); }} />
+          {!hasArt && !error && <p className="mk-stage-note" role="status">Preparing artwork…</p>}
+        </div>
+        <fieldset className="ct-controls" disabled={!!busy}>
+          <div className="ct-section">
+            <h3>Artwork</h3>
+            <div className="ct-row-buttons">
+              <button onClick={() => void loadArt(getDocumentArt, "Current document")}><FileImage size={14} /> Current document</button>
+              <button onClick={() => fileInput.current?.click()}><Upload size={14} /> Upload image…</button>
+            </div>
+            <input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => {
+              const file = event.target.files?.[0]; event.target.value = "";
+              if (file) void loadArt(() => Promise.resolve(file), file.name.slice(0, 60));
+            }} />
+          </div>
+          <div className="ct-section">
+            <h3>Placement · {info.name}</h3>
+            <div className="ct-segmented" role="group" aria-label="Fit">
+              {(["contain", "cover"] as const).map(fit => <button key={fit} aria-pressed={state.placement.fit === fit} onClick={() => place({ fit })}>{fit === "contain" ? "Fit inside" : "Fill area"}</button>)}
+            </div>
+            <Slider label="Scale" value={Math.round(state.placement.scale * 100)} min={10} max={300} format={v => `${v}%`} onChange={v => place({ scale: v / 100 })} />
+            <Slider label="Rotation" value={Math.round(state.placement.rotation)} min={-180} max={180} format={v => `${v}°`} onChange={v => place({ rotation: v })} />
+            <Slider label="Horizontal" value={Math.round(state.placement.offsetX * 100)} min={-100} max={100} format={v => `${v}`} onChange={v => place({ offsetX: v / 100 })} />
+            <Slider label="Vertical" value={Math.round(state.placement.offsetY * 100)} min={-100} max={100} format={v => `${v}`} onChange={v => place({ offsetY: v / 100 })} />
+            <div className="ct-row-buttons">
+              <button onClick={() => patch({ placement: { ...info.defaultPlacement } })}><RotateCcw size={13} /> Reset</button>
+              <button onClick={() => setStates(current => Object.fromEntries(MOCKUP_SCENES.map(scene => [scene.id, { ...current[scene.id], placement: { ...current[sceneId].placement, fit: current[scene.id].placement.fit } }])) as typeof current)} title="Copy scale, rotation and offset to every scene">Apply to all</button>
+            </div>
+          </div>
+          <div className="ct-section">
+            <h3>{sceneId === "poster" ? "Wall" : sceneId === "phone" ? "Backdrop" : sceneId === "vinyl" ? "Record label" : "Product"} colour</h3>
+            <div className="ct-swatches">
+              {info.swatches.map(color => <button key={color} aria-label={`Colour ${color}`} aria-pressed={state.color === color} style={{ background: color }} onClick={() => patch({ color })} />)}
+              <input type="color" aria-label="Custom colour" value={state.color} onChange={event => patch({ color: event.target.value })} />
+            </div>
+            {["tshirt", "hoodie", "tote"].includes(sceneId) && <Slider label="Ink density" value={Math.round(state.ink * 100)} min={50} max={100} format={v => `${v}%`} onChange={v => patch({ ink: v / 100 })} />}
+          </div>
+          <div className="ct-section">
+            <h3>Export</h3>
+            <label className="ct-row">Format<select value={exportType} onChange={event => setExportType(event.target.value as ExportType)}><option value="image/png">PNG</option><option value="image/jpeg">JPEG</option></select></label>
+            <label className="ct-row">Size<select value={exportSize} onChange={event => setExportSize(Number(event.target.value))}>{EXPORT_SIZES.map(size => <option key={size} value={size}>{size} × {size}</option>)}</select></label>
+          </div>
+          <p className="ct-note">Alpha. Scenes are drawn procedurally by Luma (no photos or third-party templates). Folds, weave and glare are stylised approximations, not photographic renders.</p>
+        </fieldset>
+      </div>
+      {progress !== null && <div className="ct-progress" role="status"><progress aria-label="Export progress" value={Math.round(progress * 100)} max={100} /><span>{pct(progress)}</span><button onClick={() => { cancelExport.current = true; }}>Cancel</button></div>}
+      {error && <p className="ct-error" role="alert">{error}</p>}
+      <footer>
+        <span className="ct-footer-status" aria-live="polite">{busy ?? ""}</span>
+        <button disabled={!!busy || !hasArt} onClick={() => void openAsDocument()}><ImagePlus size={14} /> Open as document</button>
+        <button disabled={!!busy || !hasArt} onClick={() => void downloadCurrent()}><Download size={14} /> Download {info.name}</button>
+        <button className="ct-primary" disabled={!!busy || !hasArt} onClick={() => void downloadAll()}><Package size={14} /> Download all (ZIP)</button>
+      </footer>
+    </section>
+  </div>;
+}

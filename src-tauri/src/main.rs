@@ -652,6 +652,9 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("export-print", "CMYK Print PDF…", None)?)
         .item(&item("batch", "Batch Process…", None)?)
         .separator()
+        .item(&item("mockups", "Mockups…", None)?)
+        .item(&item("glyph-font-maker", "Glyph Font Maker…", None)?)
+        .separator()
         .item(&item("close-document", "Close Document", Some("CmdOrCtrl+W"))?)
         .build()?;
 

@@ -1,4 +1,5 @@
 import { nativeFontResourceRevision } from "./native-font-resources";
+import { userFontResourceRevision } from "./user-fonts";
 /** Redistributable, unmodified SIL OFL fonts shipped in public/fonts. */
 export const BUNDLED_FONTS = [
   { family: "Lato", slug: "lato", category: "Sans", faces: ["Regular", "Bold", "Italic", "BoldItalic", "Light", "Black"] },
@@ -35,7 +36,7 @@ export function bundledFontFace(family: string, weight = 400, italic = false) {
 const loads = new Map<string, Promise<void>>();
 const ready = new Set<string>();
 let revision = 0;
-export const fontResourceRevision = () => revision + nativeFontResourceRevision();
+export const fontResourceRevision = () => revision + nativeFontResourceRevision() + userFontResourceRevision();
 export function bundledFontReady(family: string, weight = 400, italic = false) {
   return !bundledFontForFamily(family) || ready.has(bundledFontFace(family, weight, italic).file);
 }

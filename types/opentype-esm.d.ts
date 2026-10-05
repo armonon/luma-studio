@@ -1,3 +1,3 @@
 declare module "opentype.js/dist/opentype.mjs" {
-  export { parse } from "opentype.js";
+  export { parse, Font, Glyph, Path } from "opentype.js";
 }

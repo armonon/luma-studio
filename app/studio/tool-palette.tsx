@@ -68,6 +68,8 @@ export default function ToolPalette({
     { id: "hsl", icon: "tone", label: "HSL Adjustment", detail: "New adjustment layer", shortcut: "" },
     { id: "history", icon: "content-move", label: "Version History", detail: "History branches", shortcut: "" },
     { id: "export", icon: "frame", label: "Export", detail: "Raster or Photoshop", shortcut: "⌘E" },
+    { id: "mockups", icon: "frame", label: "Mockups", detail: "Art on merch, posters, sleeves · alpha", shortcut: "" },
+    { id: "glyph-font-maker", icon: "text", label: "Glyph Font Maker", detail: "Draw your own font · alpha", shortcut: "" },
   ];
   const allCommands = Object.values(COMMAND_DEFINITIONS).map(definition => ({
     ...definition,

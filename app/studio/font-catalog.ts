@@ -1,4 +1,5 @@
 import { BUNDLED_FONTS } from "../engine/bundled-fonts";
+import { listUserFonts } from "../engine/user-fonts";
 export type FontChoice = { label: string; value: string; category: string; bundled?: boolean };
 
 export function fontFamilyValue(name: string) {
@@ -36,4 +37,9 @@ export async function loadInstalledFontFamilies(): Promise<FontChoice[]> {
   if (host.__TAURI__?.core?.invoke) return normalizeFontFamilies(await host.__TAURI__.core.invoke("list_font_families"));
   if (host.queryLocalFonts) return normalizeFontFamilies((await host.queryLocalFonts()).map(font => font.family));
   throw new Error("Installed-font discovery requires the desktop app or a browser with Local Font Access. You can still enter a family name below.");
+}
+
+/** Fonts drawn in Glyph and installed in this browser, listed first. */
+export function userFontChoices(): FontChoice[] {
+  return listUserFonts().map(font => ({ label: font.family, value: fontFamilyValue(font.family), category: "Yours · Glyph" }));
 }

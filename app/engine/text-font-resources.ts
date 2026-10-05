@@ -3,6 +3,7 @@ import { resolvedDefaultTextStyle } from "./text-model";
 import { bundledFontReady, loadBundledFont } from "./bundled-fonts";
 import { getPhotoshopLayerMetadata } from "./psd-metadata";
 import { nativeImportedFontReady, loadNativeImportedFont } from "./native-font-resources";
+import { loadUserFont, userFontReady } from "./user-fonts";
 
 const listeners = new Set<() => void>();
 const watched = new Set<Promise<void>>();
@@ -10,6 +11,8 @@ const requested = new WeakSet<TextStyle>();
 const failures = new Set<(layer: Layer, error: unknown) => void>();
 export function subscribeTextFontFailures(listener: (layer: Layer, error: unknown) => void) { failures.add(listener); return () => { failures.delete(listener); }; }
 export function subscribeTextFonts(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }
+/** Re-render text after a font was (re)installed outside a document load, e.g. from Glyph. */
+export function notifyTextFontsChanged() { for (const listener of listeners) listener(); }
 export function requestTextFonts(text: TextStyle, layer?: Layer) {
   if (requested.has(text) || typeof FontFace === "undefined") return;
   const pending = pendingDocumentFonts({ layers: [layer ?? { text }] } as Pick<DocumentModel, "layers">);
@@ -32,8 +35,9 @@ export function pendingDocumentFonts(doc: Pick<DocumentModel, "layers">): Promis
     for (const style of [base, ...(layer.text.runs ?? []).map(run => ({ ...base, ...run.style }))]) {
       const italic = style.fontStyle !== "normal";
       const exact = importedNames.has(style.fontFamily) && !nativeImportedFontReady(style.fontFamily);
-      if (exact || !bundledFontReady(style.fontFamily, style.fontWeight, italic)) {
-        const load = exact ? loadNativeImportedFont(style.fontFamily) : loadBundledFont(style.fontFamily, style.fontWeight, italic);
+      const user = !exact && !userFontReady(style.fontFamily);
+      if (exact || user || !bundledFontReady(style.fontFamily, style.fontWeight, italic)) {
+        const load = exact ? loadNativeImportedFont(style.fontFamily) : user ? loadUserFont(style.fontFamily) : loadBundledFont(style.fontFamily, style.fontWeight, italic);
         pending.push(load);
         if (!watched.has(load)) {
           watched.add(load);

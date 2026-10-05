@@ -43,6 +43,12 @@ system remain explicit fallbacks instead of being advertised as native support.
   selection-aware bounded work regions for huge documents, parallel variations,
   provenance metadata, cancellation, validation, per-user concurrency limits,
   and rate limits.
+- Alpha creative tools: **Mockups** places artwork on procedurally generated
+  T-shirt, hoodie, tote, framed poster, vinyl sleeve and phone scenes with
+  perspective, fold displacement and lighting, with batch PNG/JPEG export; and
+  **Glyph** draws a font (A–Z, a–z, 0–9, punctuation) and exports OTF/TTF or
+  installs it into the Type tool for this browser. Limits are listed in
+  `docs/release/wave2-mockup-glyph-2026-10-05.md`.
 - Safe persistent `.luma-plugin` packages that contribute validated Actions
   without arbitrary code execution, plus privacy-sanitized local crash records,
   exported diagnostics, and an emergency recovery checkpoint on fatal errors.
