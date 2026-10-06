@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 export const metadata: Metadata = {
   title: "Luma for iPad",
   manifest: "/luma-ipad.webmanifest",
+  icons: { icon: "/favicon.svg", apple: "/icons/luma-192.png" },
   appleWebApp: { capable: true, title: "Luma", statusBarStyle: "black-translucent" },
 };
 export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#141619" };

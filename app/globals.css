@@ -13907,3 +13907,42 @@ html .virtual-layer-stack .spatial-layer:has(> .layer-group-toggle) > .spatial-l
 .recolor-progress { display:flex; align-items:center; gap:12px; padding:10px 20px; font-size:11px; color:#afbfda; }
 .recolor-progress progress { flex:1; min-width:0; accent-color:#84adff; }
 @media (max-width:740px) { .recolor-body { grid-template-columns:1fr; overflow-y:auto; } .recolor-controls { overflow:visible; border-left:0; } .recolor-preview-stage canvas { max-height:28vh; } .recolor-dialog > footer { flex-wrap:wrap; } .recolor-dialog footer > div { flex-basis:100%; } }
+
+/* Offline/update prompt (app/studio/pwa.tsx). Never blocks the canvas. */
+.luma-pwa-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 8px 8px 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #1a1e27;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color: #d9dde4;
+  font-size: 12px;
+  transform: translateX(-50%);
+}
+
+.luma-pwa-toast button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(142, 127, 250, 0.45);
+  border-radius: 7px;
+  background: rgba(142, 127, 250, 0.18);
+  color: #c9c1ff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.luma-pwa-toast .luma-pwa-dismiss {
+  width: 28px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: #8b93a1;
+}

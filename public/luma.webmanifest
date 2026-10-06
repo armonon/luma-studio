@@ -1,0 +1,19 @@
+{
+  "id": "/studio",
+  "name": "Luma",
+  "short_name": "Luma",
+  "description": "Luma image studio from thecreateco. Works offline after the first visit.",
+  "start_url": "/studio",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#141619",
+  "theme_color": "#141619",
+  "categories": ["graphics", "design", "photo"],
+  "icons": [
+    { "src": "/icons/luma-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/luma-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/luma-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icons/luma-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

@@ -22,6 +22,7 @@ export default function StudioTitlebar({
   onCommand,
   commandEnabled,
   onReview,
+  onInstall,
   onFocusCanvas,
   recoveryUnavailable = false,
 }: {
@@ -41,6 +42,7 @@ export default function StudioTitlebar({
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
   onReview?: () => void;
+  onInstall?: () => void;
   onFocusCanvas?: () => void;
   recoveryUnavailable?: boolean;
 }) {
@@ -111,6 +113,7 @@ export default function StudioTitlebar({
             <button onClick={() => run(() => onCommand("glyph-font-maker"))} disabled={!commandEnabled("glyph-font-maker")}><span>Glyph font maker</span><kbd>alpha</kbd></button>
             <button onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><span>Version history</span></button>
             <button onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Workspaces & shortcuts</span></button>
+            {onInstall && <><hr /><button onClick={() => run(onInstall)}><span>Install Luma app</span><kbd>offline</kbd></button></>}
           </div>
         </details>
         <button className={`spatial-export ${exportOpen ? "active" : ""}`} onClick={() => onCommand("export")} aria-haspopup="dialog" aria-expanded={exportOpen} disabled={!commandEnabled("export")}>

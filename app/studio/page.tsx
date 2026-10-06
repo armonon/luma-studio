@@ -3,6 +3,7 @@ import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
 import { useTabletCanvas } from "./use-tablet-canvas";
+import { PwaToast, useInstallPrompt, usePwaUpdate } from "./pwa";
 import DownloadConfirmation from "./download-confirmation";
 import { canvasPointerIntent } from "./pointer-intent";
 import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
@@ -334,6 +335,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [phoneFocus, setPhoneFocus] = useState(false);
   const [downloadConfirmation, setDownloadConfirmation] = useState<{ name: string; resolve: (saved: boolean) => void } | null>(null);
   const initialPresentation = initialStudioPresentation(desktop);
+  const pwaUpdate = usePwaUpdate();
+  const installPrompt = useInstallPrompt();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const dynamicCursorRef = useRef<HTMLDivElement>(null);
@@ -4456,6 +4459,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             onBack={() => history.back()}
             onCommand={executeStudioCommand}
             commandEnabled={commandRegistry.enabled}
+            onInstall={!desktop && installPrompt.canInstall ? () => { void installPrompt.install(); } : undefined}
             onReview={studio && activeDocumentId ? () => {
               try {
                 reviewSession.current?.();
@@ -5683,6 +5687,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           </ShellErrorBoundary>
           </StatusBarRegion>
         )}
+      {!desktop && <PwaToast {...pwaUpdate} />}
       </AppWindow>
 
       {showExportMenu && (

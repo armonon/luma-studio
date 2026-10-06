@@ -25,3 +25,19 @@
 
 [functions]
   node_bundler = "esbuild"
+
+# Offline support (app/studio/pwa.tsx, build/sw-template.js). Browsers should
+# revalidate service workers themselves, but CDNs do not always honour that:
+# force it, so an update — or the kill switch in docs/release/pwa.md —
+# reaches every visitor on their next navigation.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+    Service-Worker-Allowed = "/"
+
+[[headers]]
+  for = "/*.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+    Cache-Control = "no-cache"
