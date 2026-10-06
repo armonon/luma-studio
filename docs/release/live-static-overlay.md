@@ -67,3 +67,7 @@ hashed `/_next/static` files (3 build-manifest files under
 still running the previous `/studio` can lazily load its own chunks after
 the new deploy goes live, instead of hitting 404s. Everything else live was
 already covered by the snapshot.
+
+Same again for the short-lived Wave 4 deploy `6ac56dc71801b94db5089256`
+(published, then superseded the same afternoon by a one-line fix): its 8
+hashed `/_next/static` files are in `live-static/` too (sha1-verified).
