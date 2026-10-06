@@ -88,7 +88,7 @@ if (sameSite) {
   await fontPage.goto(`${base}/studio?tcc-open=${encodeURIComponent(ids.font)}`);
   await fontPage.waitForFunction(() => /from Locker is installed/.test(document.body.innerText), null, { timeout: 60000 });
   const fontNote = await fontPage.locator("text=/from Locker is installed/").first().textContent();
-  check("onOpen: font from Locker installs into the type tool", /Abel|Probe Sans/.test(fontNote ?? ""), fontNote ?? "");
+  check("onOpen: font from Locker installs into the type tool under its real family name", /“Abel”/.test(fontNote ?? ""), fontNote ?? "");
   await fontPage.evaluate(async (list) => { for (const id of list) await window.TCC.locker.remove(id).catch(() => {}); }, [ids.image, ids.font]);
   await fontPage.close();
 }

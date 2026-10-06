@@ -2440,14 +2440,19 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const openFromLocker = async (file: LockerFile) => {
     try {
       if (isFontFile(file)) {
-        const [{ installUserFont }, { notifyTextFontsChanged }, opentype] = await Promise.all([
-          import("../engine/user-fonts"), import("../engine/text-font-resources"), import("opentype.js"),
+        const [{ installUserFont }, { notifyTextFontsChanged }, { parse }] = await Promise.all([
+          import("../engine/user-fonts"), import("../engine/text-font-resources"), import("opentype.js/dist/opentype.mjs"),
         ]);
         const bytes = await file.blob.arrayBuffer();
         let family = file.name.replace(/\.(otf|ttf)$/i, "");
         try {
-          const names = opentype.parse(bytes.slice(0)).names as unknown as Record<string, Record<string, string> | undefined>;
-          family = names.preferredFamily?.en || names.fontFamily?.en || family;
+          // opentype.js 2 keeps names per platform (windows / macintosh / unicode).
+          type NameTable = Record<string, Record<string, string> | undefined>;
+          const tables = parse(bytes.slice(0)).names as unknown as Record<string, NameTable | undefined>;
+          for (const table of [tables.windows, tables.macintosh, tables.unicode, tables as NameTable]) {
+            const name = table?.preferredFamily?.en || table?.typographicFamily?.en || table?.fontFamily?.en;
+            if (typeof name === "string" && name.trim()) { family = name.trim(); break; }
+          }
         } catch { /* keep the file name */ }
         await installUserFont(family, bytes);
         notifyTextFontsChanged();
