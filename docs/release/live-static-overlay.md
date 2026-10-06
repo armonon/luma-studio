@@ -70,4 +70,6 @@ already covered by the snapshot.
 
 Same again for the short-lived Wave 4 deploy `6ac56dc71801b94db5089256`
 (published, then superseded the same afternoon by a one-line fix): its 8
-hashed `/_next/static` files are in `live-static/` too (sha1-verified).
+hashed `/_next/static` files (plus its CSS chunk, which differs between builds
+because Tailwind also scans `live-static/`) are in `live-static/` too
+(sha1-verified).
