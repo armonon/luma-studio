@@ -50,9 +50,13 @@ import {
 } from "./psd-metadata";
 
 import { validateDesignSnapshots, DESIGN_SNAPSHOT_LIMITS, type DesignSnapshot } from "./design-snapshots";
+import { documentUserFontFamilies } from "./text-font-resources";
+import { getUserFontBytes, installUserFont, isUserFontFamily } from "./user-fonts";
 
-export const LUMA_PROJECT_VERSION = 14 as const;
-const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, LUMA_PROJECT_VERSION]);
+export const LUMA_PROJECT_VERSION = 15 as const;
+const SUPPORTED_PROJECT_VERSIONS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, LUMA_PROJECT_VERSION]);
+/** Mirrors user-fonts.ts's own per-browser cap; an archive cannot carry more than that anyway. */
+const MAX_EMBEDDED_FONTS = 32;
 const RESTORED_HISTORY_LIMIT = 80;
 
 /** Avoid simultaneous codec scratch allocations for every layer/history item. */
@@ -234,6 +238,9 @@ type SerializedOperationHistory = Omit<OperationHistorySnapshot<HistoryEntry>, "
   nodes: SerializedHistoryNode[];
 };
 
+/** An installed Glyph font this project's text layers use, embedded so it reopens anywhere. */
+type SerializedEmbeddedFont = { family: string; asset: string };
+
 type ProjectManifest = {
   format: "luma-project";
   version: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | typeof LUMA_PROJECT_VERSION;
@@ -242,6 +249,7 @@ type ProjectManifest = {
   document: SerializedDocument;
   actions: Action[];
   history?: SerializedOperationHistory;
+  fonts?: SerializedEmbeddedFont[];
 };
 
 export type DecodedProject = {
@@ -1291,6 +1299,26 @@ async function deserializeHistory(source: SerializedOperationHistory, zip: JSZip
   }, { maxNodes: RESTORED_HISTORY_LIMIT });
 }
 
+/**
+ * Embed the SFNT bytes for every installed Glyph font this document's text
+ * layers actually use, so the project renders correctly in a browser that
+ * never installed that font. Best-effort: a font whose stored bytes can't be
+ * read is skipped rather than failing the whole save, matching how text
+ * already falls back to the next family in its stack when a font is missing.
+ */
+async function serializeEmbeddedFonts(doc: Document, zip: JSZip): Promise<SerializedEmbeddedFont[] | undefined> {
+  const families = documentUserFontFamilies(doc).slice(0, MAX_EMBEDDED_FONTS);
+  const fonts: SerializedEmbeddedFont[] = [];
+  for (const family of families) {
+    const bytes = await getUserFontBytes(family).catch(() => undefined);
+    if (!bytes) continue;
+    const asset = `fonts/${fonts.length + 1}.font`;
+    zip.file(asset, bytes);
+    fonts.push({ family, asset });
+  }
+  return fonts.length ? fonts : undefined;
+}
+
 export async function encodeLumaProject(
   doc: Document,
   actions: Action[],
@@ -1319,6 +1347,9 @@ export async function encodeLumaProject(
     document: await serializeDocument(doc, context),
     actions,
     history: history ? await serializeHistory(history, context) : undefined,
+    // Recovery checkpoints run constantly and only need the pixels back; a
+    // font still on this browser's Glyph library needs no help to reopen.
+    fonts: recovery ? undefined : await serializeEmbeddedFonts(doc, zip),
   };
   assertManifest(manifest);
   // Save and recovery must obey the same restore contract as untrusted input.
@@ -1381,6 +1412,41 @@ function assertManifest(value: unknown): asserts value is ProjectManifest {
   if (manifest.history?.nodes && manifest.history.nodes.length > LUMA_PROJECT_LIMITS.historyNodes) {
     throw new Error("Luma project contains too many history nodes");
   }
+  if (manifest.fonts !== undefined) {
+    if (!Array.isArray(manifest.fonts) || manifest.fonts.length > MAX_EMBEDDED_FONTS) {
+      throw new Error("Luma project contains too many embedded fonts");
+    }
+    const validFont = (font: unknown): font is SerializedEmbeddedFont =>
+      !!font && typeof (font as SerializedEmbeddedFont).family === "string" &&
+      /^[A-Za-z][A-Za-z0-9 ]{0,30}$/.test((font as SerializedEmbeddedFont).family) &&
+      typeof (font as SerializedEmbeddedFont).asset === "string" &&
+      /^fonts\/\d+\.font$/.test((font as SerializedEmbeddedFont).asset);
+    if (!manifest.fonts.every(validFont)) throw new Error("Luma project contains a malformed embedded font entry");
+  }
+}
+
+/**
+ * Install any fonts a project embedded, so its text renders in the right
+ * face immediately instead of falling back while nothing has loaded it. A
+ * family already installed locally is left alone — never overwrite a font
+ * this browser already has under that name with the archive's copy. A font
+ * that fails to install (corrupt bytes, no IndexedDB available, browser
+ * rejects the face) is skipped: the project still opens and that text falls
+ * back to the next family in its stack, exactly as if it were never embedded.
+ */
+async function installEmbeddedFonts(fonts: SerializedEmbeddedFont[] | undefined, zip: JSZip): Promise<void> {
+  if (!fonts?.length) return;
+  for (const { family, asset } of fonts) {
+    if (isUserFontFamily(family)) continue;
+    try {
+      const file = zip.file(asset);
+      if (!file) continue;
+      const bytes = await file.async("arraybuffer");
+      await installUserFont(family, bytes);
+    } catch (error) {
+      console.warn(`Embedded font "${family}" could not be installed; falling back to the next family in its stack`, error);
+    }
+  }
 }
 
 export async function decodeLumaProject(
@@ -1401,6 +1467,7 @@ export async function decodeLumaProject(
   const decodedBytes = await assertProjectDecodeAdmission(zip, options.restoreHistory === false ? { ...manifest, history: undefined } : manifest, options.maximumDecodedBytes);
   const release = options.admitDecodedBytes?.(decodedBytes);
   try {
+  await installEmbeddedFonts(manifest.fonts, zip);
   const preserveIds = manifest.version >= 2;
   return {
     name: manifest.name,

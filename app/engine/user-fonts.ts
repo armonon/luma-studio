@@ -4,8 +4,12 @@
  * The family index lives in localStorage so text rendering can ask
  * synchronously "is this one of ours?"; the SFNT bytes live in IndexedDB and
  * are registered with `document.fonts` on first use. Fonts are per browser
- * profile: they are not embedded in `.luma` projects or PSD exports, so a
- * project opened elsewhere falls back to the next family in its stack.
+ * profile, but `.luma` project saves embed the bytes for every installed
+ * Glyph family a document's text layers actually use (see `getUserFontBytes`
+ * below and `project.ts`'s `encodeLumaProject`/`decodeLumaProject`), so a
+ * project reopened somewhere that never installed that font still renders
+ * with it instead of falling back. PSD exports are unaffected: PSD has no
+ * slot for a font that isn't on the system, so those still fall back.
  */
 
 const INDEX_KEY = "luma.userFonts.v1";
@@ -43,7 +47,13 @@ export function listUserFonts(): UserFontEntry[] {
   } catch { return []; }
 }
 
-function writeIndex(entries: UserFontEntry[]) { localStorage.setItem(INDEX_KEY, JSON.stringify(entries.slice(0, MAX_FONTS))); }
+function writeIndex(entries: UserFontEntry[]) {
+  // Embedding-driven installs can run before any browser storage exists
+  // (e.g. a headless/Node project decode with only fake-indexeddb wired up);
+  // the font still gets stored and registered, just not listed yet.
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(INDEX_KEY, JSON.stringify(entries.slice(0, MAX_FONTS)));
+}
 
 export function isUserFontFamily(cssFamily: string) {
   const name = primaryFamily(cssFamily).toLowerCase();
@@ -103,6 +113,12 @@ export async function installUserFont(family: string, data: ArrayBuffer, project
   await register(family, data);
   await tx("readwrite", store => store.put({ family, data, project, updatedAt: Date.now() } satisfies StoredFont));
   writeIndex([{ family, updatedAt: Date.now(), bytes: data.byteLength }, ...entries]);
+}
+
+/** Raw SFNT bytes for an installed font, to embed it in a saved `.luma` project. */
+export async function getUserFontBytes(family: string): Promise<ArrayBuffer | undefined> {
+  const stored = await tx<StoredFont | undefined>("readonly", store => store.get(family) as IDBRequest<StoredFont | undefined>);
+  return stored && stored.data instanceof ArrayBuffer ? stored.data : undefined;
 }
 
 export async function removeUserFont(family: string) {

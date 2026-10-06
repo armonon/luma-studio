@@ -23,6 +23,9 @@ const eslintConfig = defineConfig([
     "crates/**/target/**",
     "public/pdfjs/**",
     "public/onnxruntime/**",
+    // The live marketing/learning site's own vendored output (see
+    // docs/release/live-static-overlay.md) — not maintained JS/TS source.
+    "live-static/**",
     "next-env.d.ts",
   ]),
 ]);
