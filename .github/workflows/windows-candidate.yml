@@ -1,0 +1,67 @@
+{
+  "name": "Luma Studio Windows Candidate",
+  "on": {
+    "workflow_dispatch": {}
+  },
+  "permissions": {
+    "contents": "read"
+  },
+  "concurrency": {
+    "group": "windows-candidate-${{ github.ref }}",
+    "cancel-in-progress": false
+  },
+  "jobs": {
+    "windows": {
+      "runs-on": "windows-2022",
+      "timeout-minutes": 90,
+      "env": {
+        "CSC_IDENTITY_AUTO_DISCOVERY": "false"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v5"
+        },
+        {
+          "uses": "actions/setup-node@v4",
+          "with": {
+            "node-version": "22",
+            "cache": "npm"
+          }
+        },
+        {
+          "name": "Install locked dependencies",
+          "run": "npm ci"
+        },
+        {
+          "name": "Regression checks",
+          "run": "npx tsx --test tests/*.test.ts"
+        },
+        {
+          "uses": "dtolnay/rust-toolchain@stable"
+        },
+        {
+          "name": "Rust regression checks",
+          "run": "cargo test --manifest-path src-tauri/Cargo.toml --lib --locked"
+        },
+        {
+          "name": "Build Windows x64 NSIS candidate",
+          "run": "npx tauri build --bundles nsis --target x86_64-pc-windows-msvc"
+        },
+        {
+          "name": "Record checksums, source and signing status",
+          "shell": "pwsh",
+          "run": "$ErrorActionPreference = 'Stop'\n$files = @(Get-ChildItem 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe' -File)\nif ($files.Count -eq 0) { throw 'No Windows installer produced' }\nNew-Item -ItemType Directory -Force windows-evidence | Out-Null\n$records = foreach ($file in $files) {\n  $signature = Get-AuthenticodeSignature $file.FullName\n  [ordered]@{ name=$file.Name; bytes=$file.Length; sha256=(Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); authenticode=$signature.Status.ToString() }\n}\n[ordered]@{ product='Luma Studio'; commit=$env:GITHUB_SHA; runner=$env:RUNNER_OS; architecture='x64'; candidate=$true; publicReleaseReady=$false; cleanInstallQualified=$false; saveExportQualified=$false; installers=@($records) } | ConvertTo-Json -Depth 8 | Set-Content windows-evidence/build-receipt.json\n$records | ForEach-Object { \"$($_.sha256)  $($_.name)\" } | Set-Content windows-evidence/SHA256SUMS.txt"
+        },
+        {
+          "uses": "actions/upload-artifact@v4",
+          "with": {
+            "name": "luma-windows-x64-candidate",
+            "path": "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe\nwindows-evidence/",
+            "if-no-files-found": "error",
+            "retention-days": 14
+          }
+        }
+      ]
+    }
+  }
+}
