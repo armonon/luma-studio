@@ -40,9 +40,11 @@ function toBlob(result: MockupRenderResult, type: ExportType, quality = 0.92): P
 }
 
 function paint(canvas: HTMLCanvasElement | null, result: MockupRenderResult) {
-  if (!canvas) return;
+  if (!canvas) throw new Error("Mockup preview is unavailable. Retry the preview.");
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Mockup preview could not start. Retry the preview.");
   canvas.width = result.width; canvas.height = result.height;
-  canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(result.data), result.width, result.height), 0, 0);
+  context.putImageData(new ImageData(new Uint8ClampedArray(result.data), result.width, result.height), 0, 0);
 }
 
 function Slider({ label, value, min, max, step = 1, format, onChange }: { label: string; value: number; min: number; max: number; step?: number; format: (v: number) => string; onChange: (value: number) => void }) {
@@ -68,6 +70,8 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
   const [artLabel, setArtLabel] = useState("Loading the current document…");
   const [artRevision, setArtRevision] = useState(0);
   const [hasArt, setHasArt] = useState(false);
+  const [previewPending, setPreviewPending] = useState(true);
+  const artLoad = useRef(0);
   const [quad, setQuad] = useState<Quad | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -79,18 +83,35 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
   const thumbs = useRef(new Map<MockupSceneId, HTMLCanvasElement>());
   const state = states[sceneId], info = sceneInfo(sceneId);
 
+  useEffect(() => {
+    const canvas = preview.current;
+    const restore = () => setArtRevision(r => r + 1);
+    canvas?.addEventListener("contextrestored", restore);
+    return () => canvas?.removeEventListener("contextrestored", restore);
+  }, []);
+
   const loadArt = useCallback(async (source: () => Promise<Blob>, label: string) => {
+    const load = ++artLoad.current;
+    setHasArt(false); setPreviewPending(true); setArtRevision(0); setArt(null);
     setError(""); setArtLabel(`Loading ${label}…`);
     try {
       const decoded = await decodeArt(await source());
+      if (load !== artLoad.current) return;
       setArt(decoded); setArtLabel(`${label} · ${decoded.width} × ${decoded.height}`);
     } catch (reason) {
+      if (load !== artLoad.current) return;
+      setPreviewPending(false);
       setError(reason instanceof Error ? reason.message : "Could not read that artwork");
       setArtLabel("No artwork");
     }
   }, []);
 
-  useEffect(() => { void loadArt(getArtRef.current, "Current document"); }, [loadArt]);
+  useEffect(() => {
+    void loadArt(getArtRef.current, "Current document");
+    // This is a request sequence, not a DOM ref; cleanup invalidates late decodes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => { artLoad.current++; };
+  }, [loadArt]);
   useEffect(() => {
     if (!art) return;
     let cancelled = false;
@@ -103,12 +124,23 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
     if (!artRevision) return;
     let cancelled = false;
     const timer = setTimeout(() => {
+      setPreviewPending(true);
       void client().render({ scene: sceneId, size: PREVIEW_SIZE, color: state.color, placement: state.placement, inkOpacity: state.ink, cache: true })
-        .then(result => { if (!cancelled) { paint(preview.current, result); setQuad(result.quad); } })
-        .catch(reason => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); });
+        .then(result => { if (!cancelled) { paint(preview.current, result); setQuad(result.quad); setPreviewPending(false); } })
+        .catch(reason => { if (!cancelled) { setPreviewPending(false); setError(reason instanceof Error ? reason.message : String(reason)); } });
     }, 16);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [client, sceneId, state, artRevision]);
+
+  const retryPreview = async () => {
+    if (!art) return;
+    setError(""); setPreviewPending(true); setHasArt(false);
+    clientRef.current?.dispose(); clientRef.current = null;
+    try {
+      await client().setArt(art);
+      setHasArt(true); setArtRevision(r => r + 1);
+    } catch (reason) { setPreviewPending(false); setError(String(reason)); }
+  };
 
   // Thumbnails: refresh every scene after the art changes, and the active one as it is edited.
   const renderThumb = useCallback((id: MockupSceneId, s: SceneState) => {
@@ -206,7 +238,7 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
             }}
             onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
             onWheel={event => { if (!hasArt) return; place({ scale: state.placement.scale * (event.deltaY < 0 ? 1.05 : 1 / 1.05) }); }} />
-          {!hasArt && !error && <p className="mk-stage-note" role="status">Preparing artwork…</p>}
+          {previewPending && !error && <p className="mk-stage-note" role="status">{hasArt ? "Rendering preview…" : "Preparing artwork…"}</p>}
         </div>
         <fieldset className="ct-controls" disabled={!!busy}>
           <div className="ct-section">
@@ -251,12 +283,12 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
         </fieldset>
       </div>
       {progress !== null && <div className="ct-progress" role="status"><progress aria-label="Export progress" value={Math.round(progress * 100)} max={100} /><span>{pct(progress)}</span><button onClick={() => { cancelExport.current = true; }}>Cancel</button></div>}
-      {error && <p className="ct-error" role="alert">{error}</p>}
+      {error && <div className="ct-error" role="alert">{error} {art && <button disabled={!!busy} onClick={() => void retryPreview()}><RotateCcw size={14} /> Retry preview</button>}</div>}
       <footer>
         <span className="ct-footer-status" aria-live="polite">{busy ?? ""}</span>
-        <button disabled={!!busy || !hasArt} onClick={() => void openAsDocument()}><ImagePlus size={14} /> Open as document</button>
-        <button disabled={!!busy || !hasArt} onClick={() => void downloadCurrent()}><Download size={14} /> Download {info.name}</button>
-        <button className="ct-primary" disabled={!!busy || !hasArt} onClick={() => void downloadAll()}><Package size={14} /> Download all (ZIP)</button>
+        <button disabled={!!busy || !hasArt || previewPending} onClick={() => void openAsDocument()}><ImagePlus size={14} /> Open as document</button>
+        <button disabled={!!busy || !hasArt || previewPending} onClick={() => void downloadCurrent()}><Download size={14} /> Download {info.name}</button>
+        <button className="ct-primary" disabled={!!busy || !hasArt || previewPending} onClick={() => void downloadAll()}><Package size={14} /> Download all (ZIP)</button>
       </footer>
     </section>
   </div>;
