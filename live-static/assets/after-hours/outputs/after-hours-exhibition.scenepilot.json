@@ -1,0 +1,1266 @@
+{
+  "format": "scenepilot-cut",
+  "version": 2,
+  "project": "After-Hours-Evening-Mix.wav",
+  "duration": 18,
+  "bpm": 104,
+  "beatOffset": 0,
+  "beats": [
+    0,
+    0.5804988662131519,
+    1.1609977324263039,
+    1.7182766439909296,
+    2.2987755102040817,
+    2.8792743764172335,
+    3.4597732426303853,
+    4.017052154195011,
+    4.597551020408163,
+    5.178049886621316,
+    5.758548752834467,
+    6.339047619047619,
+    6.919546485260771,
+    7.500045351473923,
+    8.080544217687075,
+    8.6378231292517,
+    9.218321995464853,
+    9.798820861678005,
+    10.379319727891156,
+    10.95981859410431,
+    11.517097505668934,
+    12.097596371882085,
+    12.678095238095239,
+    13.25859410430839,
+    13.839092970521541,
+    14.419591836734694,
+    15.000090702947846,
+    15.580589569160997,
+    16.16108843537415,
+    16.718367346938777,
+    17.29886621315193,
+    17.87936507936508
+  ],
+  "sections": [
+    {
+      "id": "detected-0",
+      "name": "OPEN",
+      "start": 0,
+      "end": 9,
+      "every": 4,
+      "duration": 0.42,
+      "scale": 124,
+      "enabled": true,
+      "color": "#34d6c7",
+      "energy": 0.57231888748349,
+      "rhythm": "normal",
+      "pattern": "restrained",
+      "locked": false
+    },
+    {
+      "id": "detected-1",
+      "name": "OUTRO",
+      "start": 9,
+      "end": 18,
+      "every": 4,
+      "duration": 0.42,
+      "scale": 124,
+      "enabled": true,
+      "color": "#ff695d",
+      "energy": 0.5581753663562223,
+      "rhythm": "normal",
+      "pattern": "release",
+      "locked": false
+    }
+  ],
+  "tracks": [
+    {
+      "id": "clip-track-1",
+      "name": "V2 · LIGHT HITS",
+      "color": "#34d6c7",
+      "enabled": true,
+      "locked": false,
+      "target": true,
+      "sourcePatch": true,
+      "syncLock": true,
+      "blend": "screen",
+      "opacity": 100,
+      "hue": 0,
+      "saturation": 110,
+      "brightness": 105,
+      "glow": 12,
+      "fadeIn": 0.03,
+      "fadeOut": 0.1
+    },
+    {
+      "id": "clip-track-2",
+      "name": "V3 · OVERLAYS",
+      "color": "#ff695d",
+      "enabled": true,
+      "locked": false,
+      "target": false,
+      "sourcePatch": false,
+      "syncLock": true,
+      "blend": "overlay",
+      "opacity": 82,
+      "hue": 0,
+      "saturation": 100,
+      "brightness": 100,
+      "glow": 0,
+      "fadeIn": 0.08,
+      "fadeOut": 0.18
+    }
+  ],
+  "videoClips": [
+    {
+      "id": "base-detected-0-0-media-0fc2f478063dd651bdda9f1b",
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-0",
+      "start": 0,
+      "duration": 1.7182766439909296,
+      "sourceStart": 3.2817233560090706,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-0-3-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "start": 1.7182766439909296,
+      "duration": 2.879274376417234,
+      "sourceStart": 0.9023557185688923,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "playbackRate": 1,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-0-8-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "start": 4.597551020408163,
+      "duration": 2.3219954648526073,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-0-12-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "start": 6.919546485260771,
+      "duration": 1.7182766439909294,
+      "sourceStart": 1.559790485519367,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-0-15-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "start": 8.6378231292517,
+      "duration": 0.36217687074829996,
+      "sourceStart": 0.20580688215116805,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-1-0-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-1",
+      "start": 9.218321995464853,
+      "duration": 2.2987755102040808,
+      "sourceStart": 1.4248482515240968,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-1-4-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "start": 11.517097505668934,
+      "duration": 2.3219954648526073,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-1-8-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-1",
+      "start": 13.839092970521541,
+      "duration": 1.741496598639456,
+      "sourceStart": 2.387728186077153,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-1-11-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "start": 15.580589569160997,
+      "duration": 0.5804988662131532,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "id": "base-detected-1-12-media-0fc2f478063dd651bdda9f1b",
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-1",
+      "start": 16.16108843537415,
+      "duration": 1.8389115646258496,
+      "sourceStart": 3.1610884353741504,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "trackId": "__base__"
+    },
+    {
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "start": 0,
+      "duration": 0.7646573642707505,
+      "id": "directed-detected-0-0-media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "sourceStart": 0,
+      "trackId": "clip-track-2",
+      "overlay": {
+        "scale": 124,
+        "opacity": 94
+      }
+    },
+    {
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "start": 3.0597732426303854,
+      "duration": 0.6500000000000004,
+      "id": "directed-detected-0-6-media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-0",
+      "sourceStart": 4.35,
+      "trackId": "clip-track-1",
+      "overlay": {
+        "scale": 124,
+        "opacity": 89
+      }
+    },
+    {
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "start": 6.669546485260771,
+      "duration": 1.0036661277347207,
+      "id": "directed-detected-0-12-media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "sourceStart": 0,
+      "trackId": "clip-track-1",
+      "overlay": {
+        "scale": 124,
+        "opacity": 94
+      }
+    },
+    {
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "start": 9,
+      "duration": 0.4683219954648532,
+      "id": "directed-detected-1-0-media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-1",
+      "sourceStart": 4.531678004535147,
+      "trackId": "clip-track-1",
+      "overlay": {
+        "scale": 124,
+        "opacity": 92
+      }
+    },
+    {
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "start": 13.589092970521541,
+      "duration": 1.2182191989945186,
+      "id": "directed-detected-1-8-media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "sourceStart": 0,
+      "trackId": "clip-track-1",
+      "overlay": {
+        "scale": 124,
+        "opacity": 93
+      }
+    }
+  ],
+  "baseCuts": [
+    {
+      "id": "base-detected-0-0-media-0fc2f478063dd651bdda9f1b",
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-0",
+      "start": 0,
+      "duration": 1.7182766439909296,
+      "sourceStart": 3.2817233560090706
+    },
+    {
+      "id": "base-detected-0-3-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "start": 1.7182766439909296,
+      "duration": 2.879274376417234,
+      "sourceStart": 0.9023557185688923,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3,
+      "playbackRate": 1
+    },
+    {
+      "id": "base-detected-0-8-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "start": 4.597551020408163,
+      "duration": 2.3219954648526073,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-0-12-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "start": 6.919546485260771,
+      "duration": 1.7182766439909294,
+      "sourceStart": 1.559790485519367,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-0-15-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "start": 8.6378231292517,
+      "duration": 0.36217687074829996,
+      "sourceStart": 0.20580688215116805,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-1-0-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-1",
+      "start": 9.218321995464853,
+      "duration": 2.2987755102040808,
+      "sourceStart": 1.4248482515240968,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-1-4-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "start": 11.517097505668934,
+      "duration": 2.3219954648526073,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-1-8-media-9ec5731f0b6f0d9dcd3a8609",
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-1",
+      "start": 13.839092970521541,
+      "duration": 1.741496598639456,
+      "sourceStart": 2.387728186077153,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-1-11-media-9ae57588f7e543fd7b505c60",
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "start": 15.580589569160997,
+      "duration": 0.5804988662131532,
+      "sourceStart": 0,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    },
+    {
+      "id": "base-detected-1-12-media-0fc2f478063dd651bdda9f1b",
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-1",
+      "start": 16.16108843537415,
+      "duration": 1.8389115646258496,
+      "sourceStart": 3.1610884353741504,
+      "transitionType": "dissolve",
+      "transitionDuration": 0.3
+    }
+  ],
+  "titles": [],
+  "projectIntelligence": {
+    "schema": "scenepilot-project-intelligence/v1",
+    "brief": "",
+    "assetsAnalyzed": 3,
+    "transcriptAssets": 0,
+    "transcriptMinutes": 0,
+    "subjectCandidates": [],
+    "objectCandidates": [],
+    "locationCandidates": [],
+    "takeGroups": [],
+    "dialogueMoments": [],
+    "storyBeats": [
+      {
+        "id": "project-story-1",
+        "label": "Hook",
+        "briefText": "",
+        "assetIds": [
+          "media-0fc2f478063dd651bdda9f1b",
+          "media-9ae57588f7e543fd7b505c60"
+        ],
+        "dialogueMomentIds": [],
+        "coverage": 0
+      },
+      {
+        "id": "project-story-2",
+        "label": "Context",
+        "briefText": "",
+        "assetIds": [
+          "media-9ae57588f7e543fd7b505c60",
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "dialogueMomentIds": [],
+        "coverage": 0
+      },
+      {
+        "id": "project-story-3",
+        "label": "Development",
+        "briefText": "",
+        "assetIds": [
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "dialogueMomentIds": [],
+        "coverage": 0
+      },
+      {
+        "id": "project-story-4",
+        "label": "Turn",
+        "briefText": "",
+        "assetIds": [],
+        "dialogueMomentIds": [],
+        "coverage": 0
+      },
+      {
+        "id": "project-story-5",
+        "label": "Payoff",
+        "briefText": "",
+        "assetIds": [],
+        "dialogueMomentIds": [],
+        "coverage": 0
+      }
+    ],
+    "assemblies": [
+      {
+        "kind": "story",
+        "label": "Script-guided story",
+        "summary": "Hook-to-payoff structure using the strongest matching dialogue and visual coverage.",
+        "assetIds": [
+          "media-0fc2f478063dd651bdda9f1b",
+          "media-9ae57588f7e543fd7b505c60",
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "estimatedDuration": 15
+      },
+      {
+        "kind": "dialogue",
+        "label": "Dialogue radio cut",
+        "summary": "Highest-confidence spoken moments, stripped to a clean editorial spine.",
+        "assetIds": [],
+        "estimatedDuration": 0
+      },
+      {
+        "kind": "coverage",
+        "label": "B-roll coverage reel",
+        "summary": "Non-dialogue and wider coverage for hiding trims, jump cuts and narration edits.",
+        "assetIds": [
+          "media-0fc2f478063dd651bdda9f1b",
+          "media-9ae57588f7e543fd7b505c60",
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "estimatedDuration": 15
+      },
+      {
+        "kind": "trailer",
+        "label": "Project trailer",
+        "summary": "The strongest and most active material shaped into a compact escalation.",
+        "assetIds": [
+          "media-0fc2f478063dd651bdda9f1b",
+          "media-9ae57588f7e543fd7b505c60",
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "estimatedDuration": 10.5
+      },
+      {
+        "kind": "selects",
+        "label": "Project selects",
+        "summary": "Best technical takes with likely duplicates removed but never deleted.",
+        "assetIds": [
+          "media-0fc2f478063dd651bdda9f1b",
+          "media-9ae57588f7e543fd7b505c60",
+          "media-9ec5731f0b6f0d9dcd3a8609"
+        ],
+        "estimatedDuration": 15
+      }
+    ],
+    "warnings": [
+      "Transcribe the library to unlock dialogue intent, script matching and stronger retake detection.",
+      "Add a creative brief or script to score story coverage against your intent."
+    ]
+  },
+  "projectTranscripts": {},
+  "storyBrief": "",
+  "mainAsset": {
+    "name": "After-Hours-Evening-Mix.wav",
+    "kind": "audio",
+    "size": 3175244,
+    "lastModified": 1790730236563
+  },
+  "assets": [
+    {
+      "id": "media-0fc2f478063dd651bdda9f1b",
+      "name": "01-Amber-and-Stone.mp4",
+      "kind": "video",
+      "size": 900153,
+      "lastModified": 1790722915800,
+      "folderId": "bin-footage"
+    },
+    {
+      "id": "media-9ec5731f0b6f0d9dcd3a8609",
+      "name": "02-Jacket-Front.mp4",
+      "kind": "video",
+      "size": 489338,
+      "lastModified": 1790722943470,
+      "folderId": "bin-footage"
+    },
+    {
+      "id": "media-9ae57588f7e543fd7b505c60",
+      "name": "03-Orbit-Clasp.mp4",
+      "kind": "video",
+      "size": 665856,
+      "lastModified": 1790722964040,
+      "folderId": "bin-footage"
+    }
+  ],
+  "placements": [
+    {
+      "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+      "start": 0,
+      "duration": 0.7646573642707505,
+      "id": "directed-detected-0-0-media-9ec5731f0b6f0d9dcd3a8609",
+      "sectionId": "detected-0",
+      "sourceStart": 0,
+      "trackId": "clip-track-2",
+      "scale": 124,
+      "opacity": 94
+    },
+    {
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "start": 3.0597732426303854,
+      "duration": 0.6500000000000004,
+      "id": "directed-detected-0-6-media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-0",
+      "sourceStart": 4.35,
+      "trackId": "clip-track-1",
+      "scale": 124,
+      "opacity": 89
+    },
+    {
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "start": 6.669546485260771,
+      "duration": 1.0036661277347207,
+      "id": "directed-detected-0-12-media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-0",
+      "sourceStart": 0,
+      "trackId": "clip-track-1",
+      "scale": 124,
+      "opacity": 94
+    },
+    {
+      "assetId": "media-0fc2f478063dd651bdda9f1b",
+      "start": 9,
+      "duration": 0.4683219954648532,
+      "id": "directed-detected-1-0-media-0fc2f478063dd651bdda9f1b",
+      "sectionId": "detected-1",
+      "sourceStart": 4.531678004535147,
+      "trackId": "clip-track-1",
+      "scale": 124,
+      "opacity": 92
+    },
+    {
+      "assetId": "media-9ae57588f7e543fd7b505c60",
+      "start": 13.589092970521541,
+      "duration": 1.2182191989945186,
+      "id": "directed-detected-1-8-media-9ae57588f7e543fd7b505c60",
+      "sectionId": "detected-1",
+      "sourceStart": 0,
+      "trackId": "clip-track-1",
+      "scale": 124,
+      "opacity": 93
+    }
+  ],
+  "compositions": [
+    {
+      "id": "comp-title-impact",
+      "name": "TITLE IMPACT",
+      "duration": 4,
+      "width": 1920,
+      "height": 1080,
+      "background": "#050706",
+      "layers": [
+        {
+          "id": "title-glow",
+          "name": "HERO TYPE",
+          "kind": "text",
+          "text": "SCENE PILOT",
+          "shape": "rectangle",
+          "color": "#f3f5f1",
+          "x": 50,
+          "y": 50,
+          "width": 82,
+          "height": 18,
+          "scale": 100,
+          "rotation": 0,
+          "opacity": 100,
+          "enabled": true,
+          "blend": "normal",
+          "effect": "glow",
+          "animation": "pulse",
+          "keyframes": [
+            {
+              "id": "title-kf-0",
+              "time": 0,
+              "x": 50,
+              "y": 58,
+              "scale": 72,
+              "rotation": -3,
+              "opacity": 0
+            },
+            {
+              "id": "title-kf-1",
+              "time": 0.42,
+              "x": 50,
+              "y": 50,
+              "scale": 108,
+              "rotation": 0,
+              "opacity": 100
+            },
+            {
+              "id": "title-kf-2",
+              "time": 4,
+              "x": 50,
+              "y": 48,
+              "scale": 100,
+              "rotation": 0,
+              "opacity": 100
+            }
+          ],
+          "trackId": "comp-title-impact-video-track-1"
+        },
+        {
+          "id": "title-bar",
+          "name": "ACCENT BAR",
+          "kind": "shape",
+          "text": "",
+          "shape": "rectangle",
+          "color": "#ff695d",
+          "x": 50,
+          "y": 64,
+          "width": 48,
+          "height": 1.2,
+          "scale": 100,
+          "rotation": 0,
+          "opacity": 92,
+          "enabled": true,
+          "blend": "screen",
+          "effect": "glow",
+          "animation": "none",
+          "keyframes": [
+            {
+              "id": "bar-kf-0",
+              "time": 0,
+              "x": 50,
+              "y": 64,
+              "scale": 0,
+              "rotation": 0,
+              "opacity": 0
+            },
+            {
+              "id": "bar-kf-1",
+              "time": 0.65,
+              "x": 50,
+              "y": 64,
+              "scale": 100,
+              "rotation": 0,
+              "opacity": 92
+            }
+          ],
+          "trackId": "comp-title-impact-video-track-2"
+        }
+      ],
+      "tracks": [
+        {
+          "id": "comp-title-impact-audio-track-1",
+          "name": "A1 · AUDIO",
+          "kind": "audio",
+          "enabled": true,
+          "locked": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "id": "comp-title-impact-video-track-1",
+          "name": "V1 · HERO TYPE",
+          "kind": "video",
+          "enabled": true,
+          "locked": false
+        },
+        {
+          "id": "comp-title-impact-video-track-2",
+          "name": "V2 · ACCENT BAR",
+          "kind": "video",
+          "enabled": true,
+          "locked": false
+        }
+      ]
+    },
+    {
+      "id": "comp-neon-orbit",
+      "name": "NEON ORBIT",
+      "duration": 6,
+      "width": 1920,
+      "height": 1080,
+      "background": "#050706",
+      "layers": [
+        {
+          "id": "orbit-outer",
+          "name": "ORBIT OUTER",
+          "kind": "shape",
+          "text": "",
+          "shape": "ellipse",
+          "color": "#34d6c7",
+          "x": 50,
+          "y": 50,
+          "width": 38,
+          "height": 68,
+          "scale": 100,
+          "rotation": 22,
+          "opacity": 52,
+          "enabled": true,
+          "blend": "screen",
+          "effect": "glow",
+          "animation": "spin",
+          "keyframes": [],
+          "trackId": "comp-neon-orbit-video-track-1"
+        },
+        {
+          "id": "orbit-core",
+          "name": "LIGHT CORE",
+          "kind": "shape",
+          "text": "",
+          "shape": "ellipse",
+          "color": "#c8ef4b",
+          "x": 50,
+          "y": 50,
+          "width": 5,
+          "height": 9,
+          "scale": 100,
+          "rotation": 0,
+          "opacity": 88,
+          "enabled": true,
+          "blend": "screen",
+          "effect": "glow",
+          "animation": "pulse",
+          "keyframes": [],
+          "trackId": "comp-neon-orbit-video-track-2"
+        }
+      ],
+      "tracks": [
+        {
+          "id": "comp-neon-orbit-audio-track-1",
+          "name": "A1 · AUDIO",
+          "kind": "audio",
+          "enabled": true,
+          "locked": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "id": "comp-neon-orbit-video-track-1",
+          "name": "V1 · ORBIT OUTER",
+          "kind": "video",
+          "enabled": true,
+          "locked": false
+        },
+        {
+          "id": "comp-neon-orbit-video-track-2",
+          "name": "V2 · LIGHT CORE",
+          "kind": "video",
+          "enabled": true,
+          "locked": false
+        }
+      ]
+    }
+  ],
+  "effects": {
+    "styleId": "cinematic",
+    "autoEnergy": "smooth",
+    "montageEnabled": true,
+    "montagePace": "cinematic",
+    "punchPreset": "subtle",
+    "transitionType": "zoom",
+    "strobePreset": "off",
+    "strobeColor": "#ffffff",
+    "strobeSecondaryColor": "#ffffff",
+    "strobeAlternate": false,
+    "strobeIntensity": 0,
+    "strobeAttack": 0,
+    "strobeHold": 0,
+    "strobeDecay": 0.1,
+    "strobeShape": "exponential",
+    "strobeMode": "full",
+    "strobeBlend": "screen",
+    "strobeX": 0.5,
+    "strobeY": 0.5,
+    "strobeSize": 0.75,
+    "strobeSoftness": 0.65,
+    "strobeAngle": 0,
+    "strobeSafeMode": true,
+    "strobeSensitivity": 0.5,
+    "strobeBand": "all",
+    "stutterPreset": "off",
+    "speedPreset": "off",
+    "dropRampEnabled": true,
+    "audioReactive": false,
+    "shakePreset": "off",
+    "lookPreset": "cinematic",
+    "manualGrade": {
+      "exposure": 1,
+      "contrast": 1,
+      "saturation": 1,
+      "temperature": 0,
+      "tint": 0,
+      "bloom": 0,
+      "vignette": 0,
+      "grain": 0,
+      "aberration": 0
+    },
+    "mirrorMode": 0,
+    "streak": 0,
+    "echoPreset": "off"
+  },
+  "settings": {
+    "aspect": "2.39",
+    "customSize": {
+      "width": 1080,
+      "height": 1080
+    },
+    "sourceDims": {
+      "w": 1280,
+      "h": 720
+    },
+    "exportFrameRate": 30,
+    "exportMaxDimension": 1920,
+    "exportFormat": "mp4-h264",
+    "colorCurve": "none",
+    "lut3dSource": null,
+    "lut3dMix": 1
+  },
+  "proState": {
+    "audioTracks": [
+      {
+        "id": "audio-track-1",
+        "name": "A1 · MUSIC",
+        "color": "#5eb8ff",
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "target": true,
+        "syncLock": true,
+        "busId": "bus-music",
+        "gain": 1,
+        "pan": 0,
+        "processing": {
+          "highPassHz": 20,
+          "lowDb": 0,
+          "midDb": 0,
+          "highDb": 0,
+          "compressorThreshold": -18,
+          "compressorRatio": 2,
+          "limiter": true,
+          "makeupGain": 1
+        }
+      },
+      {
+        "id": "audio-track-2",
+        "name": "A2 · SFX",
+        "color": "#f7c84b",
+        "muted": false,
+        "solo": false,
+        "locked": false,
+        "target": false,
+        "syncLock": true,
+        "busId": "bus-sfx",
+        "gain": 0.9,
+        "pan": 0,
+        "processing": {
+          "highPassHz": 20,
+          "lowDb": 0,
+          "midDb": 0,
+          "highDb": 0,
+          "compressorThreshold": -24,
+          "compressorRatio": 1,
+          "limiter": true,
+          "makeupGain": 1
+        }
+      }
+    ],
+    "audioBuses": [
+      {
+        "id": "bus-music",
+        "name": "MUSIC",
+        "color": "#5eb8ff",
+        "gain": 1,
+        "muted": false,
+        "solo": false
+      },
+      {
+        "id": "bus-dialogue",
+        "name": "DIALOGUE",
+        "color": "#34d6c7",
+        "gain": 1,
+        "muted": false,
+        "solo": false
+      },
+      {
+        "id": "bus-sfx",
+        "name": "SFX",
+        "color": "#f7c84b",
+        "gain": 1,
+        "muted": false,
+        "solo": false
+      }
+    ],
+    "masterGain": 1,
+    "colorManagement": {
+      "workingSpace": "rec709",
+      "displayTransform": "rec709-100",
+      "toneMap": "bt2390"
+    },
+    "audioClips": [],
+    "transcriptWords": [],
+    "projectIntelligence": {
+      "schema": "scenepilot-project-intelligence/v1",
+      "brief": "",
+      "assetsAnalyzed": 3,
+      "transcriptAssets": 0,
+      "transcriptMinutes": 0,
+      "subjectCandidates": [],
+      "objectCandidates": [],
+      "locationCandidates": [],
+      "takeGroups": [],
+      "dialogueMoments": [],
+      "storyBeats": [
+        {
+          "id": "project-story-1",
+          "label": "Hook",
+          "briefText": "",
+          "assetIds": [
+            "media-0fc2f478063dd651bdda9f1b",
+            "media-9ae57588f7e543fd7b505c60"
+          ],
+          "dialogueMomentIds": [],
+          "coverage": 0
+        },
+        {
+          "id": "project-story-2",
+          "label": "Context",
+          "briefText": "",
+          "assetIds": [
+            "media-9ae57588f7e543fd7b505c60",
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "dialogueMomentIds": [],
+          "coverage": 0
+        },
+        {
+          "id": "project-story-3",
+          "label": "Development",
+          "briefText": "",
+          "assetIds": [
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "dialogueMomentIds": [],
+          "coverage": 0
+        },
+        {
+          "id": "project-story-4",
+          "label": "Turn",
+          "briefText": "",
+          "assetIds": [],
+          "dialogueMomentIds": [],
+          "coverage": 0
+        },
+        {
+          "id": "project-story-5",
+          "label": "Payoff",
+          "briefText": "",
+          "assetIds": [],
+          "dialogueMomentIds": [],
+          "coverage": 0
+        }
+      ],
+      "assemblies": [
+        {
+          "kind": "story",
+          "label": "Script-guided story",
+          "summary": "Hook-to-payoff structure using the strongest matching dialogue and visual coverage.",
+          "assetIds": [
+            "media-0fc2f478063dd651bdda9f1b",
+            "media-9ae57588f7e543fd7b505c60",
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "estimatedDuration": 15
+        },
+        {
+          "kind": "dialogue",
+          "label": "Dialogue radio cut",
+          "summary": "Highest-confidence spoken moments, stripped to a clean editorial spine.",
+          "assetIds": [],
+          "estimatedDuration": 0
+        },
+        {
+          "kind": "coverage",
+          "label": "B-roll coverage reel",
+          "summary": "Non-dialogue and wider coverage for hiding trims, jump cuts and narration edits.",
+          "assetIds": [
+            "media-0fc2f478063dd651bdda9f1b",
+            "media-9ae57588f7e543fd7b505c60",
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "estimatedDuration": 15
+        },
+        {
+          "kind": "trailer",
+          "label": "Project trailer",
+          "summary": "The strongest and most active material shaped into a compact escalation.",
+          "assetIds": [
+            "media-0fc2f478063dd651bdda9f1b",
+            "media-9ae57588f7e543fd7b505c60",
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "estimatedDuration": 10.5
+        },
+        {
+          "kind": "selects",
+          "label": "Project selects",
+          "summary": "Best technical takes with likely duplicates removed but never deleted.",
+          "assetIds": [
+            "media-0fc2f478063dd651bdda9f1b",
+            "media-9ae57588f7e543fd7b505c60",
+            "media-9ec5731f0b6f0d9dcd3a8609"
+          ],
+          "estimatedDuration": 15
+        }
+      ],
+      "warnings": [
+        "Transcribe the library to unlock dialogue intent, script matching and stronger retake detection.",
+        "Add a creative brief or script to score story coverage against your intent."
+      ]
+    },
+    "projectTranscripts": {},
+    "storyBrief": "",
+    "markers": [],
+    "timelineRange": {
+      "inPoint": null,
+      "outPoint": null
+    },
+    "mediaBins": [
+      {
+        "id": "bin-root",
+        "name": "ALL MEDIA",
+        "parentId": null
+      },
+      {
+        "id": "bin-footage",
+        "name": "FOOTAGE",
+        "parentId": "bin-root"
+      },
+      {
+        "id": "bin-audio",
+        "name": "AUDIO",
+        "parentId": "bin-root"
+      },
+      {
+        "id": "bin-graphics",
+        "name": "GRAPHICS",
+        "parentId": "bin-root"
+      }
+    ],
+    "snapping": true,
+    "linkedSelection": true,
+    "manualDropTime": null
+  },
+  "analysis": {
+    "tempoConfidence": 0.22784728825754433,
+    "framesAnalyzed": 0,
+    "sceneCuts": [],
+    "effectProfiles": [
+      {
+        "assetId": "media-0fc2f478063dd651bdda9f1b",
+        "peakTime": 4.75,
+        "sourceDuration": 5,
+        "brightness": 0.17593878600823046,
+        "flashiness": 0.003015151804711468,
+        "color": {
+          "r": 0.2371291757443718,
+          "g": 0.16006006414911642,
+          "b": 0.11421432461873637
+        },
+        "visualSignature": {
+          "sampleCount": 20,
+          "brightness": 0.17319909676833695,
+          "sharpness": 0.25209086853780865,
+          "contrast": 0.36566346298351304,
+          "motion": 0.012903597871786285,
+          "color": {
+            "r": 0.2371291757443718,
+            "g": 0.16006006414911642,
+            "b": 0.11421432461873637
+          },
+          "histogram": [
+            0.30576774924993516,
+            0.2761863425374031,
+            0.12010995410382748,
+            0.07830825671553612,
+            0.05327932070940733,
+            0.0378279322758317,
+            0.029639274813234806,
+            0.02173032397404313,
+            0.019241898227483033,
+            0.015036651398986578,
+            0.012779706716537475,
+            0.010648148134350777,
+            0.007841435214504599,
+            0.00444637342588976,
+            0.002777777734445408,
+            0.0043788579758256676
+          ],
+          "subject": {
+            "frames": 5,
+            "presence": 0,
+            "coverage": 0,
+            "centerX": 0.5,
+            "centerY": 0.5,
+            "count": 0,
+            "confidence": 0
+          }
+        },
+        "suggestedDuration": 0.6187336362420212
+      },
+      {
+        "assetId": "media-9ec5731f0b6f0d9dcd3a8609",
+        "peakTime": 0,
+        "sourceDuration": 5,
+        "brightness": 0.2415690813362382,
+        "flashiness": 0.0067107333511702266,
+        "color": {
+          "r": 0.2121028125756476,
+          "g": 0.22841983629871704,
+          "b": 0.2717982933914306
+        },
+        "visualSignature": {
+          "sampleCount": 20,
+          "brightness": 0.2283769063180828,
+          "sharpness": 0.0860815731095679,
+          "contrast": 0.4526878788461576,
+          "motion": 0.005951929158760277,
+          "color": {
+            "r": 0.2121028125756476,
+            "g": 0.22841983629871704,
+            "b": 0.2717982933914306
+          },
+          "histogram": [
+            0.06097608041018247,
+            0.11044560149312019,
+            0.6231288611888885,
+            0.07588734626770019,
+            0.0005979938316158951,
+            0.0005594135844148695,
+            0.0004436728428117931,
+            0.00028935185400769114,
+            0.00027970679220743475,
+            0.00022183642140589656,
+            0.000414737657411024,
+            0.000414737657411024,
+            0.07930169738829136,
+            0.046894289925694464,
+            0.0001350308652035892,
+            0.000009645061800256371
+          ],
+          "subject": {
+            "frames": 5,
+            "presence": 0,
+            "coverage": 0,
+            "centerX": 0.5,
+            "centerY": 0.5,
+            "count": 0,
+            "confidence": 0
+          }
+        },
+        "suggestedDuration": 0.6171814919925085
+      },
+      {
+        "assetId": "media-9ae57588f7e543fd7b505c60",
+        "peakTime": 0.25,
+        "sourceDuration": 5,
+        "brightness": 0.6962304829339143,
+        "flashiness": 0.0014134146186089698,
+        "color": {
+          "r": 0.6711335406076012,
+          "g": 0.7038425925925926,
+          "b": 0.6554628116678769
+        },
+        "visualSignature": {
+          "sampleCount": 20,
+          "brightness": 0.6948556266642459,
+          "sharpness": 0.120947868441358,
+          "contrast": 0.23487584232926317,
+          "motion": 0.009495479406183725,
+          "color": {
+            "r": 0.6711335406076012,
+            "g": 0.7038425925925926,
+            "b": 0.6554628116678769
+          },
+          "histogram": [
+            0,
+            0.000019290123600512742,
+            0.00004822530900128186,
+            0.000028935185400769115,
+            0.0007040895114187151,
+            0.03425925932824612,
+            0.04594907443970442,
+            0.039303626865148544,
+            0.013667052565142512,
+            0.02351466044783592,
+            0.05928819440305233,
+            0.7223765432834626,
+            0.0467785494402051,
+            0.0020254629431292414,
+            0.0025270061334595082,
+            0.009510030876845122
+          ],
+          "subject": {
+            "frames": 5,
+            "presence": 0,
+            "coverage": 0,
+            "centerX": 0.5,
+            "centerY": 0.5,
+            "count": 0,
+            "confidence": 0
+          }
+        },
+        "suggestedDuration": 0.6194063658601843
+      }
+    ]
+  },
+  "savedAt": 1790731202680
+}

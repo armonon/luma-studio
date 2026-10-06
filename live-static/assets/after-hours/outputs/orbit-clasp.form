@@ -1,0 +1,981 @@
+{
+  "kind": "form-studio-project",
+  "version": 2,
+  "projectId": "project-05t7yq3",
+  "revisionId": "revision-10zvvln",
+  "name": "Form Project",
+  "createdAt": 1790721659922,
+  "updatedAt": 1790721977660,
+  "common": {
+    "canonicalUnits": "mm",
+    "displayUnits": "mm",
+    "upAxis": "Y",
+    "handedness": "right"
+  },
+  "workspaces": {
+    "cad": {
+      "schema": "form-studio/cad@14",
+      "objectIds": [
+        "hardware-mun9g0bn-pfmfu-frame",
+        "hardware-mun9g0bn-pfmfu-opening",
+        "hardware-mun9g0bn-pfmfu-bar",
+        "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-frame",
+        "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-opening",
+        "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-bar",
+        "hardware-mun9g0bn-pfmfu-cut-opening",
+        "hardware-mun9g0bn-pfmfu-fuse-bar",
+        "hardware-mun9g0bn-pfmfu-finish",
+        "hardware-mun9g0bn-pfmfu-component"
+      ],
+      "data": {
+        "version": 14,
+        "roomId": "form-xaxjb4i6r63969ifwi76hcdp",
+        "meshFeatures": [],
+        "sceneNodes": [],
+        "animation": {
+          "actions": [],
+          "tracks": [],
+          "fps": 24,
+          "range": {
+            "start": 0,
+            "end": 48
+          },
+          "speed": 1,
+          "loop": "loop",
+          "playhead": 0,
+          "playing": false
+        },
+        "geometryGraph": {
+          "nodes": [
+            {
+              "id": "box",
+              "kind": "box",
+              "params": {
+                "width": 20,
+                "height": 20,
+                "depth": 20
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "bar",
+              "kind": "cylinder",
+              "params": {
+                "radius": 6,
+                "height": 60,
+                "segments": 16
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 120
+              }
+            },
+            {
+              "id": "cut",
+              "kind": "boolean",
+              "params": {},
+              "options": {
+                "operation": "difference"
+              },
+              "position": {
+                "x": 220,
+                "y": 40
+              }
+            },
+            {
+              "id": "out",
+              "kind": "output",
+              "params": {},
+              "options": {},
+              "position": {
+                "x": 440,
+                "y": 40
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "box",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "a"
+              }
+            },
+            {
+              "from": {
+                "node": "bar",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "b"
+              }
+            },
+            {
+              "from": {
+                "node": "cut",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "out",
+                "socket": "geometry"
+              }
+            }
+          ],
+          "output": "out"
+        },
+        "materialGraph": {
+          "nodes": [
+            {
+              "id": "uv",
+              "kind": "coordinates",
+              "params": {
+                "scale": 1
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "check",
+              "kind": "checker",
+              "params": {
+                "u": 0,
+                "v": 0,
+                "squares": 8
+              },
+              "options": {},
+              "position": {
+                "x": 180,
+                "y": 0
+              }
+            },
+            {
+              "id": "colour",
+              "kind": "ramp",
+              "params": {
+                "value": 0,
+                "from": [
+                  0.05,
+                  0.05,
+                  0.06
+                ],
+                "to": [
+                  0.85,
+                  0.95,
+                  0.55
+                ]
+              },
+              "options": {},
+              "position": {
+                "x": 360,
+                "y": 0
+              }
+            },
+            {
+              "id": "surface",
+              "kind": "output",
+              "params": {
+                "base color": [
+                  0.8,
+                  0.8,
+                  0.8
+                ],
+                "roughness": 0.5,
+                "metalness": 0,
+                "bump": 0
+              },
+              "options": {},
+              "position": {
+                "x": 540,
+                "y": 0
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "uv",
+                "socket": "u"
+              },
+              "to": {
+                "node": "check",
+                "socket": "u"
+              }
+            },
+            {
+              "from": {
+                "node": "uv",
+                "socket": "v"
+              },
+              "to": {
+                "node": "check",
+                "socket": "v"
+              }
+            },
+            {
+              "from": {
+                "node": "check",
+                "socket": "value"
+              },
+              "to": {
+                "node": "colour",
+                "socket": "value"
+              }
+            },
+            {
+              "from": {
+                "node": "colour",
+                "socket": "color"
+              },
+              "to": {
+                "node": "surface",
+                "socket": "base color"
+              }
+            }
+          ],
+          "output": "surface"
+        },
+        "viewport": {
+          "shading": "shaded",
+          "projection": null
+        },
+        "canonicalUnits": "mm",
+        "displayUnits": "mm",
+        "entities": [
+          {
+            "id": "hardware-mun9g0bn-pfmfu-frame",
+            "type": "rectangle",
+            "a": {
+              "x": -27.5,
+              "y": -19
+            },
+            "b": {
+              "x": 36.5,
+              "y": 19
+            },
+            "rotation": 0,
+            "layer": "hardware",
+            "constraints": [
+              "Hardware recipe",
+              "Parametric",
+              "Exact placement"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-opening",
+            "type": "rectangle",
+            "a": {
+              "x": -23.5,
+              "y": -15
+            },
+            "b": {
+              "x": 23.5,
+              "y": 15
+            },
+            "rotation": 0,
+            "layer": "holes",
+            "constraints": [
+              "Hardware recipe",
+              "Parametric",
+              "Exact placement"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-bar",
+            "type": "rectangle",
+            "a": {
+              "x": -2,
+              "y": -16
+            },
+            "b": {
+              "x": 2,
+              "y": 16
+            },
+            "rotation": 0,
+            "layer": "hardware",
+            "constraints": [
+              "Hardware recipe",
+              "Parametric",
+              "Exact placement"
+            ],
+            "sketchPlaneId": "world-xy"
+          }
+        ],
+        "features": [
+          {
+            "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-frame",
+            "type": "Extrude",
+            "value": 4,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-frame"
+            ]
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-opening",
+            "type": "Extrude",
+            "value": 4,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-opening"
+            ]
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-bar",
+            "type": "Extrude",
+            "value": 4,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-bar"
+            ]
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-cut-opening",
+            "type": "Cut",
+            "value": 0,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-frame",
+              "hardware-mun9g0bn-pfmfu-opening"
+            ]
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-fuse-bar",
+            "type": "Fuse",
+            "value": 0,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-frame",
+              "hardware-mun9g0bn-pfmfu-bar"
+            ]
+          },
+          {
+            "id": "hardware-mun9g0bn-pfmfu-finish",
+            "type": "Fillet",
+            "value": 1.4,
+            "unit": "mm",
+            "enabled": false,
+            "sourceEntityIds": [
+              "hardware-mun9g0bn-pfmfu-frame"
+            ]
+          }
+        ],
+        "layers": [
+          {
+            "id": "model",
+            "name": "Model",
+            "color": "#d7ff78",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "holes",
+            "name": "Holes",
+            "color": "#67a8ff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "construction",
+            "name": "Construction",
+            "color": "#e5a95d",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "domain-engineering",
+            "name": "Engineering objects",
+            "color": "#b7e45b",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "domain-jewelry",
+            "name": "Precious metal",
+            "color": "#edc64d",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "gems",
+            "name": "Calibrated gems",
+            "color": "#dcefff",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "hardware",
+            "name": "Smart hardware",
+            "color": "#b7e45b",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "geometricConstraints": [],
+        "parameters": [
+          {
+            "id": "parameter-width",
+            "name": "width",
+            "expression": "24 in",
+            "value": 609.6
+          },
+          {
+            "id": "parameter-wall",
+            "name": "wall",
+            "expression": "0.125 in",
+            "value": 3.175
+          }
+        ],
+        "gdt": [],
+        "components": [
+          {
+            "id": "hardware-mun9g0bn-pfmfu-component",
+            "name": "Buckle",
+            "entities": [
+              {
+                "id": "hardware-mun9g0bn-pfmfu-frame",
+                "type": "rectangle",
+                "a": {
+                  "x": -27.5,
+                  "y": -19
+                },
+                "b": {
+                  "x": 27.5,
+                  "y": 19
+                },
+                "rotation": 0,
+                "layer": "hardware",
+                "constraints": [
+                  "Hardware recipe",
+                  "Parametric",
+                  "Exact placement"
+                ],
+                "sketchPlaneId": "world-xy"
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-opening",
+                "type": "rectangle",
+                "a": {
+                  "x": -23.5,
+                  "y": -15
+                },
+                "b": {
+                  "x": 23.5,
+                  "y": 15
+                },
+                "rotation": 0,
+                "layer": "holes",
+                "constraints": [
+                  "Hardware recipe",
+                  "Parametric",
+                  "Exact placement"
+                ],
+                "sketchPlaneId": "world-xy"
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-bar",
+                "type": "rectangle",
+                "a": {
+                  "x": -2,
+                  "y": -16
+                },
+                "b": {
+                  "x": 2,
+                  "y": 16
+                },
+                "rotation": 0,
+                "layer": "hardware",
+                "constraints": [
+                  "Hardware recipe",
+                  "Parametric",
+                  "Exact placement"
+                ],
+                "sketchPlaneId": "world-xy"
+              }
+            ],
+            "features": [
+              {
+                "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-frame",
+                "type": "Extrude",
+                "value": 4,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-frame"
+                ]
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-opening",
+                "type": "Extrude",
+                "value": 4,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-opening"
+                ]
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-extrude-hardware-mun9g0bn-pfmfu-bar",
+                "type": "Extrude",
+                "value": 4,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-bar"
+                ]
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-cut-opening",
+                "type": "Cut",
+                "value": 0,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-frame",
+                  "hardware-mun9g0bn-pfmfu-opening"
+                ]
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-fuse-bar",
+                "type": "Fuse",
+                "value": 0,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-frame",
+                  "hardware-mun9g0bn-pfmfu-bar"
+                ]
+              },
+              {
+                "id": "hardware-mun9g0bn-pfmfu-finish",
+                "type": "Fillet",
+                "value": 1.4,
+                "unit": "mm",
+                "enabled": true,
+                "sourceEntityIds": [
+                  "hardware-mun9g0bn-pfmfu-frame"
+                ]
+              }
+            ],
+            "hardware": {
+              "kind": "buckle",
+              "mode": "manufacturing",
+              "matePoints": [
+                {
+                  "name": "Mount",
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "axis": [
+                    0,
+                    0,
+                    1
+                  ]
+                }
+              ],
+              "physics": {
+                "collider": "compound",
+                "joint": "fixed"
+              }
+            }
+          }
+        ],
+        "assemblyInstances": [
+          {
+            "id": "hardware-mun9g0bn-pfmfu-instance",
+            "name": "Buckle 1",
+            "componentId": "hardware-mun9g0bn-pfmfu-component",
+            "entityIds": [
+              "hardware-mun9g0bn-pfmfu-frame",
+              "hardware-mun9g0bn-pfmfu-opening",
+              "hardware-mun9g0bn-pfmfu-bar"
+            ],
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0
+            ],
+            "fixed": false
+          }
+        ],
+        "assemblyMates": [],
+        "linkedGroups": [],
+        "importedBodies": [],
+        "volumes": [],
+        "drafting": {
+          "schema": "form-studio-drafting-v1",
+          "texts": [],
+          "dimensions": [],
+          "leaders": [],
+          "hatches": [],
+          "blockDefinitions": [],
+          "blockInstances": [],
+          "layouts": [
+            {
+              "id": "model",
+              "name": "Model",
+              "paperWidthMm": 420,
+              "paperHeightMm": 297,
+              "marginMm": 5,
+              "scale": "1:1",
+              "orientation": "landscape",
+              "modelSpace": true
+            }
+          ],
+          "activeLayoutId": "model"
+        },
+        "sketchPlanes": [
+          {
+            "id": "world-xy",
+            "name": "World XY",
+            "origin": [
+              0,
+              0,
+              0
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "rollbackIndex": 6,
+        "material": "18k Yellow Gold",
+        "density": 15.6,
+        "drawingScale": "1:1",
+        "drawingRevision": "A",
+        "configurations": [],
+        "activeConfigurationId": null,
+        "bimNodes": [
+          {
+            "id": "bim-project",
+            "kind": "project",
+            "name": "Form BIM Project",
+            "parentId": null,
+            "phase": "existing",
+            "properties": {
+              "schema": "IFC4",
+              "units": "mm"
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-site",
+            "kind": "site",
+            "name": "Site",
+            "parentId": "bim-project",
+            "phase": "existing",
+            "properties": {
+              "elevation": 0
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-building",
+            "kind": "building",
+            "name": "Building",
+            "parentId": "bim-site",
+            "phase": "new",
+            "properties": {
+              "storeys": 1,
+              "grossFloorArea": 0
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-storey-1",
+            "kind": "storey",
+            "name": "Level 01",
+            "parentId": "bim-building",
+            "phase": "new",
+            "properties": {
+              "elevation": 0,
+              "height": 3000,
+              "levelId": "bim-storey-1"
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-hardware-mun9g0bn-pfmfu-frame",
+            "kind": "element",
+            "name": "Element 1",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -27.5,
+              "yMin": -19,
+              "xMax": 36.5,
+              "yMax": 19,
+              "width": 64,
+              "depth": 38,
+              "footprintArea": 2432,
+              "area": 2432,
+              "layer": "hardware",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 729600,
+              "baseElevation": 0,
+              "topElevation": 300
+            },
+            "entityIds": [
+              "hardware-mun9g0bn-pfmfu-frame"
+            ]
+          },
+          {
+            "id": "bim-hardware-mun9g0bn-pfmfu-bar",
+            "kind": "element",
+            "name": "Element 3",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -2,
+              "yMin": -16,
+              "xMax": 2,
+              "yMax": 16,
+              "width": 4,
+              "depth": 32,
+              "footprintArea": 128,
+              "area": 128,
+              "layer": "hardware",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 38400,
+              "baseElevation": 0,
+              "topElevation": 300
+            },
+            "entityIds": [
+              "hardware-mun9g0bn-pfmfu-bar"
+            ]
+          },
+          {
+            "id": "bim-hardware-mun9g0bn-pfmfu-opening",
+            "kind": "opening",
+            "name": "Opening 2",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -23.5,
+              "yMin": -15,
+              "xMax": 23.5,
+              "yMax": 15,
+              "width": 47,
+              "depth": 30,
+              "footprintArea": 1410,
+              "area": 1410,
+              "layer": "holes",
+              "material": "Unassigned",
+              "height": 30,
+              "sill": 0,
+              "levelId": "bim-storey-1",
+              "baseElevation": 0,
+              "topElevation": 30,
+              "hostId": "bim-storey-1"
+            },
+            "entityIds": [
+              "hardware-mun9g0bn-pfmfu-opening"
+            ]
+          }
+        ],
+        "recipeGraphs": [
+          {
+            "id": "recipe-parametric-disc",
+            "name": "Parametric Mounting Disc",
+            "version": 1,
+            "author": "Form Studio",
+            "shared": true,
+            "nodes": [
+              {
+                "id": "diameter",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 40
+                }
+              },
+              {
+                "id": "depth",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 6
+                }
+              },
+              {
+                "id": "profile",
+                "kind": "circle",
+                "inputs": [
+                  "diameter"
+                ],
+                "values": {}
+              },
+              {
+                "id": "solid",
+                "kind": "extrude",
+                "inputs": [
+                  "profile",
+                  "depth"
+                ],
+                "values": {}
+              },
+              {
+                "id": "result",
+                "kind": "output",
+                "inputs": [
+                  "solid"
+                ],
+                "values": {}
+              }
+            ]
+          }
+        ],
+        "revisions": [],
+        "marketplace": [
+          {
+            "id": "market-gear",
+            "name": "Precision Gear Family",
+            "category": "Engineering",
+            "version": 3,
+            "downloads": 2840,
+            "rating": 4.9
+          },
+          {
+            "id": "market-stair",
+            "name": "Code-Aware Stair",
+            "category": "Architecture",
+            "version": 2,
+            "downloads": 1922,
+            "rating": 4.8
+          },
+          {
+            "id": "market-disc",
+            "name": "Parametric Mounting Disc",
+            "category": "Recipe Graph",
+            "version": 1,
+            "downloads": 906,
+            "rating": 4.7,
+            "graph": {
+              "id": "recipe-parametric-disc",
+              "name": "Parametric Mounting Disc",
+              "version": 1,
+              "author": "Form Studio",
+              "shared": true,
+              "nodes": [
+                {
+                  "id": "diameter",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 40
+                  }
+                },
+                {
+                  "id": "depth",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 6
+                  }
+                },
+                {
+                  "id": "profile",
+                  "kind": "circle",
+                  "inputs": [
+                    "diameter"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "solid",
+                  "kind": "extrude",
+                  "inputs": [
+                    "profile",
+                    "depth"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "result",
+                  "kind": "output",
+                  "inputs": [
+                    "solid"
+                  ],
+                  "values": {}
+                }
+              ]
+            }
+          }
+        ],
+        "appearance": {
+          "preset": "steel",
+          "baseColor": "#8e989c",
+          "useLayerColor": false,
+          "metalness": 0.96,
+          "roughness": 0.2,
+          "clearcoat": 0.14,
+          "clearcoatRoughness": 0.18,
+          "transmission": 0,
+          "ior": 1.45,
+          "attenuationDistance": 500,
+          "volumeScatter": 0,
+          "volumeVariation": 0,
+          "opacity": 1,
+          "environment": "studio",
+          "exposure": 1,
+          "groundShadow": true
+        },
+        "kernel": "Open CASCADE B-Rep",
+        "checksum": "fnv1a128-368187a916ed87aac327d70af357860b"
+      },
+      "coordinateSystem": {
+        "units": "mm",
+        "upAxis": "Z",
+        "handedness": "right",
+        "toCommonAxes": [
+          "+X",
+          "-Z",
+          "+Y"
+        ]
+      },
+      "updatedAt": 1790721977660
+    }
+  },
+  "relationships": [],
+  "assets": [],
+  "checksum": "fnv1a128-d219ba601fb10a8b756f6f59e82dcdee"
+}

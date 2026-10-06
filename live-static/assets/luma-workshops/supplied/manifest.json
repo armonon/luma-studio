@@ -1,0 +1,44 @@
+[
+  {
+    "id": "milk-room-shirts",
+    "file": "milk-room-shirts.png",
+    "sourceFilename": "Screenshot 2026-03-11 at 10.08.09\u202fAM.png",
+    "sha256": "0bb6357129c0f07c8efa601bd8d42534dab4f4c2e9440b85916d61b794d3f8f6"
+  },
+  {
+    "id": "travel-photo-grid",
+    "file": "travel-photo-grid.png",
+    "sourceFilename": "Screenshot 2026-03-18 at 10.32.59\u202fPM.png",
+    "sha256": "669911969b4463a0df41627e7a0eafaccc736b69a2e633a8230a9b1c64d62174"
+  },
+  {
+    "id": "yellow-fabric",
+    "file": "yellow-fabric.png",
+    "sourceFilename": "Screenshot 2026-03-24 at 1.07.11\u202fAM.png",
+    "sha256": "042aac43c4f74c0b5fa89a63b0c3f7726d4985496d11779dbfab985826633028"
+  },
+  {
+    "id": "fashion-model",
+    "file": "fashion-model.png",
+    "sourceFilename": "Screenshot 2026-05-26 at 12.26.51\u202fAM.png",
+    "sha256": "70d4f2d66a9d378201f9c871fa5cef281c0b77405bfa564efb3fdd8cd5477c10"
+  },
+  {
+    "id": "cinema-board-1",
+    "file": "cinema-board-1.png",
+    "sourceFilename": "Screenshot 2026-06-10 at 2.09.00\u202fAM.png",
+    "sha256": "dc4e903fea484b964900e77ec6393d136d7be15f442d34c66f468ca55147680e"
+  },
+  {
+    "id": "blue-pink-collage",
+    "file": "blue-pink-collage.png",
+    "sourceFilename": "Screenshot 2026-06-10 at 2.11.14\u202fAM.png",
+    "sha256": "1a70a75fb65e44fa9d05432024ef1efecb7f68ced569f4d927aea1135f776d59"
+  },
+  {
+    "id": "cinema-board-2",
+    "file": "cinema-board-2.png",
+    "sourceFilename": "Screenshot 2026-06-11 at 11.35.33\u202fPM.png",
+    "sha256": "22fa30deac10a1e6dc7321f69f3732d333614470bfe63d206e487e33812b667b"
+  }
+]

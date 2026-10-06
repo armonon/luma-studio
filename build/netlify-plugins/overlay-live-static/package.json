@@ -1,0 +1,5 @@
+{
+  "name": "overlay-live-static",
+  "private": true,
+  "main": "index.cjs"
+}

@@ -1,0 +1,269 @@
+{
+  "revision": "e44c4b011a820c2cbe2fd2cfa8052037d7edb571",
+  "files": [
+    {
+      "file": "Lato-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-Regular.ttf",
+      "sha256": "d636e4683231f931eda222d588e944d082bfd3bdba02f928bee461c0f185b251",
+      "bytes": 656568
+    },
+    {
+      "file": "Lato-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-Bold.ttf",
+      "sha256": "8a0aace75d33794eece4b28187bfc1df0bbd2888b5d8a56e01788c8d65d16be1",
+      "bytes": 656544
+    },
+    {
+      "file": "Lato-Italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-Italic.ttf",
+      "sha256": "e399c44efe1387100531d26c7e4800c5d12251b890d6654a3098c7c679cb1786",
+      "bytes": 722900
+    },
+    {
+      "file": "Lato-BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-BoldItalic.ttf",
+      "sha256": "62c1b7f0d2e74b45960154c3520efc337b553db0961bfdc950d5618334596cc8",
+      "bytes": 698364
+    },
+    {
+      "file": "Lato-Light.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-Light.ttf",
+      "sha256": "cf2a774503baf418d584f49967bd160e1e03f087c13b25602f28024ec7788f08",
+      "bytes": 643884
+    },
+    {
+      "file": "Lato-Black.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/Lato-Black.ttf",
+      "sha256": "808c62839c62dbce7de689af7603666fc7f8b81e0df537d8a5212c87580d4337",
+      "bytes": 664748
+    },
+    {
+      "file": "lato-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lato/OFL.txt",
+      "sha256": "74ba064d03f1f1c4a952da936c3eb71866c34404916734de3cae73b34357e59e",
+      "bytes": 4407
+    },
+    {
+      "file": "Arvo-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/arvo/Arvo-Regular.ttf",
+      "sha256": "f41bd41471ec2db7140351bdde614da5341524503598ff7fe79f3c89c13b605e",
+      "bytes": 38780
+    },
+    {
+      "file": "Arvo-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/arvo/Arvo-Bold.ttf",
+      "sha256": "6239b2edee762db0ab99343137c9ba15ae81fc843da2e76a0a395781748cc21f",
+      "bytes": 37652
+    },
+    {
+      "file": "Arvo-Italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/arvo/Arvo-Italic.ttf",
+      "sha256": "a2eb63a0771b8d13d8e54bf650a02aef813eeaa2e10f6298358e6b15d26c6686",
+      "bytes": 35156
+    },
+    {
+      "file": "Arvo-BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/arvo/Arvo-BoldItalic.ttf",
+      "sha256": "fc29e57f5558873e41ca9ff9a9c77521565f12c6972756d0fbcc592e1f0f4edb",
+      "bytes": 36872
+    },
+    {
+      "file": "arvo-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/arvo/OFL.txt",
+      "sha256": "359671bf16c00cae69cb66d041296b2adc7a4becd73a463cb8c5e101d97c7986",
+      "bytes": 4393
+    },
+    {
+      "file": "Abel-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/abel/Abel-Regular.ttf",
+      "sha256": "8809dcad25318225052f88333e208c5aad4adcb7b2c934c135735ec19aa410b4",
+      "bytes": 35220
+    },
+    {
+      "file": "abel-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/abel/OFL.txt",
+      "sha256": "4f4bc3806a1e55789c6ef75ca5fc628297b05292f74966474dc0d40324abc609",
+      "bytes": 4418
+    },
+    {
+      "file": "Anton-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/anton/Anton-Regular.ttf",
+      "sha256": "a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab",
+      "bytes": 170812
+    },
+    {
+      "file": "anton-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/anton/OFL.txt",
+      "sha256": "ee67e6ee22790b7929f1a3769ca2801d565c64b5a9096942c1adf5596de9c9e4",
+      "bytes": 4484
+    },
+    {
+      "file": "Lobster-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lobster/Lobster-Regular.ttf",
+      "sha256": "d6568e697fd50cedc0be04d8aae4127fe95add607e7bff954ca88604be80c205",
+      "bytes": 406076
+    },
+    {
+      "file": "lobster-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/lobster/OFL.txt",
+      "sha256": "88aece7d90f2bb7049719f11619a560af22af3451af141f12aa4f46bb157a99b",
+      "bytes": 4430
+    },
+    {
+      "file": "Pacifico-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/pacifico/Pacifico-Regular.ttf",
+      "sha256": "5b6c0d5334a7bf77dea52b975c5a0c408878c0f7115ed5b6fb151f634b7bf701",
+      "bytes": 329380
+    },
+    {
+      "file": "pacifico-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/pacifico/OFL.txt",
+      "sha256": "a47e5daeda73568969395c656823102678f2eefb0d7d7ecb47aac4cc17e42204",
+      "bytes": 4389
+    },
+    {
+      "file": "SpaceMono-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/spacemono/SpaceMono-Regular.ttf",
+      "sha256": "95837e182baeeada83368f7748db28357f0a1b75c6b84ff7065b5edf933c8e18",
+      "bytes": 99356
+    },
+    {
+      "file": "SpaceMono-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/spacemono/SpaceMono-Bold.ttf",
+      "sha256": "405e73d41afb7e5906efce206a326af5c956f38e255f35421c260e861e599c59",
+      "bytes": 98232
+    },
+    {
+      "file": "SpaceMono-Italic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/spacemono/SpaceMono-Italic.ttf",
+      "sha256": "eca264c8690a91fe837d19a6badf2d88961610c4c8aafcb196526192a9f258c5",
+      "bytes": 121396
+    },
+    {
+      "file": "SpaceMono-BoldItalic.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/spacemono/SpaceMono-BoldItalic.ttf",
+      "sha256": "cdcc95eddee312879a9728494e595f591cb159f3f276d79bc58673dec7e57138",
+      "bytes": 111904
+    },
+    {
+      "file": "spacemono-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/spacemono/OFL.txt",
+      "sha256": "8e4ee42b2553e1e01504e61cb0d46d148cd8c9e5eacaa3622a7df2d4f2955b9f",
+      "bytes": 4392
+    },
+    {
+      "file": "Bangers-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/bangers/Bangers-Regular.ttf",
+      "sha256": "4160a7311de9342674cce9160cde9fcbb30f48190397d86ff1b70b455af65824",
+      "bytes": 93148
+    },
+    {
+      "file": "bangers-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/bangers/OFL.txt",
+      "sha256": "630dd5a307c0657b094d324e069b390edf90182fe5003639e06c02a0e5769af7",
+      "bytes": 4479
+    },
+    {
+      "file": "Righteous-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/righteous/Righteous-Regular.ttf",
+      "sha256": "2ffb3fe5c27d7e6571210b800448c4e234e651b46c6b4426c1bb567e5341348a",
+      "bytes": 43104
+    },
+    {
+      "file": "righteous-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/righteous/OFL.txt",
+      "sha256": "1c5bc055869d5e9151ec7774082727db720ec4293c65be67f91a4bdcaeb02998",
+      "bytes": 4432
+    },
+    {
+      "file": "Rajdhani-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/Rajdhani-Regular.ttf",
+      "sha256": "6e1fc228a8318251a6e569502ec57bac1e4656c582f92f59ccecc4688e039b98",
+      "bytes": 377860
+    },
+    {
+      "file": "Rajdhani-Medium.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/Rajdhani-Medium.ttf",
+      "sha256": "12ff7dcfe4c206e3875ac53b1762eab57de6a2fa7f5a86c26b97b88d6591eac2",
+      "bytes": 384348
+    },
+    {
+      "file": "Rajdhani-SemiBold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/Rajdhani-SemiBold.ttf",
+      "sha256": "94bbd25a18ca665999feb05a537de9fd2b860dcfb78bbe9ca00270825bf235da",
+      "bytes": 390340
+    },
+    {
+      "file": "Rajdhani-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/Rajdhani-Bold.ttf",
+      "sha256": "691470dd3286a14e9677940d0bf75796179841ba5215cbda1a2c8910a3226afd",
+      "bytes": 400680
+    },
+    {
+      "file": "Rajdhani-Light.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/Rajdhani-Light.ttf",
+      "sha256": "140e9f13af69538161c5780fcf7f81594c069aea887e7bffd417ae1c641213c3",
+      "bytes": 383928
+    },
+    {
+      "file": "rajdhani-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/rajdhani/OFL.txt",
+      "sha256": "f62ef357d3a1c3d27edd35a6e1ba350e8a8d13499797964eeadefbf0b3b15d1f",
+      "bytes": 4373
+    },
+    {
+      "file": "AmaticSC-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/amaticsc/AmaticSC-Regular.ttf",
+      "sha256": "513a76f96d39a5366bd27c258674aaea35ee51c42b8f3060387f74649ee8c8aa",
+      "bytes": 151624
+    },
+    {
+      "file": "AmaticSC-Bold.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/amaticsc/AmaticSC-Bold.ttf",
+      "sha256": "d367beadee66efbb657d24d3d8f30f3b60633e9d5c8ded7385541cf775cabb4d",
+      "bytes": 156180
+    },
+    {
+      "file": "amaticsc-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/amaticsc/OFL.txt",
+      "sha256": "301f77908df2b00141b4dcea50cc1a586c3afcee78843bd811088e8263623f9d",
+      "bytes": 4390
+    },
+    {
+      "file": "GreatVibes-Regular.ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/greatvibes/GreatVibes-Regular.ttf",
+      "sha256": "8d509802186f1b51572531ecf313e8098f9a5bfdfaca93f0c9b34467f9982d15",
+      "bytes": 457588
+    },
+    {
+      "file": "greatvibes-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/greatvibes/OFL.txt",
+      "sha256": "61093a21f5e63dedf54222b3c09997e54c0fe43e3851d21386e02ddcbc246d49",
+      "bytes": 4399
+    },
+    {
+      "file": "NotoSansArabic[wdth,wght].ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/notosansarabic/NotoSansArabic[wdth,wght].ttf",
+      "sha256": "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e",
+      "bytes": 844676
+    },
+    {
+      "file": "notosansarabic-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/notosansarabic/OFL.txt",
+      "sha256": "07fc70bfeb985cc1a87a8587d0a0c80bab11c86c9dc3fd95b6f0cb332f983e96",
+      "bytes": 4382
+    },
+    {
+      "file": "NotoSansHebrew[wdth,wght].ttf",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/notosanshebrew/NotoSansHebrew[wdth,wght].ttf",
+      "sha256": "7ef36a2c3593758cdb622e1bdef4f84523e92fbc3ccc667438dd80ff54c2de88",
+      "bytes": 112640
+    },
+    {
+      "file": "notosanshebrew-OFL.txt",
+      "source": "https://raw.githubusercontent.com/google/fonts/e44c4b011a820c2cbe2fd2cfa8052037d7edb571/ofl/notosanshebrew/OFL.txt",
+      "sha256": "9b9fe028b5ba74d231659a1bbaf0ed09b11e759d1ca6a070999e16d151616b47",
+      "bytes": 4382
+    }
+  ]
+}

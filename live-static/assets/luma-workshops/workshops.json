@@ -1,0 +1,114 @@
+[
+  {
+    "id": "print",
+    "number": "03",
+    "title": "Build a signature print.",
+    "description": "Capture a motif from the yellow fabric as your own brush, paint a repeat and try three fabric colorways.",
+    "skills": "Captured brushes / repeat preview / colorways",
+    "time": "8\u201310 min"
+  },
+  {
+    "id": "drop",
+    "number": "01",
+    "title": "Design your next drop.",
+    "description": "Remix the Milk Room tee photograph with a fabric motif, new ink and your own editable lettering.",
+    "skills": "Ink color / live type / fabric blending / layer comps",
+    "time": "6\u20138 min"
+  },
+  {
+    "id": "weave",
+    "number": "TYPE",
+    "title": "Make type weave through an image.",
+    "description": "Write behind the supplied model, reveal a letter through the subject mask and edit curved supporting type.",
+    "skills": "Editable type / layer depth / masks / type on paths",
+    "time": "5\u20137 min"
+  },
+  {
+    "id": "identity",
+    "number": "WORLD",
+    "title": "Build an album\u2019s visual identity.",
+    "description": "Turn the fabric motif into a cover, release poster and vertical story. Export three real artboard regions.",
+    "skills": "Shared artwork / independent layouts / shapes / artboard export",
+    "time": "6\u20138 min"
+  },
+  {
+    "id": "grade",
+    "number": "COLOR",
+    "title": "One photograph, three feelings.",
+    "description": "Paint warmth into your supplied photograph, shape Curves and explore HSL and a graphic Gradient Map.",
+    "skills": "Curves / HSL / Gradient Map / adjustment masks",
+    "time": "6\u20139 min"
+  },
+  {
+    "id": "rescue",
+    "number": "REPAIR",
+    "title": "Rescue a favorite photograph.",
+    "description": "Repair deliberately added practice distractions on a copy of your travel photograph, then brighten a selected area.",
+    "skills": "Spot healing / Remove / Clone / local light",
+    "time": "5\u20138 min"
+  },
+  {
+    "id": "stickers",
+    "number": "VECTOR",
+    "title": "Design a sticker and label collection.",
+    "description": "Build coordinated badges with your fabric motif, editable vector shapes, curved lettering and layer effects.",
+    "skills": "Vector badges / type on paths / layer effects / variations",
+    "time": "5\u20137 min"
+  },
+  {
+    "id": "poster",
+    "number": "06",
+    "title": "Make a maximalist poster.",
+    "description": "Build on the supplied blue-and-pink collage with editable lettering, linework and masked glow.",
+    "skills": "Layered collage / masks / vector shapes / live type",
+    "time": "6\u20139 min"
+  },
+  {
+    "id": "zine",
+    "number": "02",
+    "title": "Make a weekend photo zine.",
+    "description": "Turn the supplied travel and portrait photographs into an editorial story, then export a cover and a square social post.",
+    "skills": "Clipping frames / photo grading / typography / artboards",
+    "time": "6\u20138 min"
+  },
+  {
+    "id": "campaign",
+    "number": "04",
+    "title": "Create a fashion campaign.",
+    "description": "Start with a prepared cutout from the supplied outfit photograph. Choose a backdrop, treat the garment and give the image a voice.",
+    "skills": "Mask cleanup / local color / artwork placement",
+    "time": "7\u201310 min"
+  },
+  {
+    "id": "cinema",
+    "number": "05",
+    "title": "Build a cinematic scene.",
+    "description": "Combine the character and hooded scene from the two supplied boards. Paint in the atmosphere and compare moonlight with an amber grade.",
+    "skills": "Mask painting / compositing / Curves / mood studies",
+    "time": "7\u201310 min"
+  },
+  {
+    "id": "recolor",
+    "number": "START",
+    "title": "Select his shirt. Change its color.",
+    "description": "Tap to smart-select the man\u2019s T-shirt, refine its mask with Add and Remove, then recolor a copy. Keep his face, arms, printed lettering and surroundings intact.",
+    "skills": "Smart selection / mask preview / edge refinement / targeted Recolor",
+    "time": "4\u20136 min"
+  },
+  {
+    "id": "compose",
+    "number": "PART 1",
+    "title": "Eight layers. Your composition.",
+    "description": "Reorder the stack, move the imagery and edit the headline. Continue with this exact document in the next lesson.",
+    "skills": "8 editable layers / layer order / placement / live text",
+    "time": "5\u20137 min"
+  },
+  {
+    "id": "effects",
+    "number": "PART 2",
+    "title": "Same layers. A different feeling.",
+    "description": "Continue your composition and explore all 27 blend modes, 17 layer effects and 15 editable smart filters.",
+    "skills": "Blending / opacity / layer effects / smart filters",
+    "time": "6\u20139 min"
+  }
+]

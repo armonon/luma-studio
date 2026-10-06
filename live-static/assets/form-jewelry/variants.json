@@ -1,0 +1,92 @@
+[
+  {
+    "id": "orbit-28-1p8",
+    "diameter": 28,
+    "depth": 1.8,
+    "height": 31.08,
+    "volume": 778.9595286542216,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-28-2p4",
+    "diameter": 28,
+    "depth": 2.4,
+    "height": 31.08,
+    "volume": 1038.612704872295,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-28-3p2",
+    "diameter": 28,
+    "depth": 3.2,
+    "height": 31.08,
+    "volume": 1384.816939829727,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-32-1p8",
+    "diameter": 32,
+    "depth": 1.8,
+    "height": 35.52,
+    "volume": 1017.4165272218399,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-32-2p4",
+    "diameter": 32,
+    "depth": 2.4,
+    "height": 35.52,
+    "volume": 1356.55536962912,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-32-3p2",
+    "diameter": 32,
+    "depth": 3.2,
+    "height": 35.52,
+    "volume": 1808.7404928388266,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-36-1p8",
+    "diameter": 36,
+    "depth": 1.8,
+    "height": 39.96,
+    "volume": 1287.6677922651418,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-36-2p4",
+    "diameter": 36,
+    "depth": 2.4,
+    "height": 39.96,
+    "volume": 1716.890389686856,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  },
+  {
+    "id": "orbit-36-3p2",
+    "diameter": 36,
+    "depth": 3.2,
+    "height": 39.96,
+    "volume": 2289.1871862491407,
+    "faces": 6,
+    "solid": true,
+    "valid": true
+  }
+]

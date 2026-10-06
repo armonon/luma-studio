@@ -1,0 +1,128 @@
+[
+  {
+    "id": "drop",
+    "title": "Design your next drop",
+    "width": 1000,
+    "height": 1000,
+    "layers": 5,
+    "starterBytes": 934760,
+    "exampleBytes": 934971
+  },
+  {
+    "id": "zine",
+    "title": "Make a weekend photo zine",
+    "width": 1000,
+    "height": 1200,
+    "layers": 14,
+    "starterBytes": 908654,
+    "exampleBytes": 908668
+  },
+  {
+    "id": "print",
+    "title": "Build a signature print",
+    "width": 720,
+    "height": 720,
+    "layers": 7,
+    "starterBytes": 175862,
+    "exampleBytes": 227220
+  },
+  {
+    "id": "campaign",
+    "title": "Create a fashion campaign",
+    "width": 900,
+    "height": 1200,
+    "layers": 9,
+    "starterBytes": 498734,
+    "exampleBytes": 498733
+  },
+  {
+    "id": "cinema",
+    "title": "Build a cinematic scene",
+    "width": 1200,
+    "height": 800,
+    "layers": 9,
+    "starterBytes": 1479450,
+    "exampleBytes": 1479539
+  },
+  {
+    "id": "poster",
+    "title": "Make a maximalist poster",
+    "width": 1000,
+    "height": 1200,
+    "layers": 11,
+    "starterBytes": 1883408,
+    "exampleBytes": 1883413
+  },
+  {
+    "id": "recolor",
+    "title": "Select his shirt. Change its color",
+    "width": 528,
+    "height": 720,
+    "layers": 2,
+    "starterBytes": 398727,
+    "exampleBytes": 818485
+  },
+  {
+    "id": "compose",
+    "title": "Eight layers. Your composition",
+    "width": 900,
+    "height": 1100,
+    "layers": 8,
+    "starterBytes": 1924917,
+    "exampleBytes": 1925090
+  },
+  {
+    "id": "effects",
+    "title": "Same layers. A different feeling",
+    "width": 900,
+    "height": 1100,
+    "layers": 8,
+    "starterBytes": 1925097,
+    "exampleBytes": 1925250
+  },
+  {
+    "id": "weave",
+    "title": "Make type weave through an image",
+    "width": 900,
+    "height": 1200,
+    "layers": 5,
+    "starterBytes": 473671,
+    "exampleBytes": 473839
+  },
+  {
+    "id": "identity",
+    "title": "Build an album’s visual identity",
+    "width": 1800,
+    "height": 1200,
+    "layers": 13,
+    "starterBytes": 764790,
+    "exampleBytes": 764813
+  },
+  {
+    "id": "grade",
+    "title": "One photograph, three feelings",
+    "width": 800,
+    "height": 1000,
+    "layers": 6,
+    "starterBytes": 452857,
+    "exampleBytes": 453101
+  },
+  {
+    "id": "rescue",
+    "title": "Rescue a favorite photograph",
+    "width": 800,
+    "height": 840,
+    "layers": 4,
+    "starterBytes": 1424136,
+    "exampleBytes": 1421268
+  },
+  {
+    "id": "stickers",
+    "title": "Design a sticker and label collection",
+    "width": 900,
+    "height": 900,
+    "layers": 12,
+    "starterBytes": 123375,
+    "exampleBytes": 123475
+  }
+]

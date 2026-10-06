@@ -1,0 +1,4 @@
+.product-family{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1rem;margin:0 0 1.4rem!important;font:600 .875rem/1.5 system-ui,sans-serif!important;letter-spacing:0!important;text-transform:none!important;color:inherit}
+.product-family a{color:inherit;text-decoration:underline;text-underline-offset:4px}
+.product-family a:focus-visible{outline:2px solid currentColor;outline-offset:5px}
+.product-family span{font-weight:400}

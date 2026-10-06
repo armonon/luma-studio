@@ -1,0 +1,560 @@
+{
+  "title": "Luma effects review",
+  "scope": "Catalog and renderer review of the editor used by these workshops. The review describes implemented behavior; it is not a certification of every device or Photoshop interchange case.",
+  "recommendation": "Start with Multiply, Screen, Soft Light, Stroke, Drop Shadow and a small Gaussian Blur. Then introduce Blend If, filter order, and backdrop-dependent effects.",
+  "effects": [
+    {
+      "id": "bevel-emboss",
+      "label": "Bevel & Emboss",
+      "purpose": "Give lettering a raised or engraved edge.",
+      "exercise": "Try on the headline; adjust depth, lighting and highlight/shadow colors.",
+      "boundary": "A 2D layer style, separate from Luma’s editable 3D lettering.",
+      "controls": [
+        "blendMode",
+        "depth",
+        "angle",
+        "altitude",
+        "blur",
+        "bevelColors",
+        "globalLight",
+        "contour",
+        "bevelStyle",
+        "direction",
+        "glossContour"
+      ]
+    },
+    {
+      "id": "stroke",
+      "label": "Stroke",
+      "purpose": "Outline text or a cutout.",
+      "exercise": "A thin contrasting stroke keeps the headline readable over busy imagery.",
+      "boundary": "Inside, outside and center placement; color, gradient and pattern fills.",
+      "controls": [
+        "blendMode",
+        "width",
+        "position",
+        "fillType"
+      ]
+    },
+    {
+      "id": "inner-shadow",
+      "label": "Inner Shadow",
+      "purpose": "Shade the inside edge of a layer.",
+      "exercise": "Use a small offset for inset lettering or a paper-cut impression.",
+      "boundary": "Works from the layer’s silhouette; it does not infer scene geometry.",
+      "controls": [
+        "blendMode",
+        "offset",
+        "blur",
+        "globalLight",
+        "spread",
+        "noise",
+        "contour"
+      ]
+    },
+    {
+      "id": "inner-glow",
+      "label": "Inner Glow",
+      "purpose": "Add light inside a silhouette.",
+      "exercise": "Try a restrained highlight on the character or title.",
+      "boundary": "Supports edge/center source and softer/precise falloff.",
+      "controls": [
+        "blendMode",
+        "blur",
+        "glowSource",
+        "technique",
+        "range",
+        "spread",
+        "noise",
+        "contour"
+      ]
+    },
+    {
+      "id": "satin",
+      "label": "Satin",
+      "purpose": "Add overlapping, shaded ripples inside a layer.",
+      "exercise": "Explore on large lettering where the contour is easy to see.",
+      "boundary": "A graphic shading treatment; it does not simulate fabric.",
+      "controls": [
+        "blendMode",
+        "offset",
+        "blur",
+        "invert",
+        "globalLight",
+        "contour"
+      ]
+    },
+    {
+      "id": "color-overlay",
+      "label": "Color Overlay",
+      "purpose": "Cover a layer’s visible content with a color treatment.",
+      "exercise": "Try a colored motif and compare the effect’s own blend modes.",
+      "boundary": "An overlay is different from selecting and replacing particular source colors.",
+      "controls": [
+        "blendMode"
+      ]
+    },
+    {
+      "id": "gradient-overlay",
+      "label": "Gradient Overlay",
+      "purpose": "Apply a gradient within a layer.",
+      "exercise": "Give the title a two-color finish, then change gradient direction.",
+      "boundary": "Linear, radial, angle, reflected and diamond gradients.",
+      "controls": [
+        "blendMode",
+        "gradientStops",
+        "gradientAngle",
+        "gradientStyle",
+        "gradientReverse",
+        "dither"
+      ]
+    },
+    {
+      "id": "pattern-overlay",
+      "label": "Pattern Overlay",
+      "purpose": "Fill the silhouette with a repeated pattern.",
+      "exercise": "Try dots or stripes on the headline.",
+      "boundary": "The current style offers checker, stripes and dots; custom image brushes are a separate tool.",
+      "controls": [
+        "blendMode",
+        "pattern",
+        "patternScale"
+      ]
+    },
+    {
+      "id": "bloom",
+      "label": "Bloom",
+      "purpose": "Spread a glow from bright source pixels.",
+      "exercise": "Try low opacity on the light wash or a bright image.",
+      "boundary": "Threshold controls which highlights contribute; dark layers may show little change.",
+      "controls": [
+        "blendMode",
+        "blur",
+        "threshold"
+      ]
+    },
+    {
+      "id": "relief",
+      "label": "Relief",
+      "purpose": "Shade according to the layer’s image detail.",
+      "exercise": "Try on the fabric motif for a pressed texture.",
+      "boundary": "Image-based 2D shading, without editable geometric depth.",
+      "controls": [
+        "blendMode",
+        "depth",
+        "angle",
+        "globalLight"
+      ]
+    },
+    {
+      "id": "outer-glow",
+      "label": "Outer Glow",
+      "purpose": "Add a halo beyond the layer edge.",
+      "exercise": "Try behind the headline against a dark scene.",
+      "boundary": "Its appearance depends on the silhouette and contrast with the background.",
+      "controls": [
+        "blur",
+        "technique",
+        "range",
+        "spread",
+        "noise",
+        "contour"
+      ]
+    },
+    {
+      "id": "drop-shadow",
+      "label": "Drop Shadow",
+      "purpose": "Offset a soft silhouette behind a layer.",
+      "exercise": "Start here for readable type and separated collage panels.",
+      "boundary": "The current below-content effect does not offer backdrop blend-mode control.",
+      "controls": [
+        "offset",
+        "blur",
+        "globalLight",
+        "spread",
+        "noise",
+        "contour"
+      ]
+    },
+    {
+      "id": "long-shadow",
+      "label": "Long Shadow",
+      "purpose": "Extend the silhouette along an offset.",
+      "exercise": "Use on a short headline for a bold graphic direction.",
+      "boundary": "A stepped 2D extrusion effect.",
+      "controls": [
+        "offset",
+        "globalLight",
+        "steps"
+      ]
+    },
+    {
+      "id": "contact-shadow",
+      "label": "Contact Shadow",
+      "purpose": "Add localized darkening around the layer’s contact region.",
+      "exercise": "Compare at low opacity on an overlapping image.",
+      "boundary": "A compositing treatment; it does not calculate physical contact with 3D geometry.",
+      "controls": [
+        "strength",
+        "blur"
+      ]
+    },
+    {
+      "id": "backdrop-blur",
+      "label": "Backdrop Blur",
+      "purpose": "Blur the layers behind the selected silhouette.",
+      "exercise": "Try on the collage or headline above a detailed scene.",
+      "boundary": "Needs visible content underneath. It blurs the backdrop, not the selected layer’s own pixels.",
+      "controls": [
+        "blendMode",
+        "blur",
+        "saturation",
+        "tint"
+      ]
+    },
+    {
+      "id": "refraction",
+      "label": "Refraction",
+      "purpose": "Distort the backdrop around the selected silhouette’s alpha edges.",
+      "exercise": "Use above the scene for a glass-like edge treatment.",
+      "boundary": "A 2D alpha-driven approximation, not physically accurate glass.",
+      "controls": [
+        "blendMode",
+        "strength",
+        "blur"
+      ]
+    },
+    {
+      "id": "reflection",
+      "label": "Reflection",
+      "purpose": "Mirror the backdrop inside the selected layer’s silhouette.",
+      "exercise": "Adjust offset and blur to explore what appears inside the shape.",
+      "boundary": "Reflects the backdrop around the layer center; it is not an automatic floor reflection of the object.",
+      "controls": [
+        "blendMode",
+        "blur",
+        "offset"
+      ]
+    }
+  ],
+  "filters": [
+    {
+      "id": "blur",
+      "label": "Gaussian Blur",
+      "category": "Blur",
+      "purpose": "Soften detail and separate a busy background from the subject.",
+      "boundary": "Start with 2–4 px; the Gaussian-style blur uses a three-pass box approximation."
+    },
+    {
+      "id": "motion-blur",
+      "label": "Motion Blur",
+      "category": "Blur",
+      "purpose": "Smear detail along a chosen direction.",
+      "boundary": "Use modest radius and angle for an intentional motion study."
+    },
+    {
+      "id": "surface-blur",
+      "label": "Surface Blur",
+      "category": "Blur",
+      "purpose": "Smooth neighboring colors while retaining stronger edges.",
+      "boundary": "Radius and threshold trade texture against edge preservation."
+    },
+    {
+      "id": "sharpen",
+      "label": "Unsharp Mask",
+      "category": "Sharpen",
+      "purpose": "Increase edge contrast with Unsharp Mask.",
+      "boundary": "Inspect at full size; too much amount creates halos."
+    },
+    {
+      "id": "high-pass",
+      "label": "High Pass",
+      "category": "Sharpen",
+      "purpose": "Isolate edge detail around middle gray.",
+      "boundary": "Pair with Overlay or Soft Light; Normal intentionally looks gray."
+    },
+    {
+      "id": "median",
+      "label": "Median",
+      "category": "Noise",
+      "purpose": "Replace isolated pixel values with neighborhood medians.",
+      "boundary": "Useful for a small cleanup study; large values remove detail."
+    },
+    {
+      "id": "dust-scratches",
+      "label": "Dust & Scratches",
+      "category": "Noise",
+      "purpose": "Replace sufficiently different pixels with a neighborhood median.",
+      "boundary": "Threshold and radius need close inspection on the actual source."
+    },
+    {
+      "id": "reduce-noise",
+      "label": "Reduce Noise",
+      "category": "Noise",
+      "purpose": "Smooth luminance and color noise with separate controls.",
+      "boundary": "Compare texture before and after; this is a local denoise filter."
+    },
+    {
+      "id": "lens-blur",
+      "label": "Lens Blur",
+      "category": "Blur",
+      "purpose": "Use an aperture-shaped blur with highlight bloom.",
+      "boundary": "Blades, rotation and highlights change the look; it does not infer a depth map."
+    },
+    {
+      "id": "displace",
+      "label": "Displace",
+      "category": "Other",
+      "purpose": "Ripple pixels using an adjustable wave.",
+      "boundary": "The current filter is procedural-wave displacement, not an uploaded displacement-map workflow."
+    },
+    {
+      "id": "maximum",
+      "label": "Maximum",
+      "category": "Other",
+      "purpose": "Expand brighter image regions.",
+      "boundary": "A morphology-style effect; can make fine artwork look heavier or lighter depending on polarity."
+    },
+    {
+      "id": "minimum",
+      "label": "Minimum",
+      "category": "Other",
+      "purpose": "Expand darker image regions.",
+      "boundary": "Compare with Maximum on the motif to understand the difference."
+    },
+    {
+      "id": "invert",
+      "label": "Invert",
+      "category": "Other",
+      "purpose": "Reverse RGB colors.",
+      "boundary": "Useful for a negative treatment or dramatic blend experiment."
+    },
+    {
+      "id": "desaturate",
+      "label": "Desaturate",
+      "category": "Other",
+      "purpose": "Reduce image color toward grayscale.",
+      "boundary": "Adjust the amount or filter opacity to retain some color."
+    },
+    {
+      "id": "hue",
+      "label": "Hue Rotate",
+      "category": "Other",
+      "purpose": "Rotate hue across the layer.",
+      "boundary": "White and gray contain little hue; use targeted Recolor for the white-shirt lesson."
+    }
+  ],
+  "blends": [
+    {
+      "category": "Normal",
+      "description": "Normal stacks pixels directly; Dissolve distributes partial opacity as a stippled pattern.",
+      "modes": [
+        {
+          "id": "source-over",
+          "label": "Normal"
+        },
+        {
+          "id": "dissolve",
+          "label": "Dissolve"
+        }
+      ]
+    },
+    {
+      "category": "Darken",
+      "description": "Favor darker values. Start with Multiply for ink and texture.",
+      "modes": [
+        {
+          "id": "darken",
+          "label": "Darken"
+        },
+        {
+          "id": "multiply",
+          "label": "Multiply"
+        },
+        {
+          "id": "color-burn",
+          "label": "Color Burn"
+        },
+        {
+          "id": "linear-burn",
+          "label": "Linear Burn"
+        },
+        {
+          "id": "darker-color",
+          "label": "Darker Color"
+        }
+      ]
+    },
+    {
+      "category": "Lighten",
+      "description": "Favor lighter values. Start with Screen for light, fog and glow.",
+      "modes": [
+        {
+          "id": "lighten",
+          "label": "Lighten"
+        },
+        {
+          "id": "screen",
+          "label": "Screen"
+        },
+        {
+          "id": "color-dodge",
+          "label": "Color Dodge"
+        },
+        {
+          "id": "linear-dodge",
+          "label": "Linear Dodge (Add)"
+        },
+        {
+          "id": "lighter-color",
+          "label": "Lighter Color"
+        }
+      ]
+    },
+    {
+      "category": "Contrast",
+      "description": "Combine darkening and lightening. Start with Soft Light, then compare Overlay.",
+      "modes": [
+        {
+          "id": "overlay",
+          "label": "Overlay"
+        },
+        {
+          "id": "soft-light",
+          "label": "Soft Light"
+        },
+        {
+          "id": "hard-light",
+          "label": "Hard Light"
+        },
+        {
+          "id": "vivid-light",
+          "label": "Vivid Light"
+        },
+        {
+          "id": "linear-light",
+          "label": "Linear Light"
+        },
+        {
+          "id": "pin-light",
+          "label": "Pin Light"
+        },
+        {
+          "id": "hard-mix",
+          "label": "Hard Mix"
+        }
+      ]
+    },
+    {
+      "category": "Inversion",
+      "description": "Create differences, negatives and strong graphic interactions. Useful for experimentation and image comparison.",
+      "modes": [
+        {
+          "id": "difference",
+          "label": "Difference"
+        },
+        {
+          "id": "exclusion",
+          "label": "Exclusion"
+        },
+        {
+          "id": "subtract",
+          "label": "Subtract"
+        },
+        {
+          "id": "divide",
+          "label": "Divide"
+        }
+      ]
+    },
+    {
+      "category": "Component",
+      "description": "Take hue, saturation, color or luminosity from a layer while combining the remaining components with its backdrop.",
+      "modes": [
+        {
+          "id": "hue",
+          "label": "Hue"
+        },
+        {
+          "id": "saturation",
+          "label": "Saturation"
+        },
+        {
+          "id": "color",
+          "label": "Color"
+        },
+        {
+          "id": "luminosity",
+          "label": "Luminosity"
+        }
+      ]
+    }
+  ],
+  "recipes": [
+    {
+      "label": "Detail",
+      "description": "Crisp local contrast without a hard-edged sharpen",
+      "modes": [
+        "Overlay",
+        "Soft Light"
+      ]
+    },
+    {
+      "label": "Glow",
+      "description": "Broad luminous lift with a restrained highlight bloom",
+      "modes": [
+        "Screen",
+        "Color Dodge"
+      ]
+    },
+    {
+      "label": "Depth",
+      "description": "Deepen form while preserving highlight separation",
+      "modes": [
+        "Multiply",
+        "Soft Light"
+      ]
+    },
+    {
+      "label": "Color",
+      "description": "Transfer chroma while retaining underlying luminosity",
+      "modes": [
+        "Color",
+        "Luminosity"
+      ]
+    },
+    {
+      "label": "Cinema",
+      "description": "Dense contrast, soft highlight rolloff, controlled color",
+      "modes": [
+        "Soft Light",
+        "Color",
+        "Screen"
+      ]
+    }
+  ],
+  "adjustments": [
+    "Tone",
+    "Levels",
+    "Curves",
+    "Hue / Saturation",
+    "Black & White",
+    "Color Balance",
+    "Photo Filter",
+    "Channel Mixer",
+    "Color Lookup",
+    "Gradient Map",
+    "Relight Field",
+    "Threshold",
+    "Posterize",
+    "Invert"
+  ],
+  "notes": [
+    "Layer effects style a layer’s content or silhouette. Smart filters process its image. Blend modes combine it with the layers below. Adjustment layers change color or tone across the layers they affect.",
+    "Effects and filters can be edited, disabled, reordered and undone. Several effects depend on content beneath them; use the eight-layer project for meaningful comparisons.",
+    "Blend If offers source and underlying tonal ranges with feathered transitions. Multiple blend passes and the five recipes are advanced blending features, not additional blend modes.",
+    "Keep the eight-layer exercise intact: explore adjustment layers in a duplicate project because adding one creates another layer.",
+    "Pressure-based retouching and authenticated generative edits are separate workflows. They are not counted as local effects in this catalog.",
+    "Save an editable .luma master. Photoshop export preserves supported results with conversion warnings; native editable equivalence is not promised for every Luma effect or smart filter."
+  ]
+}

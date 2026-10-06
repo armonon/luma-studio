@@ -1,0 +1,2137 @@
+{
+  "kind": "form-studio-project",
+  "version": 2,
+  "projectId": "momentium-studio-house-starter",
+  "revisionId": "architecture-v1",
+  "name": "Studio House · starter",
+  "createdAt": 1790786695856,
+  "updatedAt": 1790815629625,
+  "common": {
+    "canonicalUnits": "mm",
+    "displayUnits": "m",
+    "upAxis": "Y",
+    "handedness": "right"
+  },
+  "workspaces": {
+    "cad": {
+      "schema": "form-studio/cad@14",
+      "objectIds": [
+        "arch-slab",
+        "arch-west-wall",
+        "arch-east-wall",
+        "arch-north-wall-left",
+        "arch-north-wall-right",
+        "arch-north-wall-sill",
+        "arch-north-wall-head",
+        "arch-south-wall-left",
+        "arch-south-wall-right",
+        "arch-south-wall-head",
+        "arch-partition-wall-north",
+        "arch-partition-wall-middle",
+        "arch-partition-wall-south",
+        "arch-partition-north-wall-head",
+        "arch-partition-south-wall-head",
+        "arch-bedroom-wall",
+        "arch-desk",
+        "arch-kitchen-counter",
+        "arch-bed",
+        "arch-slab-extrude",
+        "arch-west-wall-extrude",
+        "arch-east-wall-extrude",
+        "arch-north-wall-left-extrude",
+        "arch-north-wall-right-extrude",
+        "arch-north-wall-sill-extrude",
+        "arch-north-wall-head-extrude",
+        "arch-south-wall-left-extrude",
+        "arch-south-wall-right-extrude",
+        "arch-south-wall-head-extrude",
+        "arch-partition-wall-north-extrude",
+        "arch-partition-wall-middle-extrude",
+        "arch-partition-wall-south-extrude",
+        "arch-partition-north-wall-head-extrude",
+        "arch-partition-south-wall-head-extrude",
+        "arch-bedroom-wall-extrude",
+        "arch-desk-extrude",
+        "arch-kitchen-counter-extrude",
+        "arch-bed-extrude"
+      ],
+      "data": {
+        "version": 17,
+        "roomId": "momentium-studio-house-starter",
+        "meshFeatures": [],
+        "sceneNodes": [],
+        "animation": {
+          "actions": [],
+          "tracks": [],
+          "fps": 24,
+          "range": {
+            "start": 0,
+            "end": 48
+          },
+          "speed": 1,
+          "loop": "loop",
+          "playhead": 0,
+          "playing": false
+        },
+        "geometryGraph": {
+          "nodes": [
+            {
+              "id": "box",
+              "kind": "box",
+              "params": {
+                "width": 20,
+                "height": 20,
+                "depth": 20
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "bar",
+              "kind": "cylinder",
+              "params": {
+                "radius": 6,
+                "height": 60,
+                "segments": 16
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 120
+              }
+            },
+            {
+              "id": "cut",
+              "kind": "boolean",
+              "params": {},
+              "options": {
+                "operation": "difference"
+              },
+              "position": {
+                "x": 220,
+                "y": 40
+              }
+            },
+            {
+              "id": "out",
+              "kind": "output",
+              "params": {},
+              "options": {},
+              "position": {
+                "x": 440,
+                "y": 40
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "box",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "a"
+              }
+            },
+            {
+              "from": {
+                "node": "bar",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "b"
+              }
+            },
+            {
+              "from": {
+                "node": "cut",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "out",
+                "socket": "geometry"
+              }
+            }
+          ],
+          "output": "out"
+        },
+        "materialGraph": {
+          "nodes": [
+            {
+              "id": "uv",
+              "kind": "coordinates",
+              "params": {
+                "scale": 1
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "check",
+              "kind": "checker",
+              "params": {
+                "u": 0,
+                "v": 0,
+                "squares": 8
+              },
+              "options": {},
+              "position": {
+                "x": 180,
+                "y": 0
+              }
+            },
+            {
+              "id": "colour",
+              "kind": "ramp",
+              "params": {
+                "value": 0,
+                "from": [
+                  0.05,
+                  0.05,
+                  0.06
+                ],
+                "to": [
+                  0.85,
+                  0.95,
+                  0.55
+                ]
+              },
+              "options": {},
+              "position": {
+                "x": 360,
+                "y": 0
+              }
+            },
+            {
+              "id": "surface",
+              "kind": "output",
+              "params": {
+                "base color": [
+                  0.8,
+                  0.8,
+                  0.8
+                ],
+                "roughness": 0.5,
+                "metalness": 0,
+                "bump": 0
+              },
+              "options": {},
+              "position": {
+                "x": 540,
+                "y": 0
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "uv",
+                "socket": "u"
+              },
+              "to": {
+                "node": "check",
+                "socket": "u"
+              }
+            },
+            {
+              "from": {
+                "node": "uv",
+                "socket": "v"
+              },
+              "to": {
+                "node": "check",
+                "socket": "v"
+              }
+            },
+            {
+              "from": {
+                "node": "check",
+                "socket": "value"
+              },
+              "to": {
+                "node": "colour",
+                "socket": "value"
+              }
+            },
+            {
+              "from": {
+                "node": "colour",
+                "socket": "color"
+              },
+              "to": {
+                "node": "surface",
+                "socket": "base color"
+              }
+            }
+          ],
+          "output": "surface"
+        },
+        "viewport": {
+          "shading": "shaded",
+          "projection": null
+        },
+        "canonicalUnits": "mm",
+        "displayUnits": "m",
+        "entities": [
+          {
+            "id": "arch-slab",
+            "type": "rectangle",
+            "a": {
+              "x": -4000,
+              "y": -3000
+            },
+            "b": {
+              "x": 4000,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-floor",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "arch-slab-plane"
+          },
+          {
+            "id": "arch-west-wall",
+            "type": "rectangle",
+            "a": {
+              "x": -4000,
+              "y": -3000
+            },
+            "b": {
+              "x": -3800,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-east-wall",
+            "type": "rectangle",
+            "a": {
+              "x": 3800,
+              "y": -3000
+            },
+            "b": {
+              "x": 4000,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-north-wall-left",
+            "type": "rectangle",
+            "a": {
+              "x": -3800,
+              "y": 2800
+            },
+            "b": {
+              "x": -2600,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-north-wall-right",
+            "type": "rectangle",
+            "a": {
+              "x": -800,
+              "y": 2800
+            },
+            "b": {
+              "x": 3800,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-north-wall-sill",
+            "type": "rectangle",
+            "a": {
+              "x": -2600,
+              "y": 2800
+            },
+            "b": {
+              "x": -800,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-north-wall-head",
+            "type": "rectangle",
+            "a": {
+              "x": -2600,
+              "y": 2800
+            },
+            "b": {
+              "x": -800,
+              "y": 3000
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "arch-lintel-plane"
+          },
+          {
+            "id": "arch-south-wall-left",
+            "type": "rectangle",
+            "a": {
+              "x": -3800,
+              "y": -3000
+            },
+            "b": {
+              "x": -2242,
+              "y": -2800
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-south-wall-right",
+            "type": "rectangle",
+            "a": {
+              "x": -1342,
+              "y": -3000
+            },
+            "b": {
+              "x": 3800,
+              "y": -2800
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-south-wall-head",
+            "type": "rectangle",
+            "a": {
+              "x": -2242,
+              "y": -3000
+            },
+            "b": {
+              "x": -1342,
+              "y": -2800
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "arch-lintel-plane"
+          },
+          {
+            "id": "arch-partition-wall-north",
+            "type": "rectangle",
+            "a": {
+              "x": 500,
+              "y": 1950
+            },
+            "b": {
+              "x": 700,
+              "y": 2800
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-partition-wall-middle",
+            "type": "rectangle",
+            "a": {
+              "x": 500,
+              "y": -1050
+            },
+            "b": {
+              "x": 700,
+              "y": 1050
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-partition-wall-south",
+            "type": "rectangle",
+            "a": {
+              "x": 500,
+              "y": -2800
+            },
+            "b": {
+              "x": 700,
+              "y": -1950
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-partition-north-wall-head",
+            "type": "rectangle",
+            "a": {
+              "x": 500,
+              "y": 1050
+            },
+            "b": {
+              "x": 700,
+              "y": 1950
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "arch-lintel-plane"
+          },
+          {
+            "id": "arch-partition-south-wall-head",
+            "type": "rectangle",
+            "a": {
+              "x": 500,
+              "y": -1950
+            },
+            "b": {
+              "x": 700,
+              "y": -1050
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "arch-lintel-plane"
+          },
+          {
+            "id": "arch-bedroom-wall",
+            "type": "rectangle",
+            "a": {
+              "x": 700,
+              "y": -100
+            },
+            "b": {
+              "x": 3800,
+              "y": 100
+            },
+            "rotation": 0,
+            "layer": "arch-walls",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-desk",
+            "type": "rectangle",
+            "a": {
+              "x": -3500,
+              "y": 1800
+            },
+            "b": {
+              "x": -1900,
+              "y": 2500
+            },
+            "rotation": 0,
+            "layer": "arch-furniture",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-kitchen-counter",
+            "type": "rectangle",
+            "a": {
+              "x": -3450,
+              "y": -2200
+            },
+            "b": {
+              "x": -2850,
+              "y": 0
+            },
+            "rotation": 0,
+            "layer": "arch-furniture",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "arch-bed",
+            "type": "rectangle",
+            "a": {
+              "x": 1050,
+              "y": 500
+            },
+            "b": {
+              "x": 2650,
+              "y": 2600
+            },
+            "rotation": 0,
+            "layer": "arch-furniture",
+            "constraints": [
+              "Horizontal",
+              "Vertical"
+            ],
+            "sketchPlaneId": "world-xy"
+          }
+        ],
+        "features": [
+          {
+            "id": "arch-slab-extrude",
+            "type": "Extrude",
+            "value": 150,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-slab"
+            ]
+          },
+          {
+            "id": "arch-west-wall-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-west-wall"
+            ]
+          },
+          {
+            "id": "arch-east-wall-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-east-wall"
+            ]
+          },
+          {
+            "id": "arch-north-wall-left-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-north-wall-left"
+            ]
+          },
+          {
+            "id": "arch-north-wall-right-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-north-wall-right"
+            ]
+          },
+          {
+            "id": "arch-north-wall-sill-extrude",
+            "type": "Extrude",
+            "value": 900,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-north-wall-sill"
+            ]
+          },
+          {
+            "id": "arch-north-wall-head-extrude",
+            "type": "Extrude",
+            "value": 700,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-north-wall-head"
+            ]
+          },
+          {
+            "id": "arch-south-wall-left-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-south-wall-left"
+            ]
+          },
+          {
+            "id": "arch-south-wall-right-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-south-wall-right"
+            ]
+          },
+          {
+            "id": "arch-south-wall-head-extrude",
+            "type": "Extrude",
+            "value": 700,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-south-wall-head"
+            ]
+          },
+          {
+            "id": "arch-partition-wall-north-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-partition-wall-north"
+            ]
+          },
+          {
+            "id": "arch-partition-wall-middle-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-partition-wall-middle"
+            ]
+          },
+          {
+            "id": "arch-partition-wall-south-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-partition-wall-south"
+            ]
+          },
+          {
+            "id": "arch-partition-north-wall-head-extrude",
+            "type": "Extrude",
+            "value": 700,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-partition-north-wall-head"
+            ]
+          },
+          {
+            "id": "arch-partition-south-wall-head-extrude",
+            "type": "Extrude",
+            "value": 700,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-partition-south-wall-head"
+            ]
+          },
+          {
+            "id": "arch-bedroom-wall-extrude",
+            "type": "Extrude",
+            "value": 2800,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-bedroom-wall"
+            ]
+          },
+          {
+            "id": "arch-desk-extrude",
+            "type": "Extrude",
+            "value": 740,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-desk"
+            ]
+          },
+          {
+            "id": "arch-kitchen-counter-extrude",
+            "type": "Extrude",
+            "value": 900,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-kitchen-counter"
+            ]
+          },
+          {
+            "id": "arch-bed-extrude",
+            "type": "Extrude",
+            "value": 450,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "arch-bed"
+            ]
+          }
+        ],
+        "layers": [
+          {
+            "id": "arch-walls",
+            "name": "Walls + openings",
+            "color": "#c8cad4",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "arch-floor",
+            "name": "Floor slab",
+            "color": "#789cb0",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "arch-furniture",
+            "name": "Furniture volumes",
+            "color": "#c69c69",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "arch-notes",
+            "name": "Room labels + dimensions",
+            "color": "#304662",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "geometricConstraints": [],
+        "parameters": [
+          {
+            "id": "arch-width",
+            "name": "house_width",
+            "expression": "8000",
+            "value": 8000
+          },
+          {
+            "id": "arch-depth",
+            "name": "house_depth",
+            "expression": "6000",
+            "value": 6000
+          },
+          {
+            "id": "arch-height",
+            "name": "house_height",
+            "expression": "2800",
+            "value": 2800
+          },
+          {
+            "id": "arch-wall",
+            "name": "house_wall",
+            "expression": "200",
+            "value": 200
+          },
+          {
+            "id": "arch-studio",
+            "name": "house_studio",
+            "expression": "4600",
+            "value": 4600
+          },
+          {
+            "id": "arch-door",
+            "name": "house_door",
+            "expression": "900",
+            "value": 900
+          },
+          {
+            "id": "arch-window",
+            "name": "house_window",
+            "expression": "1800",
+            "value": 1800
+          }
+        ],
+        "gdt": [],
+        "components": [],
+        "assemblyInstances": [],
+        "assemblyMates": [],
+        "linkedGroups": [],
+        "importedBodies": [],
+        "volumes": [],
+        "drafting": {
+          "schema": "form-studio-drafting-v1",
+          "texts": [
+            {
+              "id": "arch-studio-label",
+              "kind": "text",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "text": "Studio / living",
+              "position": {
+                "x": -3450,
+                "y": 250
+              },
+              "height": 240,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            },
+            {
+              "id": "arch-studio-area",
+              "kind": "text",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "text": "24.1 m²",
+              "position": {
+                "x": -3450,
+                "y": -150
+              },
+              "height": 180,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            },
+            {
+              "id": "arch-bed-label",
+              "kind": "text",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "text": "Bedroom",
+              "position": {
+                "x": 1050,
+                "y": 800
+              },
+              "height": 240,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            },
+            {
+              "id": "arch-bath-label",
+              "kind": "text",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "text": "Bath / utility",
+              "position": {
+                "x": 1050,
+                "y": -1500
+              },
+              "height": 220,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            },
+            {
+              "id": "arch-note",
+              "kind": "text",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "text": "STUDIO HOUSE / editable concept plan",
+              "position": {
+                "x": -4000,
+                "y": -3950
+              },
+              "height": 220,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "arch-width-dim",
+              "kind": "dimension",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "dimensionType": 0,
+              "definitionPoint": {
+                "x": 0,
+                "y": -3500
+              },
+              "extensionStart": {
+                "x": -4000,
+                "y": -3000
+              },
+              "extensionEnd": {
+                "x": 4000,
+                "y": -3000
+              },
+              "textPosition": {
+                "x": 0,
+                "y": -3500
+              },
+              "measurement": 8000
+            },
+            {
+              "id": "arch-depth-dim",
+              "kind": "dimension",
+              "layer": "arch-notes",
+              "visible": true,
+              "locked": false,
+              "dimensionType": 1,
+              "definitionPoint": {
+                "x": 4550,
+                "y": 0
+              },
+              "extensionStart": {
+                "x": 4000,
+                "y": -3000
+              },
+              "extensionEnd": {
+                "x": 4000,
+                "y": 3000
+              },
+              "textPosition": {
+                "x": 4550,
+                "y": 0
+              },
+              "measurement": 6000
+            }
+          ],
+          "leaders": [],
+          "hatches": [],
+          "blockDefinitions": [],
+          "blockInstances": [],
+          "layouts": [
+            {
+              "id": "model",
+              "name": "Model",
+              "paperWidthMm": 420,
+              "paperHeightMm": 297,
+              "marginMm": 5,
+              "scale": "1:1",
+              "orientation": "landscape",
+              "modelSpace": true
+            }
+          ],
+          "activeLayoutId": "model"
+        },
+        "sketchPlanes": [
+          {
+            "id": "world-xy",
+            "name": "Floor plan",
+            "origin": [
+              0,
+              0,
+              0
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "id": "arch-lintel-plane",
+            "name": "Door and window heads · 2.1 m",
+            "origin": [
+              0,
+              0,
+              2100
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          },
+          {
+            "id": "arch-slab-plane",
+            "name": "Floor slab · −150 mm",
+            "origin": [
+              0,
+              0,
+              -150
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "rollbackIndex": 19,
+        "material": "Architectural concept",
+        "density": 2.4,
+        "drawingScale": "1:50",
+        "drawingRevision": "A",
+        "drawingBook": {
+          "schema": "form-drawing-book-v1",
+          "sheets": [
+            {
+              "id": "arch-plan",
+              "title": "Studio House · concept plan",
+              "paper": "A3",
+              "orientation": "landscape",
+              "template": "engineering",
+              "author": "Your next space / Form Studio",
+              "drawingNumber": "SH-01",
+              "views": {
+                "Front": {
+                  "x": 190,
+                  "y": 125,
+                  "visible": false
+                },
+                "Top": {
+                  "x": 190,
+                  "y": 125,
+                  "visible": true
+                },
+                "Right": {
+                  "x": 190,
+                  "y": 125,
+                  "visible": false
+                },
+                "Iso": {
+                  "x": 190,
+                  "y": 125,
+                  "visible": false
+                },
+                "Section A-A": {
+                  "x": 190,
+                  "y": 125,
+                  "visible": false
+                }
+              },
+              "annotations": [],
+              "source": {
+                "kind": "sketch",
+                "id": "world-xy"
+              },
+              "scale": "1:50",
+              "syncDrafting": true
+            },
+            {
+              "id": "production",
+              "title": "Production drawing",
+              "paper": "A3",
+              "orientation": "landscape",
+              "template": "engineering",
+              "author": "Form Studio",
+              "drawingNumber": "",
+              "views": {
+                "Front": {
+                  "x": 90,
+                  "y": 155,
+                  "visible": true
+                },
+                "Top": {
+                  "x": 90,
+                  "y": 65,
+                  "visible": true
+                },
+                "Right": {
+                  "x": 230,
+                  "y": 155,
+                  "visible": true
+                },
+                "Iso": {
+                  "x": 230,
+                  "y": 65,
+                  "visible": true
+                },
+                "Section A-A": {
+                  "x": 350,
+                  "y": 110,
+                  "visible": true
+                }
+              },
+              "annotations": [],
+              "scale": "1:100"
+            }
+          ]
+        },
+        "configurations": [],
+        "activeConfigurationId": null,
+        "bimNodes": [
+          {
+            "id": "bim-project",
+            "kind": "project",
+            "name": "Studio House",
+            "parentId": null,
+            "phase": "existing",
+            "properties": {
+              "schema": "IFC4",
+              "units": "mm"
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-site",
+            "kind": "site",
+            "name": "Site",
+            "parentId": "bim-project",
+            "phase": "existing",
+            "properties": {
+              "elevation": 0
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-building",
+            "kind": "building",
+            "name": "Building",
+            "parentId": "bim-site",
+            "phase": "new",
+            "properties": {
+              "storeys": 1,
+              "grossFloorArea": 40820000
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-storey-1",
+            "kind": "storey",
+            "name": "Level 01",
+            "parentId": "bim-building",
+            "phase": "new",
+            "properties": {
+              "elevation": 0,
+              "height": 2800,
+              "levelId": "bim-storey-1"
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-arch-slab",
+            "kind": "slab",
+            "name": "slab",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -4000,
+              "yMin": -3000,
+              "xMax": 4000,
+              "yMax": 3000,
+              "width": 8000,
+              "depth": 6000,
+              "footprintArea": 48000000,
+              "area": 48000000,
+              "layer": "arch-floor",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 7200000000,
+              "baseElevation": 0,
+              "topElevation": 150,
+              "height": 150
+            },
+            "entityIds": [
+              "arch-slab"
+            ]
+          },
+          {
+            "id": "bim-arch-west-wall",
+            "kind": "wall",
+            "name": "west wall",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -4000,
+              "yMin": -3000,
+              "xMax": -3800,
+              "yMax": 3000,
+              "width": 200,
+              "depth": 6000,
+              "footprintArea": 1200000,
+              "area": 34720000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 12400,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 34720000,
+              "openingArea": 0,
+              "volume": 6944000000
+            },
+            "entityIds": [
+              "arch-west-wall"
+            ]
+          },
+          {
+            "id": "bim-arch-east-wall",
+            "kind": "wall",
+            "name": "east wall",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 3800,
+              "yMin": -3000,
+              "xMax": 4000,
+              "yMax": 3000,
+              "width": 200,
+              "depth": 6000,
+              "footprintArea": 1200000,
+              "area": 34720000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 12400,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 34720000,
+              "openingArea": 0,
+              "volume": 6944000000
+            },
+            "entityIds": [
+              "arch-east-wall"
+            ]
+          },
+          {
+            "id": "bim-arch-north-wall-left",
+            "kind": "wall",
+            "name": "north wall left",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -3800,
+              "yMin": 2800,
+              "xMax": -2600,
+              "yMax": 3000,
+              "width": 1200,
+              "depth": 200,
+              "footprintArea": 240000,
+              "area": 7840000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2800,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 7840000,
+              "openingArea": 0,
+              "volume": 1568000000
+            },
+            "entityIds": [
+              "arch-north-wall-left"
+            ]
+          },
+          {
+            "id": "bim-arch-north-wall-right",
+            "kind": "wall",
+            "name": "north wall right",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -800,
+              "yMin": 2800,
+              "xMax": 3800,
+              "yMax": 3000,
+              "width": 4600,
+              "depth": 200,
+              "footprintArea": 920000,
+              "area": 26880000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 9600,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 26880000,
+              "openingArea": 0,
+              "volume": 5376000000
+            },
+            "entityIds": [
+              "arch-north-wall-right"
+            ]
+          },
+          {
+            "id": "bim-arch-north-wall-sill",
+            "kind": "wall",
+            "name": "north wall sill",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -2600,
+              "yMin": 2800,
+              "xMax": -800,
+              "yMax": 3000,
+              "width": 1800,
+              "depth": 200,
+              "footprintArea": 360000,
+              "area": 3600000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 900,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 4000,
+              "baseElevation": 0,
+              "topElevation": 900,
+              "grossArea": 3600000,
+              "openingArea": 0,
+              "volume": 720000000
+            },
+            "entityIds": [
+              "arch-north-wall-sill"
+            ]
+          },
+          {
+            "id": "bim-arch-north-wall-head",
+            "kind": "wall",
+            "name": "north wall head",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -2600,
+              "yMin": 2800,
+              "xMax": -800,
+              "yMax": 3000,
+              "width": 1800,
+              "depth": 200,
+              "footprintArea": 360000,
+              "area": 2800000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 700,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 4000,
+              "baseElevation": 0,
+              "topElevation": 700,
+              "grossArea": 2800000,
+              "openingArea": 0,
+              "volume": 560000000,
+              "elevation": 2100
+            },
+            "entityIds": [
+              "arch-north-wall-head"
+            ]
+          },
+          {
+            "id": "bim-arch-south-wall-left",
+            "kind": "wall",
+            "name": "south wall left",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -3800,
+              "yMin": -3000,
+              "xMax": -2242,
+              "yMax": -2800,
+              "width": 1558,
+              "depth": 200,
+              "footprintArea": 311600,
+              "area": 9844800,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 3516,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 9844800,
+              "openingArea": 0,
+              "volume": 1968960000
+            },
+            "entityIds": [
+              "arch-south-wall-left"
+            ]
+          },
+          {
+            "id": "bim-arch-south-wall-right",
+            "kind": "wall",
+            "name": "south wall right",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -1342,
+              "yMin": -3000,
+              "xMax": 3800,
+              "yMax": -2800,
+              "width": 5142,
+              "depth": 200,
+              "footprintArea": 1028400,
+              "area": 29915200,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 10684,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 29915200,
+              "openingArea": 0,
+              "volume": 5983040000
+            },
+            "entityIds": [
+              "arch-south-wall-right"
+            ]
+          },
+          {
+            "id": "bim-arch-south-wall-head",
+            "kind": "wall",
+            "name": "south wall head",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -2242,
+              "yMin": -3000,
+              "xMax": -1342,
+              "yMax": -2800,
+              "width": 900,
+              "depth": 200,
+              "footprintArea": 180000,
+              "area": 1540000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 700,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2200,
+              "baseElevation": 0,
+              "topElevation": 700,
+              "grossArea": 1540000,
+              "openingArea": 0,
+              "volume": 308000000,
+              "elevation": 2100
+            },
+            "entityIds": [
+              "arch-south-wall-head"
+            ]
+          },
+          {
+            "id": "bim-arch-partition-wall-north",
+            "kind": "wall",
+            "name": "partition wall north",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 500,
+              "yMin": 1950,
+              "xMax": 700,
+              "yMax": 2800,
+              "width": 200,
+              "depth": 850,
+              "footprintArea": 170000,
+              "area": 5880000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2100,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 5880000,
+              "openingArea": 0,
+              "volume": 1176000000
+            },
+            "entityIds": [
+              "arch-partition-wall-north"
+            ]
+          },
+          {
+            "id": "bim-arch-partition-wall-middle",
+            "kind": "wall",
+            "name": "partition wall middle",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 500,
+              "yMin": -1050,
+              "xMax": 700,
+              "yMax": 1050,
+              "width": 200,
+              "depth": 2100,
+              "footprintArea": 420000,
+              "area": 12880000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 4600,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 12880000,
+              "openingArea": 0,
+              "volume": 2576000000
+            },
+            "entityIds": [
+              "arch-partition-wall-middle"
+            ]
+          },
+          {
+            "id": "bim-arch-partition-wall-south",
+            "kind": "wall",
+            "name": "partition wall south",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 500,
+              "yMin": -2800,
+              "xMax": 700,
+              "yMax": -1950,
+              "width": 200,
+              "depth": 850,
+              "footprintArea": 170000,
+              "area": 5880000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2100,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 5880000,
+              "openingArea": 0,
+              "volume": 1176000000
+            },
+            "entityIds": [
+              "arch-partition-wall-south"
+            ]
+          },
+          {
+            "id": "bim-arch-partition-north-wall-head",
+            "kind": "wall",
+            "name": "partition north wall head",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 500,
+              "yMin": 1050,
+              "xMax": 700,
+              "yMax": 1950,
+              "width": 200,
+              "depth": 900,
+              "footprintArea": 180000,
+              "area": 1540000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 700,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2200,
+              "baseElevation": 0,
+              "topElevation": 700,
+              "grossArea": 1540000,
+              "openingArea": 0,
+              "volume": 308000000,
+              "elevation": 2100
+            },
+            "entityIds": [
+              "arch-partition-north-wall-head"
+            ]
+          },
+          {
+            "id": "bim-arch-partition-south-wall-head",
+            "kind": "wall",
+            "name": "partition south wall head",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 500,
+              "yMin": -1950,
+              "xMax": 700,
+              "yMax": -1050,
+              "width": 200,
+              "depth": 900,
+              "footprintArea": 180000,
+              "area": 1540000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 700,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 2200,
+              "baseElevation": 0,
+              "topElevation": 700,
+              "grossArea": 1540000,
+              "openingArea": 0,
+              "volume": 308000000,
+              "elevation": 2100
+            },
+            "entityIds": [
+              "arch-partition-south-wall-head"
+            ]
+          },
+          {
+            "id": "bim-arch-bedroom-wall",
+            "kind": "wall",
+            "name": "bedroom wall",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 700,
+              "yMin": -100,
+              "xMax": 3800,
+              "yMax": 100,
+              "width": 3100,
+              "depth": 200,
+              "footprintArea": 620000,
+              "area": 18480000,
+              "layer": "arch-walls",
+              "material": "Generic wall",
+              "height": 2800,
+              "heightMode": "unconnected",
+              "thickness": 200,
+              "perimeterAssembly": false,
+              "levelId": "bim-storey-1",
+              "length": 6600,
+              "baseElevation": 0,
+              "topElevation": 2800,
+              "grossArea": 18480000,
+              "openingArea": 0,
+              "volume": 3696000000
+            },
+            "entityIds": [
+              "arch-bedroom-wall"
+            ]
+          },
+          {
+            "id": "bim-arch-desk",
+            "kind": "element",
+            "name": "desk",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -3500,
+              "yMin": 1800,
+              "xMax": -1900,
+              "yMax": 2500,
+              "width": 1600,
+              "depth": 700,
+              "footprintArea": 1120000,
+              "area": 1120000,
+              "layer": "arch-furniture",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 336000000,
+              "baseElevation": 0,
+              "topElevation": 300
+            },
+            "entityIds": [
+              "arch-desk"
+            ]
+          },
+          {
+            "id": "bim-arch-kitchen-counter",
+            "kind": "element",
+            "name": "kitchen counter",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": -3450,
+              "yMin": -2200,
+              "xMax": -2850,
+              "yMax": 0,
+              "width": 600,
+              "depth": 2200,
+              "footprintArea": 1320000,
+              "area": 1320000,
+              "layer": "arch-furniture",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 396000000,
+              "baseElevation": 0,
+              "topElevation": 300
+            },
+            "entityIds": [
+              "arch-kitchen-counter"
+            ]
+          },
+          {
+            "id": "bim-arch-bed",
+            "kind": "element",
+            "name": "bed",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "properties": {
+              "xMin": 1050,
+              "yMin": 500,
+              "xMax": 2650,
+              "yMax": 2600,
+              "width": 1600,
+              "depth": 2100,
+              "footprintArea": 3360000,
+              "area": 3360000,
+              "layer": "arch-furniture",
+              "material": "Unassigned",
+              "levelId": "bim-storey-1",
+              "volume": 1008000000,
+              "baseElevation": 0,
+              "topElevation": 300
+            },
+            "entityIds": [
+              "arch-bed"
+            ]
+          },
+          {
+            "id": "arch-space-studio",
+            "kind": "space",
+            "name": "Studio / living",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "entityIds": [],
+            "properties": {
+              "xMin": -3800,
+              "yMin": -2800,
+              "xMax": 500,
+              "yMax": 2800,
+              "width": 4300,
+              "depth": 5600,
+              "footprintArea": 24080000,
+              "height": 2800,
+              "heightMode": "storey",
+              "material": "Interior",
+              "levelId": "bim-storey-1",
+              "area": 24080000,
+              "volume": 67424000000,
+              "baseElevation": 0,
+              "topElevation": 2800
+            }
+          },
+          {
+            "id": "arch-space-bedroom",
+            "kind": "space",
+            "name": "Bedroom",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "entityIds": [],
+            "properties": {
+              "xMin": 700,
+              "yMin": 100,
+              "xMax": 3800,
+              "yMax": 2800,
+              "width": 3100,
+              "depth": 2700,
+              "footprintArea": 8370000,
+              "height": 2800,
+              "heightMode": "storey",
+              "material": "Interior",
+              "levelId": "bim-storey-1",
+              "area": 8370000,
+              "volume": 23436000000,
+              "baseElevation": 0,
+              "topElevation": 2800
+            }
+          },
+          {
+            "id": "arch-space-bath",
+            "kind": "space",
+            "name": "Bath / utility",
+            "parentId": "bim-storey-1",
+            "phase": "new",
+            "entityIds": [],
+            "properties": {
+              "xMin": 700,
+              "yMin": -2800,
+              "xMax": 3800,
+              "yMax": -100,
+              "width": 3100,
+              "depth": 2700,
+              "footprintArea": 8370000,
+              "height": 2800,
+              "heightMode": "storey",
+              "material": "Interior",
+              "levelId": "bim-storey-1",
+              "area": 8370000,
+              "volume": 23436000000,
+              "baseElevation": 0,
+              "topElevation": 2800
+            }
+          }
+        ],
+        "recipeGraphs": [
+          {
+            "id": "recipe-parametric-disc",
+            "name": "Parametric Mounting Disc",
+            "version": 1,
+            "author": "Form Studio",
+            "shared": true,
+            "nodes": [
+              {
+                "id": "diameter",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 40
+                }
+              },
+              {
+                "id": "depth",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 6
+                }
+              },
+              {
+                "id": "profile",
+                "kind": "circle",
+                "inputs": [
+                  "diameter"
+                ],
+                "values": {}
+              },
+              {
+                "id": "solid",
+                "kind": "extrude",
+                "inputs": [
+                  "profile",
+                  "depth"
+                ],
+                "values": {}
+              },
+              {
+                "id": "result",
+                "kind": "output",
+                "inputs": [
+                  "solid"
+                ],
+                "values": {}
+              }
+            ]
+          }
+        ],
+        "revisions": [],
+        "marketplace": [
+          {
+            "id": "market-gear",
+            "name": "Precision Gear Family",
+            "category": "Engineering",
+            "version": 3,
+            "downloads": 2840,
+            "rating": 4.9
+          },
+          {
+            "id": "market-stair",
+            "name": "Code-Aware Stair",
+            "category": "Architecture",
+            "version": 2,
+            "downloads": 1922,
+            "rating": 4.8
+          },
+          {
+            "id": "market-disc",
+            "name": "Parametric Mounting Disc",
+            "category": "Recipe Graph",
+            "version": 1,
+            "downloads": 906,
+            "rating": 4.7,
+            "graph": {
+              "id": "recipe-parametric-disc",
+              "name": "Parametric Mounting Disc",
+              "version": 1,
+              "author": "Form Studio",
+              "shared": true,
+              "nodes": [
+                {
+                  "id": "diameter",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 40
+                  }
+                },
+                {
+                  "id": "depth",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 6
+                  }
+                },
+                {
+                  "id": "profile",
+                  "kind": "circle",
+                  "inputs": [
+                    "diameter"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "solid",
+                  "kind": "extrude",
+                  "inputs": [
+                    "profile",
+                    "depth"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "result",
+                  "kind": "output",
+                  "inputs": [
+                    "solid"
+                  ],
+                  "values": {}
+                }
+              ]
+            }
+          }
+        ],
+        "appearance": {
+          "preset": "layer",
+          "baseColor": "#e0d8cb",
+          "useLayerColor": true,
+          "metalness": 0,
+          "roughness": 0.85,
+          "clearcoat": 0.32,
+          "clearcoatRoughness": 0.12,
+          "transmission": 0,
+          "ior": 1.45,
+          "attenuationDistance": 500,
+          "volumeScatter": 0,
+          "volumeVariation": 0,
+          "opacity": 1,
+          "environment": "daylight",
+          "exposure": 0.8,
+          "groundShadow": true
+        },
+        "kernel": "Open CASCADE B-Rep",
+        "checksum": "fnv1a128-8e1c133ee57165d12981df77a43553ab"
+      },
+      "coordinateSystem": {
+        "units": "mm",
+        "upAxis": "Z",
+        "handedness": "right",
+        "toCommonAxes": [
+          "+X",
+          "-Z",
+          "+Y"
+        ]
+      },
+      "updatedAt": 1790815629625
+    }
+  },
+  "relationships": [],
+  "assets": [],
+  "checksum": "fnv1a128-173943be2afb310b1482b9f915083a85",
+  "extensions": {}
+}
