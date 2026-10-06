@@ -2857,6 +2857,22 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     } catch { notify("Export failed"); }
   };
 
+  const exportFigma = async ({ outlineText }: { outlineText: boolean }) => {
+    if (!studio) return;
+    try {
+      const { blob, report } = await studio.exportFigmaSvg({ outlineText });
+      const saved = await downloadOrSave(blob, `${projectName}-figma.svg`);
+      if (!saved) return;
+      const notes = [
+        `${report.editable} editable layer${report.editable === 1 ? "" : "s"}`,
+        report.flattened.length ? `${report.flattened.length} flattened (${[...new Set(report.flattened.map(item => item.reason))].slice(0, 2).join(", ")})` : "",
+        report.approximated.length ? `${report.approximated.length} approximated` : "",
+      ].filter(Boolean).join(" · ");
+      notify(`Exported for Figma · ${notes}`);
+      if (report.flattened.length || report.approximated.length) console.info("Figma export report", report);
+    } catch (error) { notify(error instanceof Error ? error.message : "Figma export failed"); }
+  };
+
   const runBatchNow = async () => {
     if (!studio || !batchFiles.length || batchAbortRef.current) return;
     const action = selectedActionIdx != null ? studio.actions.get(selectedActionIdx) : null;
@@ -5684,6 +5700,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             onClose={() => setShowExportMenu(false)}
             onExportRaster={() => { setShowExportMenu(false); void exportPNG(); }}
             onExportPhotoshop={() => { setShowExportMenu(false); void exportPsd(); }}
+            onExportFigma={(options) => { setShowExportMenu(false); void exportFigma(options); }}
             printAvailable={Boolean(studio && isNativeFilesystemAvailable() && studio.doc.bitDepth === 8 && studio.doc.colorSpace === "srgb" && studio.doc.width * studio.doc.height <= 4_000_000)}
             onExportPrint={() => { setShowExportMenu(false); runStudioCommand("export-print"); }}
             onExportVector={(format) => {

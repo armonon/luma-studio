@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type RasterFormat = "png" | "jpeg" | "webp";
 type PhotoshopFormat = "auto" | "source" | "psd" | "psb";
@@ -16,6 +16,7 @@ type ExportPopoverProps = {
   onExportRaster: () => void;
   onExportPhotoshop: () => void;
   onExportVector: (format: "svg" | "pdf") => void;
+  onExportFigma?: (options: { outlineText: boolean }) => void;
   onExportPrint: () => void;
   printAvailable: boolean;
   onToggleGL: () => void;
@@ -34,12 +35,14 @@ export default function ExportPopover({
   onExportRaster,
   onExportPhotoshop,
   onExportVector,
+  onExportFigma,
   onExportPrint,
   printAvailable,
   onToggleGL,
   onSaveProject,
 }: ExportPopoverProps) {
   const dialogRef = useRef<HTMLElement>(null);
+  const [outlineText, setOutlineText] = useState(false);
   useEffect(() => {
     const previous = document.activeElement;
     dialogRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
@@ -52,7 +55,7 @@ export default function ExportPopover({
           event.stopPropagation();
           if (event.key === "Escape") { event.preventDefault(); onClose(); }
           if (event.key !== "Tab") return;
-          const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled)') ?? [])];
+          const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled)') ?? [])];
           const first = controls[0], last = controls.at(-1);
           if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
           else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -100,6 +103,17 @@ export default function ExportPopover({
             <p>Review affected objects and conversion limits before export. Unsupported content is never silently omitted.</p>
             <p>PDF: RGB paths with layer and paint opacity. Not PDF/X or color-certified print output.</p>
           </article>
+          {onExportFigma && <article className="studio-export-figma">
+            <span className="export-format-mark figma">FIG</span>
+            <div><strong>Export for Figma</strong><small>Layered SVG · one group per layer · drag into Figma</small></div>
+            <label className="studio-export-check">
+              <input type="checkbox" checked={outlineText} onChange={(event) => setOutlineText(event.target.checked)} />
+              <span>Outline text (uses Luma&apos;s bundled fonts)</span>
+            </label>
+            <button onClick={() => onExportFigma({ outlineText })}>Export for Figma</button>
+            <p>Images, shapes, paths and groups stay separate layers; text stays editable unless outlined (Figma needs the same fonts installed). Effects, masks, filters and adjustment layers are flattened into images so they look right.</p>
+            <p>Figma&apos;s SVG import has limits: blend modes are written as CSS mix-blend-mode and may come in as Normal, and SVG filters are not imported as effects. Checked against Luma&apos;s PNG in a browser, not inside Figma.</p>
+          </article>}
           <article>
             <span className="export-format-mark">ICC</span>
             <div><strong>CMYK print PDF</strong><small>{printAvailable ? "Printer ICC conversion · flattened" : "Available in the desktop app"}</small></div>

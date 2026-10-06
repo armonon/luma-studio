@@ -7187,6 +7187,47 @@ export class Studio {
     return new Blob([svg], { type: "image/svg+xml" });
   }
 
+  /**
+   * Layered SVG for Figma: one group per layer, editable where SVG allows,
+   * flattened (and reported) where it does not. See figma-export.ts.
+   */
+  async exportFigmaSvg(
+    options: { outlineText?: boolean; computeOutlines?: (text: import("./document").TextStyle) => Promise<import("./text-outline-model").ShapedOutlines> } = {},
+  ): Promise<{ blob: Blob; report: import("./figma-export").FigmaExportReport }> {
+    const assertCurrent = this.guardDocumentOperation("Figma export");
+    if (!fitsBrowserCanvas(this.doc.width, this.doc.height)) throw new Error("Figma export needs a document within the browser canvas limit (16,384 px). Export a PNG instead.");
+    await this.prepareFontsForExport();
+    assertCurrent();
+    const outlines = new Map<string, PathStyle>();
+    const outlineFailures = new Map<string, string>();
+    if (options.outlineText) {
+      const { outlinedVectorPath, validateOutlineText } = await import("./text-outline-model");
+      const compute = options.computeOutlines ?? (await import("./text-shaping-client")).computeTextOutlines;
+      for (const layer of this.doc.layers) {
+        if (layer.kind !== "text" || !layer.text || !layer.visible) continue;
+        try {
+          if (layer.text.spatial?.enabled || layer.spatial?.enabled) throw new Error("3D text stays live");
+          const { style } = validateOutlineText(layer.text);
+          if (layer.text.appearance || style.decoration !== "none") throw new Error("appearance stacks and decorations are not outlined");
+          const text = structuredClone(layer.text);
+          outlines.set(layer.id, outlinedVectorPath(text, await compute(text)));
+        } catch (error) {
+          outlineFailures.set(layer.id, error instanceof Error ? error.message : "outline unavailable");
+        }
+        assertCurrent();
+      }
+    }
+    const bytes = this.doc.width * this.doc.height * 12 + 16 * 1024 * 1024;
+    const release = this.reserveOperationMemory(bytes);
+    try {
+      const { buildFigmaSvg } = await import("./figma-export");
+      assertCurrent();
+      const { svg, report } = buildFigmaSvg(this.doc, { title: this.activeDocumentState().name, outlines, outlineFailures });
+      assertCurrent();
+      return { blob: new Blob([svg], { type: "image/svg+xml" }), report };
+    } finally { release(); }
+  }
+
   async exportImage(type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92): Promise<Blob> {
     const bytes = fitsBrowserCanvas(this.doc.width, this.doc.height)
       ? this.doc.width * this.doc.height * (24 + this.doc.layers.length * 4)

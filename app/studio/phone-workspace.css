@@ -83,7 +83,7 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-form-fact
   & .studio-export-popover { position: fixed; inset: auto 8px 8px; margin: auto; width: calc(100% - 16px); max-height: calc(var(--phone-viewport-height, 100dvh) - 16px); overflow: auto; }
   & .studio-export-popover article { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   & .studio-export-popover article > .export-format-mark { display: none; }
-  & .studio-export-popover article > :is(div, p) { grid-column: 1 / -1; }
+  & .studio-export-popover article > :is(div, p, label) { grid-column: 1 / -1; }
   & .studio-export-popover article:first-child > button { grid-column: 1 / -1; }
   & .studio-export-popover :is(button, select) { min-height: 44px; min-width: 0; font-size: 14px; }
   & .studio-export-popover select { width: 100%; font-size: 16px; }

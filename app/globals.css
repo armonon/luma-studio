@@ -9226,6 +9226,28 @@ body:has(.spatial-studio) {
   font-size: 7px;
 }
 
+.studio-export-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #aab1bd;
+  font-size: 7.5px;
+  line-height: 1.25;
+  cursor: pointer;
+}
+
+.studio-export-check input {
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  accent-color: #8e7ffa;
+}
+
+.export-format-mark.figma {
+  background: rgba(242, 78, 30, 0.14);
+  color: #ff8a65;
+}
+
 .studio-export-popover footer {
   display: flex;
   align-items: center;
