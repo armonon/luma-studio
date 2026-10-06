@@ -1,0 +1,236 @@
+[
+  {
+    "product": "form",
+    "id": "twist",
+    "title": "Turn a profile into a statement",
+    "url": "/learn/form/?lesson=twist&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "sculpt",
+    "title": "Bring the sculpture closer",
+    "url": "/learn/form/?lesson=sculpt&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "array",
+    "title": "Build a rhythm in space",
+    "url": "/learn/form/?lesson=array&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "relief",
+    "title": "Make the detail catch the light",
+    "url": "/learn/form/?lesson=relief&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "terrain",
+    "title": "Make the landscape move",
+    "url": "/learn/form/?lesson=terrain&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "dimensions",
+    "title": "Make it your size",
+    "url": "/learn/form/?lesson=dimensions&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "history",
+    "title": "See how it was made",
+    "url": "/learn/form/?lesson=history&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "challenge",
+    "title": "Three objects, one workflow",
+    "url": "/learn/form/?lesson=challenge&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "materials",
+    "title": "Find the right finish",
+    "url": "/learn/form/?lesson=materials&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "handoff",
+    "title": "Keep the editable object",
+    "url": "/learn/form/?lesson=handoff&mode=learn"
+  },
+  {
+    "product": "luma",
+    "id": "layers",
+    "title": "Take the poster apart",
+    "url": "/learn/luma/basics/?lesson=layers&mode=learn"
+  },
+  {
+    "product": "luma",
+    "id": "mask",
+    "title": "Paint where the color goes",
+    "url": "/learn/luma/basics/?lesson=mask&mode=learn"
+  },
+  {
+    "product": "luma",
+    "id": "mood",
+    "title": "Build three different moods",
+    "url": "/learn/luma/basics/?lesson=mood&mode=learn"
+  },
+  {
+    "product": "luma",
+    "id": "type",
+    "title": "Make the type part of the image",
+    "url": "/learn/luma/basics/?lesson=type&mode=learn"
+  },
+  {
+    "product": "luma",
+    "id": "outputs",
+    "title": "One design, three outputs",
+    "url": "/learn/luma/basics/?lesson=outputs&mode=learn"
+  },
+  {
+    "product": "stemdeck",
+    "id": "balance",
+    "title": "Make room for the melody",
+    "url": "/learn/stemdeck/?lesson=balance&mode=learn"
+  },
+  {
+    "product": "stemdeck",
+    "id": "solo",
+    "title": "Hear what each part contributes",
+    "url": "/learn/stemdeck/?lesson=solo&mode=learn"
+  },
+  {
+    "product": "stemdeck",
+    "id": "cue",
+    "title": "Choose the moment",
+    "url": "/learn/stemdeck/?lesson=cue&mode=learn"
+  },
+  {
+    "product": "stemdeck",
+    "id": "crossfade",
+    "title": "Move between two groups",
+    "url": "/learn/stemdeck/?lesson=crossfade&mode=learn"
+  },
+  {
+    "product": "stemdeck",
+    "id": "keep",
+    "title": "Take your session into the studio",
+    "url": "/learn/stemdeck/?lesson=keep&mode=learn"
+  },
+  {
+    "product": "scenepilot",
+    "id": "story",
+    "title": "Choose your opening",
+    "url": "/learn/scenepilot/?lesson=story&mode=learn"
+  },
+  {
+    "product": "scenepilot",
+    "id": "rhythm",
+    "title": "Find the cut in the music",
+    "url": "/learn/scenepilot/?lesson=rhythm&mode=learn"
+  },
+  {
+    "product": "scenepilot",
+    "id": "draft",
+    "title": "Make the suggested edit yours",
+    "url": "/learn/scenepilot/?lesson=draft&mode=learn"
+  },
+  {
+    "product": "scenepilot",
+    "id": "transition",
+    "title": "Make a transition earn its place",
+    "url": "/learn/scenepilot/?lesson=transition&mode=learn"
+  },
+  {
+    "product": "scenepilot",
+    "id": "delivery",
+    "title": "Keep the edit and the film",
+    "url": "/learn/scenepilot/?lesson=delivery&mode=learn"
+  },
+  {
+    "product": "form",
+    "id": "architecture",
+    "title": "A house. In your words.",
+    "url": "/learn/form/workshops/?lesson=architecture"
+  },
+  {
+    "product": "form",
+    "id": "jewelry",
+    "title": "Make the Orbit pendant",
+    "url": "/learn/form/jewelry/"
+  },
+  {
+    "product": "form",
+    "id": "pattern",
+    "title": "A skirt, from the block up.",
+    "url": "/learn/form/workshops/?lesson=pattern"
+  },
+  {
+    "product": "form",
+    "id": "tee",
+    "title": "Sew your first T-shirt.",
+    "url": "/learn/form/workshops/?lesson=tee"
+  },
+  {
+    "product": "form",
+    "id": "drape",
+    "title": "One dress. Two different feelings.",
+    "url": "/learn/form/workshops/?lesson=drape"
+  },
+  {
+    "product": "luma",
+    "id": "recolor",
+    "title": "Select his shirt. Change its color.",
+    "url": "/learn/luma/workshops/?workshop=recolor"
+  },
+  {
+    "product": "luma",
+    "id": "compose",
+    "title": "Eight layers. Your composition.",
+    "url": "/learn/luma/workshops/?workshop=compose"
+  },
+  {
+    "product": "luma",
+    "id": "effects",
+    "title": "Same layers. A different feeling.",
+    "url": "/learn/luma/workshops/?workshop=effects"
+  },
+  {
+    "product": "luma",
+    "id": "drop",
+    "title": "Design your next drop.",
+    "url": "/learn/luma/workshops/?workshop=drop"
+  },
+  {
+    "product": "luma",
+    "id": "print",
+    "title": "Build a signature print.",
+    "url": "/learn/luma/workshops/?workshop=print"
+  },
+  {
+    "product": "luma",
+    "id": "poster",
+    "title": "Make a maximalist poster.",
+    "url": "/learn/luma/workshops/?workshop=poster"
+  },
+  {
+    "product": "luma",
+    "id": "zine",
+    "title": "Make a weekend photo zine.",
+    "url": "/learn/luma/workshops/?workshop=zine"
+  },
+  {
+    "product": "luma",
+    "id": "campaign",
+    "title": "Create a fashion campaign.",
+    "url": "/learn/luma/workshops/?workshop=campaign"
+  },
+  {
+    "product": "luma",
+    "id": "cinema",
+    "title": "Build a cinematic scene.",
+    "url": "/learn/luma/workshops/?workshop=cinema"
+  }
+]

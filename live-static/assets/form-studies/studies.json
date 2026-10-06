@@ -1,0 +1,126 @@
+[
+  {
+    "id": "equine-reverie",
+    "name": "Equine Reverie",
+    "tag": "Sculpture / silhouette",
+    "intro": "Follow the rider, mane and lifted legs around a sculptural form. Rotate slowly to see where the silhouette opens up.",
+    "faces": 22000,
+    "source": "Equine Reverie OBJ",
+    "note": "A lighter study of the supplied sculpture, scaled to a 100 mm maximum extent.",
+    "lesson": [
+      "Drag the model to compare its front and three-quarter silhouette.",
+      "Turn on mesh view to see how triangles describe the mane and limbs.",
+      "Open the matching Form project. Select the mesh to explore sculpt brushes and editable modifiers."
+    ],
+    "shots": [
+      [
+        "equine-front",
+        "Read the silhouette",
+        "A front-facing shaded view of the imported sculpture in Form."
+      ],
+      [
+        "equine-technical",
+        "Compare the working view",
+        "The same mesh in Form\u2019s orthographic Technical view."
+      ],
+      [
+        "equine-perspective",
+        "Check the depth",
+        "An isometric Rendered view reveals the volume behind the silhouette."
+      ]
+    ]
+  },
+  {
+    "id": "circle-of-anarchy",
+    "name": "Circle of Anarchy",
+    "tag": "Relief / negative space",
+    "intro": "A ring of figures becomes a study in repetition, depth and open space. Inspect the center, then look along the edge.",
+    "faces": 22000,
+    "source": "Circle of Anarchy OBJ",
+    "note": "Prepared from the supplied high-detail OBJ. This downloadable study contains mesh geometry, not a parametric CAD history.",
+    "lesson": [
+      "Choose Front to read the ring and the spaces between the figures.",
+      "Rotate to the side to inspect the relief\u2019s thickness.",
+      "Download the Form project, then use its mesh export controls to explore OBJ, PLY or STL handoff."
+    ],
+    "shots": [
+      [
+        "circle-front",
+        "Read the relief",
+        "The imported circular sculpture in Form\u2019s Shaded view."
+      ],
+      [
+        "circle-technical",
+        "Inspect an orthographic view",
+        "Technical mode makes a useful companion to the perspective view."
+      ],
+      [
+        "circle-perspective",
+        "Reveal the thickness",
+        "An angled Rendered view shows the sculpture\u2019s shallow depth."
+      ]
+    ]
+  },
+  {
+    "id": "wwspc",
+    "name": "Birds in Orbit",
+    "tag": "Relief / fine detail",
+    "intro": "Explore the feather edges, crossed bars and circular frame of the supplied bird-and-cross model.",
+    "faces": 22000,
+    "source": "wwspc OBJ",
+    "note": "Display title for the supplied wwspc model. Fine details are simplified in this web study; the source file remains unchanged.",
+    "lesson": [
+      "Use Front to compare the birds against the circular frame.",
+      "Zoom in, then switch to Mesh to inspect the simplified feather geometry.",
+      "Open the Form project and compare Shaded, Technical and Rendered viewport modes."
+    ],
+    "shots": [
+      [
+        "birds-front",
+        "Trace the composition",
+        "A shaded front view of the bird-and-cross relief inside Form."
+      ],
+      [
+        "birds-technical",
+        "Compare the geometry",
+        "The same imported relief shown in Technical mode."
+      ],
+      [
+        "birds-perspective",
+        "Read overlapping forms",
+        "The angled view separates wings, frame and cross in depth."
+      ]
+    ]
+  },
+  {
+    "id": "forest-landscape",
+    "name": "Terrain Study",
+    "tag": "Landscape / surface",
+    "intro": "Look across the ridges, then move overhead to understand how the terrain\u2019s surfaces fit together.",
+    "faces": 1458,
+    "source": "Landscape FBX \u2192 terrain OBJ",
+    "note": "Terrain geometry extracted from the supplied FBX. Sky dome and texture-based tree cards are omitted. Textures are not imported into this Form study.",
+    "lesson": [
+      "Choose Angle to read the height changes across the terrain.",
+      "Switch to Top and Mesh to inspect the surface layout.",
+      "Download the prepared OBJ and import it through Form\u2019s Sculpt panel with units set to mm."
+    ],
+    "shots": [
+      [
+        "terrain-perspective",
+        "Read the elevation",
+        "The converted terrain geometry in Form\u2019s isometric Shaded view."
+      ],
+      [
+        "terrain-technical",
+        "Inspect the terrain surface",
+        "An orthographic Technical view of the landscape study."
+      ],
+      [
+        "terrain-top",
+        "Move overhead",
+        "Form\u2019s Top view reveals the footprint of the terrain pieces."
+      ]
+    ]
+  }
+]

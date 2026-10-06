@@ -1,0 +1,36 @@
+[
+  {
+    "name": "starter",
+    "parameters": {
+      "width": 8000,
+      "depth": 6000,
+      "height": 2800,
+      "wall": 200,
+      "studio": 4600,
+      "door": 900,
+      "window": 1800,
+      "label": "Studio / living"
+    },
+    "bodies": 19,
+    "volume": 29266800000.000023,
+    "valid": true,
+    "solid": true
+  },
+  {
+    "name": "example",
+    "parameters": {
+      "width": 9000,
+      "depth": 6000,
+      "height": 3100,
+      "wall": 200,
+      "studio": 5000,
+      "door": 1000,
+      "window": 2400,
+      "label": "My creative home"
+    },
+    "bodies": 19,
+    "volume": 33662800000.000015,
+    "valid": true,
+    "solid": true
+  }
+]

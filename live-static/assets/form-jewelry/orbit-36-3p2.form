@@ -1,0 +1,791 @@
+{
+  "kind": "form-studio-project",
+  "version": 2,
+  "projectId": "momentium-orbit-36-3p2",
+  "revisionId": "jewelry-v1",
+  "name": "Orbit pendant / 36 × 3.2 mm",
+  "createdAt": 1790786695856,
+  "updatedAt": 1790791696186,
+  "common": {
+    "canonicalUnits": "mm",
+    "displayUnits": "mm",
+    "upAxis": "Y",
+    "handedness": "right"
+  },
+  "workspaces": {
+    "cad": {
+      "schema": "form-studio/cad@14",
+      "objectIds": [
+        "orbit-outline",
+        "orbit-bail",
+        "orbit-window",
+        "orbit-chain",
+        "extrude-orbit-outline",
+        "extrude-orbit-bail",
+        "extrude-orbit-window",
+        "extrude-orbit-chain",
+        "join-chain-loop",
+        "cut-openings"
+      ],
+      "data": {
+        "version": 17,
+        "roomId": "momentium-orbit-36-3p2",
+        "meshFeatures": [],
+        "sceneNodes": [],
+        "animation": {
+          "actions": [],
+          "tracks": [],
+          "fps": 24,
+          "range": {
+            "start": 0,
+            "end": 48
+          },
+          "speed": 1,
+          "loop": "loop",
+          "playhead": 0,
+          "playing": false
+        },
+        "geometryGraph": {
+          "nodes": [
+            {
+              "id": "box",
+              "kind": "box",
+              "params": {
+                "width": 20,
+                "height": 20,
+                "depth": 20
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "bar",
+              "kind": "cylinder",
+              "params": {
+                "radius": 6,
+                "height": 60,
+                "segments": 16
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 120
+              }
+            },
+            {
+              "id": "cut",
+              "kind": "boolean",
+              "params": {},
+              "options": {
+                "operation": "difference"
+              },
+              "position": {
+                "x": 220,
+                "y": 40
+              }
+            },
+            {
+              "id": "out",
+              "kind": "output",
+              "params": {},
+              "options": {},
+              "position": {
+                "x": 440,
+                "y": 40
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "box",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "a"
+              }
+            },
+            {
+              "from": {
+                "node": "bar",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "cut",
+                "socket": "b"
+              }
+            },
+            {
+              "from": {
+                "node": "cut",
+                "socket": "geometry"
+              },
+              "to": {
+                "node": "out",
+                "socket": "geometry"
+              }
+            }
+          ],
+          "output": "out"
+        },
+        "materialGraph": {
+          "nodes": [
+            {
+              "id": "uv",
+              "kind": "coordinates",
+              "params": {
+                "scale": 1
+              },
+              "options": {},
+              "position": {
+                "x": 0,
+                "y": 0
+              }
+            },
+            {
+              "id": "check",
+              "kind": "checker",
+              "params": {
+                "u": 0,
+                "v": 0,
+                "squares": 8
+              },
+              "options": {},
+              "position": {
+                "x": 180,
+                "y": 0
+              }
+            },
+            {
+              "id": "colour",
+              "kind": "ramp",
+              "params": {
+                "value": 0,
+                "from": [
+                  0.05,
+                  0.05,
+                  0.06
+                ],
+                "to": [
+                  0.85,
+                  0.95,
+                  0.55
+                ]
+              },
+              "options": {},
+              "position": {
+                "x": 360,
+                "y": 0
+              }
+            },
+            {
+              "id": "surface",
+              "kind": "output",
+              "params": {
+                "base color": [
+                  0.8,
+                  0.8,
+                  0.8
+                ],
+                "roughness": 0.5,
+                "metalness": 0,
+                "bump": 0
+              },
+              "options": {},
+              "position": {
+                "x": 540,
+                "y": 0
+              }
+            }
+          ],
+          "links": [
+            {
+              "from": {
+                "node": "uv",
+                "socket": "u"
+              },
+              "to": {
+                "node": "check",
+                "socket": "u"
+              }
+            },
+            {
+              "from": {
+                "node": "uv",
+                "socket": "v"
+              },
+              "to": {
+                "node": "check",
+                "socket": "v"
+              }
+            },
+            {
+              "from": {
+                "node": "check",
+                "socket": "value"
+              },
+              "to": {
+                "node": "colour",
+                "socket": "value"
+              }
+            },
+            {
+              "from": {
+                "node": "colour",
+                "socket": "color"
+              },
+              "to": {
+                "node": "surface",
+                "socket": "base color"
+              }
+            }
+          ],
+          "output": "surface"
+        },
+        "viewport": {
+          "shading": "shaded",
+          "projection": null
+        },
+        "canonicalUnits": "mm",
+        "displayUnits": "mm",
+        "entities": [
+          {
+            "id": "orbit-outline",
+            "type": "circle",
+            "a": {
+              "x": 0,
+              "y": 0
+            },
+            "b": {
+              "x": 18,
+              "y": 0
+            },
+            "rotation": 0,
+            "layer": "pendant",
+            "constraints": [],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "orbit-bail",
+            "type": "circle",
+            "a": {
+              "x": 0,
+              "y": 17.64
+            },
+            "b": {
+              "x": 4.32,
+              "y": 17.64
+            },
+            "rotation": 0,
+            "layer": "pendant",
+            "constraints": [],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "orbit-window",
+            "type": "circle",
+            "a": {
+              "x": 2.7,
+              "y": 0
+            },
+            "b": {
+              "x": 12.78,
+              "y": 0
+            },
+            "rotation": 0,
+            "layer": "cutouts",
+            "constraints": [],
+            "sketchPlaneId": "world-xy"
+          },
+          {
+            "id": "orbit-chain",
+            "type": "circle",
+            "a": {
+              "x": 0,
+              "y": 17.64
+            },
+            "b": {
+              "x": 1.872,
+              "y": 17.64
+            },
+            "rotation": 0,
+            "layer": "cutouts",
+            "constraints": [],
+            "sketchPlaneId": "world-xy"
+          }
+        ],
+        "features": [
+          {
+            "id": "extrude-orbit-outline",
+            "type": "Extrude",
+            "value": 3.2,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-outline"
+            ]
+          },
+          {
+            "id": "extrude-orbit-bail",
+            "type": "Extrude",
+            "value": 3.2,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-bail"
+            ]
+          },
+          {
+            "id": "extrude-orbit-window",
+            "type": "Extrude",
+            "value": 3.2,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-window"
+            ]
+          },
+          {
+            "id": "extrude-orbit-chain",
+            "type": "Extrude",
+            "value": 3.2,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-chain"
+            ]
+          },
+          {
+            "id": "join-chain-loop",
+            "type": "Fuse",
+            "value": 0,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-outline",
+              "orbit-bail"
+            ]
+          },
+          {
+            "id": "cut-openings",
+            "type": "Cut",
+            "value": 0,
+            "unit": "mm",
+            "enabled": true,
+            "sourceEntityIds": [
+              "orbit-outline",
+              "orbit-window",
+              "orbit-chain"
+            ]
+          }
+        ],
+        "layers": [
+          {
+            "id": "pendant",
+            "name": "Pendant profiles",
+            "color": "#658cc5",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "cutouts",
+            "name": "Cutout profiles",
+            "color": "#d76c7c",
+            "visible": true,
+            "locked": false
+          },
+          {
+            "id": "dimensions",
+            "name": "Dimensions",
+            "color": "#837687",
+            "visible": true,
+            "locked": false
+          }
+        ],
+        "geometricConstraints": [
+          {
+            "id": "chain-concentric",
+            "kind": "concentric",
+            "entityIds": [
+              "orbit-bail",
+              "orbit-chain"
+            ]
+          }
+        ],
+        "parameters": [],
+        "gdt": [],
+        "components": [],
+        "assemblyInstances": [],
+        "assemblyMates": [],
+        "linkedGroups": [],
+        "importedBodies": [],
+        "volumes": [],
+        "drafting": {
+          "schema": "form-studio-drafting-v1",
+          "texts": [
+            {
+              "id": "depth-note",
+              "kind": "text",
+              "layer": "dimensions",
+              "visible": true,
+              "locked": false,
+              "text": "ORBIT - D36 / thickness 3.2 mm",
+              "position": {
+                "x": -18,
+                "y": -29
+              },
+              "height": 1.4,
+              "rotation": 0,
+              "multiline": false,
+              "style": "STANDARD"
+            }
+          ],
+          "dimensions": [
+            {
+              "id": "overall-width",
+              "kind": "dimension",
+              "layer": "dimensions",
+              "visible": true,
+              "locked": false,
+              "dimensionType": 0,
+              "definitionPoint": {
+                "x": 0,
+                "y": -23
+              },
+              "extensionStart": {
+                "x": -18,
+                "y": 0
+              },
+              "extensionEnd": {
+                "x": 18,
+                "y": 0
+              },
+              "textPosition": {
+                "x": 0,
+                "y": -23
+              },
+              "measurement": 36
+            }
+          ],
+          "leaders": [],
+          "hatches": [],
+          "blockDefinitions": [],
+          "blockInstances": [],
+          "layouts": [
+            {
+              "id": "model",
+              "name": "Model",
+              "paperWidthMm": 420,
+              "paperHeightMm": 297,
+              "marginMm": 5,
+              "scale": "1:1",
+              "orientation": "landscape",
+              "modelSpace": true
+            }
+          ],
+          "activeLayoutId": "model"
+        },
+        "sketchPlanes": [
+          {
+            "id": "world-xy",
+            "name": "World XY",
+            "origin": [
+              0,
+              0,
+              0
+            ],
+            "u": [
+              1,
+              0,
+              0
+            ],
+            "v": [
+              0,
+              1,
+              0
+            ],
+            "normal": [
+              0,
+              0,
+              1
+            ]
+          }
+        ],
+        "rollbackIndex": 6,
+        "material": "Aluminum 6061",
+        "density": 2.7,
+        "drawingScale": "1:1",
+        "drawingRevision": "A",
+        "drawingBook": {
+          "schema": "form-drawing-book-v1",
+          "sheets": [
+            {
+              "id": "production",
+              "title": "Production drawing",
+              "paper": "A3",
+              "orientation": "landscape",
+              "template": "engineering",
+              "author": "Form Studio",
+              "drawingNumber": "",
+              "views": {
+                "Front": {
+                  "x": 90,
+                  "y": 155,
+                  "visible": true
+                },
+                "Top": {
+                  "x": 90,
+                  "y": 65,
+                  "visible": true
+                },
+                "Right": {
+                  "x": 230,
+                  "y": 155,
+                  "visible": true
+                },
+                "Iso": {
+                  "x": 230,
+                  "y": 65,
+                  "visible": true
+                },
+                "Section A-A": {
+                  "x": 350,
+                  "y": 110,
+                  "visible": true
+                }
+              },
+              "annotations": []
+            }
+          ]
+        },
+        "configurations": [],
+        "activeConfigurationId": null,
+        "bimNodes": [
+          {
+            "id": "bim-project",
+            "kind": "project",
+            "name": "Form BIM Project",
+            "parentId": null,
+            "phase": "existing",
+            "properties": {
+              "schema": "IFC4",
+              "units": "mm"
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-site",
+            "kind": "site",
+            "name": "Site",
+            "parentId": "bim-project",
+            "phase": "existing",
+            "properties": {
+              "elevation": 0
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-building",
+            "kind": "building",
+            "name": "Building",
+            "parentId": "bim-site",
+            "phase": "new",
+            "properties": {
+              "storeys": 1,
+              "grossFloorArea": 0
+            },
+            "entityIds": []
+          },
+          {
+            "id": "bim-storey-1",
+            "kind": "storey",
+            "name": "Level 01",
+            "parentId": "bim-building",
+            "phase": "new",
+            "properties": {
+              "elevation": 0,
+              "height": 3000,
+              "levelId": "bim-storey-1"
+            },
+            "entityIds": []
+          }
+        ],
+        "recipeGraphs": [
+          {
+            "id": "recipe-parametric-disc",
+            "name": "Parametric Mounting Disc",
+            "version": 1,
+            "author": "Form Studio",
+            "shared": true,
+            "nodes": [
+              {
+                "id": "diameter",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 40
+                }
+              },
+              {
+                "id": "depth",
+                "kind": "parameter",
+                "inputs": [],
+                "values": {
+                  "value": 6
+                }
+              },
+              {
+                "id": "profile",
+                "kind": "circle",
+                "inputs": [
+                  "diameter"
+                ],
+                "values": {}
+              },
+              {
+                "id": "solid",
+                "kind": "extrude",
+                "inputs": [
+                  "profile",
+                  "depth"
+                ],
+                "values": {}
+              },
+              {
+                "id": "result",
+                "kind": "output",
+                "inputs": [
+                  "solid"
+                ],
+                "values": {}
+              }
+            ]
+          }
+        ],
+        "revisions": [],
+        "marketplace": [
+          {
+            "id": "market-gear",
+            "name": "Precision Gear Family",
+            "category": "Engineering",
+            "version": 3,
+            "downloads": 2840,
+            "rating": 4.9
+          },
+          {
+            "id": "market-stair",
+            "name": "Code-Aware Stair",
+            "category": "Architecture",
+            "version": 2,
+            "downloads": 1922,
+            "rating": 4.8
+          },
+          {
+            "id": "market-disc",
+            "name": "Parametric Mounting Disc",
+            "category": "Recipe Graph",
+            "version": 1,
+            "downloads": 906,
+            "rating": 4.7,
+            "graph": {
+              "id": "recipe-parametric-disc",
+              "name": "Parametric Mounting Disc",
+              "version": 1,
+              "author": "Form Studio",
+              "shared": true,
+              "nodes": [
+                {
+                  "id": "diameter",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 40
+                  }
+                },
+                {
+                  "id": "depth",
+                  "kind": "parameter",
+                  "inputs": [],
+                  "values": {
+                    "value": 6
+                  }
+                },
+                {
+                  "id": "profile",
+                  "kind": "circle",
+                  "inputs": [
+                    "diameter"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "solid",
+                  "kind": "extrude",
+                  "inputs": [
+                    "profile",
+                    "depth"
+                  ],
+                  "values": {}
+                },
+                {
+                  "id": "result",
+                  "kind": "output",
+                  "inputs": [
+                    "solid"
+                  ],
+                  "values": {}
+                }
+              ]
+            }
+          }
+        ],
+        "appearance": {
+          "preset": "design",
+          "baseColor": "#d5ad54",
+          "useLayerColor": false,
+          "metalness": 0.86,
+          "roughness": 0.23,
+          "clearcoat": 0.32,
+          "clearcoatRoughness": 0.12,
+          "transmission": 0,
+          "ior": 1.45,
+          "attenuationDistance": 500,
+          "volumeScatter": 0,
+          "volumeVariation": 0,
+          "opacity": 1,
+          "environment": "daylight",
+          "exposure": 0.8,
+          "groundShadow": true
+        },
+        "kernel": "Open CASCADE B-Rep",
+        "checksum": "fnv1a128-085f8deee5c9f7280c7d59e45eb99d15"
+      },
+      "coordinateSystem": {
+        "units": "mm",
+        "upAxis": "Z",
+        "handedness": "right",
+        "toCommonAxes": [
+          "+X",
+          "-Z",
+          "+Y"
+        ]
+      },
+      "updatedAt": 1790791696186
+    }
+  },
+  "relationships": [],
+  "assets": [],
+  "checksum": "fnv1a128-88afd1fa7bbd1d471db34de952b2751e",
+  "extensions": {
+    "momentium-jewelry": {
+      "diameter": 36,
+      "depth": 3.2,
+      "name": "Orbit pendant",
+      "version": 1
+    }
+  }
+}

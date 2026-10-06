@@ -1,15 +1,19 @@
 "use client";
 import { useEffect, useState } from "react";
 import { loadBundledFont } from "@/app/engine/bundled-fonts";
-import { FONT_CHOICES, fontFamilyValue, loadInstalledFontFamilies, type FontChoice } from "../font-catalog";
+import { loadUserFont } from "@/app/engine/user-fonts";
+import { FONT_CHOICES, fontFamilyValue, loadInstalledFontFamilies, userFontChoices, type FontChoice } from "../font-catalog";
 
 export function FontPicker({ value, onChange }: { value: string; onChange: (family: string) => void }) {
-  const [fonts, setFonts] = useState<FontChoice[]>(FONT_CHOICES);
+  const [fonts, setFonts] = useState<FontChoice[]>(() => [...userFontChoices(), ...FONT_CHOICES]);
   const [query, setQuery] = useState("");
   const [custom, setCustom] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
-  useEffect(() => { void loadBundledFont(value).catch(() => setStatus("Bundled font could not load. Check that the app's font assets are present.")); }, [value]);
+  useEffect(() => {
+    void loadBundledFont(value).catch(() => setStatus("Bundled font could not load. Check that the app's font assets are present."));
+    void loadUserFont(value).catch(() => setStatus("This Glyph font is missing from this browser's storage. Reinstall it from Glyph."));
+  }, [value]);
   const visible = fonts.filter(font => `${font.label} ${font.category}`.toLowerCase().includes(query.toLowerCase())).slice(0, 100);
   return <div className="type-wide type-font-picker">
     <label><span>Find a typeface</span><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Family or style…" /></label>
@@ -20,7 +24,7 @@ export function FontPicker({ value, onChange }: { value: string; onChange: (fami
     <div aria-label="Font preview" className="type-font-preview" style={{ fontFamily: value }}>Aa Bb 0123 · Type your world</div>
     <button disabled={loading} onClick={async () => {
       setLoading(true); setStatus("");
-      try { const installed = await loadInstalledFontFamilies(); const retained = FONT_CHOICES.filter(font => font.bundled || font.category === "System"); setFonts([...retained, ...installed.filter(font => !retained.some(item => item.value === font.value))]); setStatus(`${installed.length} installed families found`); }
+      try { const installed = await loadInstalledFontFamilies(); const retained = [...userFontChoices(), ...FONT_CHOICES.filter(font => font.bundled || font.category === "System")]; setFonts([...retained, ...installed.filter(font => !retained.some(item => item.value === font.value))]); setStatus(`${installed.length} installed families found`); }
       catch (error) { setStatus(error instanceof Error ? error.message : "Font discovery failed"); }
       finally { setLoading(false); }
     }}>{loading ? "Reading fonts…" : "Load installed fonts"}</button>

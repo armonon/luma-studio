@@ -1,0 +1,8 @@
+{
+  "package": "onnxruntime-web",
+  "version": "1.31.0-dev.20260914-8d85527a0",
+  "sha256": {
+    "ort-wasm-simd-threaded.mjs": "c57ca56328877353a575e51bbca6f18450027d6c9bf2307a2cb2c41363b4de9f",
+    "ort-wasm-simd-threaded.wasm": "06ba057753da3847e4c24f02d91ab133455b0817c69a44993a9a53a2146df9e3"
+  }
+}

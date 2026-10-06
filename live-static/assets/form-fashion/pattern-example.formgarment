@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "id": "garment-s0grxnb",
+  "name": "Draft an A-line skirt / example",
+  "kind": "skirt",
+  "size": "M",
+  "fabric": {
+    "id": "cotton-poplin",
+    "name": "Cotton poplin",
+    "color": "#789ee2",
+    "weight": 120,
+    "thickness": 0.28,
+    "stretchWarp": 2,
+    "stretchWeft": 3,
+    "stretchBias": 8,
+    "bend": 0.64,
+    "friction": 0.55,
+    "shrinkage": 3
+  },
+  "avatar": {
+    "height": 1700,
+    "bust": 920,
+    "waist": 760,
+    "hip": 990,
+    "neck": 370,
+    "shoulder": 410,
+    "armLength": 610,
+    "inseam": 790
+  },
+  "avatarProfile": {
+    "sex": "female",
+    "build": 50,
+    "pose": "neutral"
+  },
+  "fitBody": {
+    "kind": "procedural-reference",
+    "name": "Form anatomical fitting reference",
+    "surfaceReady": false,
+    "rightsConfirmed": true
+  },
+  "pieces": [
+    {
+      "id": "piece-zssbf7e",
+      "name": "Skirt front",
+      "role": "front",
+      "points": [
+        {
+          "x": -188.75,
+          "y": 195.5
+        },
+        {
+          "x": -261.25,
+          "y": 25.5
+        },
+        {
+          "x": -292.5,
+          "y": -425
+        },
+        {
+          "x": 292.5,
+          "y": -425
+        },
+        {
+          "x": 261.25,
+          "y": 25.5
+        },
+        {
+          "x": 198.75,
+          "y": 195.5
+        }
+      ],
+      "edgeNames": [
+        "left-hip",
+        "left-side",
+        "hem",
+        "right-side",
+        "right-hip",
+        "waist"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 15,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": -342.5,
+        "y": -195.5
+      },
+      "stockPlacement": {
+        "region": "torso"
+      },
+      "notches": [
+        {
+          "id": "match-1",
+          "edgeIndex": 0,
+          "fraction": 0.2705421347231652,
+          "depth": 4,
+          "label": "Match 1"
+        }
+      ]
+    },
+    {
+      "id": "piece-2h85zj5",
+      "name": "Skirt back",
+      "role": "back",
+      "points": [
+        {
+          "x": -198.75,
+          "y": 195.5
+        },
+        {
+          "x": -261.25,
+          "y": 25.5
+        },
+        {
+          "x": -292.5,
+          "y": -425
+        },
+        {
+          "x": 292.5,
+          "y": -425
+        },
+        {
+          "x": 261.25,
+          "y": 25.5
+        },
+        {
+          "x": 198.75,
+          "y": 195.5
+        }
+      ],
+      "edgeNames": [
+        "left-hip",
+        "left-side",
+        "hem",
+        "right-side",
+        "right-hip",
+        "waist"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 10,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": 342.5,
+        "y": -195.5
+      },
+      "stockPlacement": {
+        "region": "torso"
+      }
+    }
+  ],
+  "seams": [
+    {
+      "id": "seam-lz53xwo",
+      "name": "Skirt front ↔ Skirt back",
+      "a": {
+        "pieceId": "piece-zssbf7e",
+        "edgeIndex": 0
+      },
+      "b": {
+        "pieceId": "piece-2h85zj5",
+        "edgeIndex": 0
+      },
+      "type": "plain",
+      "easeRatio": 0.9800386496477033,
+      "enabled": true
+    },
+    {
+      "id": "seam-m6xanfb",
+      "name": "Skirt front ↔ Skirt back",
+      "a": {
+        "pieceId": "piece-zssbf7e",
+        "edgeIndex": 1
+      },
+      "b": {
+        "pieceId": "piece-2h85zj5",
+        "edgeIndex": 1
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-jzcuezo",
+      "name": "Skirt front ↔ Skirt back",
+      "a": {
+        "pieceId": "piece-zssbf7e",
+        "edgeIndex": 3
+      },
+      "b": {
+        "pieceId": "piece-2h85zj5",
+        "edgeIndex": 3
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-fx6ppxi",
+      "name": "Skirt front ↔ Skirt back",
+      "a": {
+        "pieceId": "piece-zssbf7e",
+        "edgeIndex": 4
+      },
+      "b": {
+        "pieceId": "piece-2h85zj5",
+        "edgeIndex": 4
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    }
+  ],
+  "details": [],
+  "createdAt": "2026-09-30T18:27:35.148Z",
+  "updatedAt": "2026-09-30T18:27:35.181Z"
+}

@@ -1,0 +1,584 @@
+{
+  "version": 1,
+  "id": "garment-cfg192b",
+  "name": "Sew your everyday tee / example",
+  "kind": "tshirt",
+  "size": "M",
+  "fabric": {
+    "id": "jersey",
+    "name": "Cotton jersey",
+    "color": "#84bba5",
+    "weight": 180,
+    "thickness": 0.48,
+    "stretchWarp": 18,
+    "stretchWeft": 42,
+    "stretchBias": 35,
+    "bend": 0.35,
+    "friction": 0.48,
+    "shrinkage": 5
+  },
+  "avatar": {
+    "height": 1700,
+    "bust": 920,
+    "waist": 760,
+    "hip": 990,
+    "neck": 370,
+    "shoulder": 410,
+    "armLength": 610,
+    "inseam": 790
+  },
+  "avatarProfile": {
+    "sex": "female",
+    "build": 50,
+    "pose": "neutral"
+  },
+  "fitBody": {
+    "kind": "procedural-reference",
+    "name": "Form anatomical fitting reference",
+    "surfaceReady": false,
+    "rightsConfirmed": true
+  },
+  "pieces": [
+    {
+      "id": "piece-4ezgd8s",
+      "name": "Front",
+      "role": "front",
+      "points": [
+        {
+          "x": -74,
+          "y": 510
+        },
+        {
+          "x": -205,
+          "y": 489.6
+        },
+        {
+          "x": -243.75,
+          "y": 331.5
+        },
+        {
+          "x": -212.5,
+          "y": 195.5
+        },
+        {
+          "x": -261.25,
+          "y": 0
+        },
+        {
+          "x": -261.25,
+          "y": -25.5
+        },
+        {
+          "x": 261.25,
+          "y": -25.5
+        },
+        {
+          "x": 261.25,
+          "y": 0
+        },
+        {
+          "x": 212.5,
+          "y": 195.5
+        },
+        {
+          "x": 243.75,
+          "y": 331.5
+        },
+        {
+          "x": 205,
+          "y": 489.6
+        },
+        {
+          "x": 74,
+          "y": 510
+        },
+        {
+          "x": 55.5,
+          "y": 459.4000061758897
+        },
+        {
+          "x": 37,
+          "y": 443.74905661049047
+        },
+        {
+          "x": 18.5,
+          "y": 435.92919350378315
+        },
+        {
+          "x": 0,
+          "y": 433.5
+        },
+        {
+          "x": -18.5,
+          "y": 435.92919350378315
+        },
+        {
+          "x": -37,
+          "y": 443.74905661049047
+        },
+        {
+          "x": -55.5,
+          "y": 459.4000061758897
+        }
+      ],
+      "edgeNames": [
+        "shoulder-right",
+        "attach-right-front",
+        "right-side-chest",
+        "right-side-waist",
+        "right-side-hem",
+        "hem",
+        "left-side-hem",
+        "left-side-waist",
+        "left-side-chest",
+        "attach-left-front",
+        "shoulder-left",
+        "neck-0",
+        "neck-1",
+        "neck-2",
+        "neck-3",
+        "neck-4",
+        "neck-5",
+        "neck-6",
+        "neck-7"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 10,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": -311.25,
+        "y": -510
+      },
+      "stockPlacement": {
+        "region": "torso"
+      }
+    },
+    {
+      "id": "piece-bqjpp43",
+      "name": "Back",
+      "role": "back",
+      "points": [
+        {
+          "x": -74,
+          "y": 510
+        },
+        {
+          "x": -205,
+          "y": 489.6
+        },
+        {
+          "x": -243.75,
+          "y": 331.5
+        },
+        {
+          "x": -212.5,
+          "y": 195.5
+        },
+        {
+          "x": -261.25,
+          "y": 0
+        },
+        {
+          "x": -261.25,
+          "y": -25.5
+        },
+        {
+          "x": 261.25,
+          "y": -25.5
+        },
+        {
+          "x": 261.25,
+          "y": 0
+        },
+        {
+          "x": 212.5,
+          "y": 195.5
+        },
+        {
+          "x": 243.75,
+          "y": 331.5
+        },
+        {
+          "x": 205,
+          "y": 489.6
+        },
+        {
+          "x": 74,
+          "y": 510
+        },
+        {
+          "x": 55.5,
+          "y": 494.25777969916567
+        },
+        {
+          "x": 37,
+          "y": 489.38859538993034
+        },
+        {
+          "x": 18.5,
+          "y": 486.95574909006586
+        },
+        {
+          "x": 0,
+          "y": 486.2
+        },
+        {
+          "x": -18.5,
+          "y": 486.95574909006586
+        },
+        {
+          "x": -37,
+          "y": 489.38859538993034
+        },
+        {
+          "x": -55.5,
+          "y": 494.25777969916567
+        }
+      ],
+      "edgeNames": [
+        "shoulder-right",
+        "attach-right-back",
+        "right-side-chest",
+        "right-side-waist",
+        "right-side-hem",
+        "hem",
+        "left-side-hem",
+        "left-side-waist",
+        "left-side-chest",
+        "attach-left-back",
+        "shoulder-left",
+        "neck-0",
+        "neck-1",
+        "neck-2",
+        "neck-3",
+        "neck-4",
+        "neck-5",
+        "neck-6",
+        "neck-7"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 10,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": 311.25,
+        "y": -510
+      },
+      "stockPlacement": {
+        "region": "torso"
+      }
+    },
+    {
+      "id": "piece-7v687vp",
+      "name": "Right sleeve",
+      "role": "free",
+      "points": [
+        {
+          "x": 0,
+          "y": 78.13417014341421
+        },
+        {
+          "x": -142.80134437742524,
+          "y": 0
+        },
+        {
+          "x": -131.37723682723123,
+          "y": -183
+        },
+        {
+          "x": 131.37723682723123,
+          "y": -183
+        },
+        {
+          "x": 142.80134437742524,
+          "y": 0
+        }
+      ],
+      "edgeNames": [
+        "attach-right-front",
+        "under-right",
+        "hem",
+        "under-right",
+        "attach-right-back"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 10,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": -192.80134437742524,
+        "y": -733.6341701434142
+      },
+      "stockPlacement": {
+        "region": "sleeve",
+        "side": -1
+      }
+    },
+    {
+      "id": "piece-ebu20f4",
+      "name": "Left sleeve",
+      "role": "free",
+      "points": [
+        {
+          "x": 0,
+          "y": 78.13417014341421
+        },
+        {
+          "x": -142.80134437742524,
+          "y": 0
+        },
+        {
+          "x": -131.37723682723123,
+          "y": -183
+        },
+        {
+          "x": 131.37723682723123,
+          "y": -183
+        },
+        {
+          "x": 142.80134437742524,
+          "y": 0
+        }
+      ],
+      "edgeNames": [
+        "attach-left-front",
+        "under-left",
+        "hem",
+        "under-left",
+        "attach-left-back"
+      ],
+      "grainAngle": 0,
+      "seamAllowance": 10,
+      "cutQuantity": 1,
+      "mirror": false,
+      "rotation": 0,
+      "position": {
+        "x": 192.80134437742524,
+        "y": -733.6341701434142
+      },
+      "stockPlacement": {
+        "region": "sleeve",
+        "side": 1
+      }
+    }
+  ],
+  "seams": [
+    {
+      "id": "seam-h6og90x",
+      "name": "attach right front",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 1
+      },
+      "b": {
+        "pieceId": "piece-7v687vp",
+        "edgeIndex": 0
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-j5pn1kx",
+      "name": "right side chest",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 2
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 2
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-g2e3r2h",
+      "name": "right side waist",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 3
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 3
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-ktcm8e7",
+      "name": "right side hem",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 4
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 4
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-d1qdd7s",
+      "name": "left side hem",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 6
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 6
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-zpqmn6c",
+      "name": "left side waist",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 7
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 7
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-yj7mwkb",
+      "name": "left side chest",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 8
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 8
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-a1xkibd",
+      "name": "attach left front",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 9
+      },
+      "b": {
+        "pieceId": "piece-ebu20f4",
+        "edgeIndex": 0
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-1ey5m8n",
+      "name": "shoulder left",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 10
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 10
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-dwvgku4",
+      "name": "attach right back",
+      "a": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 1
+      },
+      "b": {
+        "pieceId": "piece-7v687vp",
+        "edgeIndex": 4
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-uccsvk0",
+      "name": "attach left back",
+      "a": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 9
+      },
+      "b": {
+        "pieceId": "piece-ebu20f4",
+        "edgeIndex": 4
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-20tw7d6",
+      "name": "under right",
+      "a": {
+        "pieceId": "piece-7v687vp",
+        "edgeIndex": 1
+      },
+      "b": {
+        "pieceId": "piece-7v687vp",
+        "edgeIndex": 3
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-wl8bldl",
+      "name": "under left",
+      "a": {
+        "pieceId": "piece-ebu20f4",
+        "edgeIndex": 1
+      },
+      "b": {
+        "pieceId": "piece-ebu20f4",
+        "edgeIndex": 3
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    },
+    {
+      "id": "seam-yf8nnls",
+      "name": "Front ↔ Back",
+      "a": {
+        "pieceId": "piece-4ezgd8s",
+        "edgeIndex": 0
+      },
+      "b": {
+        "pieceId": "piece-bqjpp43",
+        "edgeIndex": 0
+      },
+      "type": "plain",
+      "easeRatio": 1,
+      "enabled": true
+    }
+  ],
+  "details": [],
+  "createdAt": "2026-09-30T18:27:35.247Z",
+  "updatedAt": "2026-09-30T18:27:35.279Z"
+}

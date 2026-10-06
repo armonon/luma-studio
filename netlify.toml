@@ -11,6 +11,14 @@
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
+# luma.thecreatingco.com has always published a much larger static
+# marketing/learning site alongside this app (see live-static/ and
+# docs/release/live-static-overlay.md). This runs after the plugin above and
+# merges those live-only files into the publish dir it just produced, so a
+# repo-driven deploy does not drop them.
+[[plugins]]
+  package = "./build/netlify-plugins/overlay-live-static"
+
 [build.environment]
   NODE_VERSION = "24"
   NEXT_TELEMETRY_DISABLED = "1"

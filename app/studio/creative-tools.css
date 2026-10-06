@@ -1,0 +1,93 @@
+/* Mockup + Glyph dialogs. Shares the visual language of the Recolor dialog
+   (dark raised surface, blue accent) so new tools look native to the studio. */
+.ct-backdrop { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 16px; background: #06090ec9; backdrop-filter: blur(8px); }
+.ct-dialog { width: min(1320px, 100%); height: min(900px, calc(100dvh - 32px)); display: flex; flex-direction: column; overflow: hidden; background: #171b22; color: #e4e8f0; border: 1px solid #ffffff20; border-radius: 12px; box-shadow: 0 24px 100px #0009; font-size: 12px; text-align: left; outline: none; }
+.ct-dialog > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #ffffff12; }
+.ct-eyebrow { font-size: 9px; letter-spacing: .16em; color: #8caae0; }
+.ct-dialog h2 { margin: 2px 0; font-size: 20px; font-weight: 600; }
+.ct-dialog header p { margin: 0; color: #9ca6b8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-header-actions { display: flex; gap: 8px; }
+.ct-dialog button, .ct-dialog select, .ct-dialog input:not([type=range]):not([type=checkbox]):not([type=color]), .ct-dialog textarea { min-height: 30px; border: 1px solid #ffffff20; border-radius: 5px; background: #222834; color: inherit; padding: 4px 8px; font: inherit; }
+.ct-dialog textarea { width: 100%; resize: vertical; box-sizing: border-box; }
+.ct-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: background .12s; }
+.ct-dialog button:hover:not(:disabled) { background: #344155; border-color: #708cb0; }
+.ct-dialog button[aria-pressed=true] { background: #304569; border-color: #6f8fc4; color: #dce8ff; }
+.ct-dialog :is(button, input, select, textarea, canvas):focus-visible { outline: 2px solid #8cb6ff; outline-offset: 2px; }
+.ct-dialog :disabled { opacity: .45; cursor: not-allowed; }
+.ct-dialog .ct-primary { background: #84adff; color: #0b1425; border-color: #84adff; font-weight: 600; }
+.ct-dialog .ct-primary:hover:not(:disabled) { background: #a2c1ff; color: #0b1425; }
+.ct-controls { margin: 0; padding: 0 16px 16px; border: 0; border-left: 1px solid #ffffff12; overflow-y: auto; min-width: 0; min-height: 0; }
+.ct-section { padding: 12px 0; border-bottom: 1px solid #ffffff0d; display: flex; flex-direction: column; gap: 8px; }
+.ct-section h3 { margin: 0; font-size: 11px; font-weight: 600; color: #c7d2e5; letter-spacing: .02em; }
+.ct-section small { color: #8f9bb0; font-size: 10px; line-height: 1.4; }
+.ct-row { display: flex; gap: 8px; align-items: center; justify-content: space-between; color: #bec7d7; }
+.ct-row input, .ct-row select { width: 120px; }
+.ct-row-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.ct-row-buttons > button { flex: 1 1 auto; }
+.ct-segmented { display: flex; gap: 4px; }
+.ct-segmented > button { flex: 1; }
+.ct-slider { display: grid; grid-template-columns: 78px minmax(0, 1fr) 40px; align-items: center; gap: 6px; min-height: 28px; font-size: 11px; color: #bec7d7; }
+.ct-slider input { width: 100%; accent-color: #82acff; }
+.ct-slider output { text-align: right; color: #afbfda; font-variant-numeric: tabular-nums; }
+.ct-check { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #bec7d7; }
+.ct-check input { accent-color: #82acff; }
+.ct-swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ct-dialog .ct-swatches button { width: 26px; min-height: 26px; padding: 0; border-radius: 50%; border: 2px solid #ffffff30; }
+.ct-dialog .ct-swatches button[aria-pressed=true] { border-color: #8cb6ff; box-shadow: 0 0 0 2px #171b22 inset; }
+.ct-swatches input[type=color] { width: 34px; height: 28px; padding: 0; border: 1px solid #ffffff30; border-radius: 6px; background: none; }
+.ct-note { margin: 12px 0 0; color: #8f9bb0; font-size: 10px; line-height: 1.5; }
+.ct-error { color: #ffc3ba; background: #8b302a30; margin: 0; padding: 8px 20px; }
+.ct-status { color: #cfe0ff; background: #2a3c5c55; margin: 0; padding: 8px 20px; }
+.ct-progress { display: flex; align-items: center; gap: 12px; padding: 8px 20px; font-size: 11px; color: #afbfda; }
+.ct-progress progress { flex: 1; accent-color: #84adff; }
+.ct-dialog > footer { display: flex; gap: 8px; align-items: center; border-top: 1px solid #ffffff12; padding: 12px 20px; }
+.ct-footer-status { flex: 1; color: #9ca6b8; }
+
+/* Mockup */
+.mk-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 148px minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr); }
+.mk-scenes { display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow-y: auto; border-right: 1px solid #ffffff12; }
+.ct-dialog .mk-scenes button { flex-direction: column; padding: 6px; gap: 4px; background: transparent; }
+.mk-scenes canvas { width: 100%; aspect-ratio: 1; border-radius: 4px; background: #0f1218; }
+.mk-scenes span { font-size: 11px; }
+.mk-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; background: repeating-conic-gradient(#1b1f27 0% 25%, #20242c 0% 50%) 0 / 18px 18px; }
+/* Absolutely centred with max sizes: a replaced element keeps its 1:1 ratio
+   while shrinking to whichever stage dimension is tighter. */
+.mk-stage canvas { position: absolute; inset: 0; margin: auto; width: auto; height: auto; max-width: calc(100% - 32px); max-height: calc(100% - 32px); border-radius: 6px; box-shadow: 0 10px 40px #0007; cursor: grab; touch-action: none; }
+.mk-stage canvas:active { cursor: grabbing; }
+.mk-stage-note { position: absolute; color: #afbfda; }
+
+/* Glyph */
+.gl-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px minmax(580px, 1fr) 320px; }
+.gl-grid { overflow-y: auto; padding: 8px 12px 16px; border-right: 1px solid #ffffff12; }
+.gl-grid h3 { margin: 10px 0 6px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #8f9bb0; }
+.gl-grid > section > div { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.ct-dialog .gl-grid button { position: relative; padding: 0; height: 46px; background: #11141a; overflow: hidden; }
+.gl-grid button span { position: absolute; left: 4px; top: 2px; font-size: 9px; color: #7f8aa0; }
+.gl-grid button span.gl-has { color: #8cb6ff; }
+.gl-center { min-width: 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 12px; }
+.gl-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: 560px; max-width: 100%; }
+.gl-inline { flex: 1; min-width: 200px; grid-template-columns: 40px minmax(0, 1fr) 32px; }
+.gl-editor-wrap { position: relative; }
+.gl-editor { display: block; border-radius: 6px; touch-action: none; cursor: crosshair; box-shadow: 0 0 0 1px #ffffff14; }
+.gl-glyph-label { position: absolute; right: 10px; bottom: 8px; display: flex; gap: 6px; align-items: baseline; color: #8f9bb0; pointer-events: none; }
+.gl-glyph-label strong { font-size: 20px; color: #dce8ff; }
+.gl-glyph-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; width: 560px; max-width: 100%; }
+.gl-glyph-actions .ct-row input { width: 76px; }
+.gl-side .ct-row input { width: 130px; }
+.gl-preview { width: 100%; display: block; border-radius: 6px; background: #11141a; }
+.gl-installed { display: flex; flex-direction: column; gap: 4px; color: #bec7d7; }
+.gl-installed > span { font-size: 10px; color: #8f9bb0; }
+.gl-installed > div { display: flex; justify-content: space-between; align-items: center; }
+.ct-dialog .gl-installed button { min-height: 22px; padding: 2px 6px; }
+
+@media (max-width: 1100px) {
+  .mk-body { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: auto; overflow-y: auto; }
+  .mk-scenes { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid #ffffff12; }
+  .ct-dialog .mk-scenes button { width: 96px; flex: 0 0 auto; }
+  .mk-stage { min-height: 60vh; }
+  .ct-controls { border-left: 0; }
+  .gl-body { grid-template-columns: 1fr; overflow-y: auto; }
+  .gl-grid { border-right: 0; max-height: 220px; }
+  .gl-editor { width: min(560px, calc(100vw - 64px)) !important; height: auto !important; aspect-ratio: 1; }
+  .ct-dialog > footer { flex-wrap: wrap; }
+}

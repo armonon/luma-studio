@@ -1,0 +1,11 @@
+.mm-access{margin:22px 0 0;padding:18px 20px;border:1px solid currentColor;border-radius:12px;text-align:left;font-family:inherit;max-width:100%;box-sizing:border-box}
+.mm-access .mm-access-copy{font-size:16px;line-height:1.5;letter-spacing:normal;margin:0;color:inherit;max-width:78ch}
+.mm-access .mm-access-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin-top:14px}
+.mm-access .mm-access-actions a{display:inline-block;max-width:100%;font-size:14px;font-weight:700;line-height:1.4;color:inherit;text-decoration:underline;text-underline-offset:3px;padding:7px 0;overflow-wrap:anywhere}
+.mm-access .mm-access-actions .mm-access-web{padding:9px 13px;background:var(--mm-lime,#d8ff3e);border:1px solid #141414;border-radius:6px;color:#141414;text-decoration:none}
+.mm-access .mm-access-status{font-size:14px;line-height:1.5;letter-spacing:normal;margin:12px 0 0;color:inherit;max-width:78ch}
+.momentium-home .mm-access{background:#fff;color:#141414;margin-bottom:22px}
+.text-hero .mm-access{max-width:860px}
+.ph-copy .mm-access{margin-top:20px}
+.mm-access a:focus-visible{outline:3px solid currentColor;outline-offset:4px}
+@media(max-width:500px){.mm-access{padding:16px}.mm-access .mm-access-actions{column-gap:16px}.mm-access .mm-access-copy{font-size:16px}}

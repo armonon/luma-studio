@@ -26,6 +26,8 @@ export type StudioCommand =
   | "export"
   | "export-print"
   | "batch"
+  | "mockups"
+  | "glyph-font-maker"
   // Edit
   | "undo"
   | "redo"
@@ -143,6 +145,11 @@ export const DESKTOP_MENU: MenuSection[] = [
       { kind: "command", id: "export", label: "Export…", accelerator: "CmdOrCtrl+Shift+E" },
       { kind: "command", id: "export-print", label: "CMYK Print PDF…" },
       { kind: "command", id: "batch", label: "Batch Process…" },
+      { kind: "separator" },
+      // Alpha creative tools. Both open full-screen dialogs that work on any
+      // document (Mockups reads the flattened artwork; Glyph needs none).
+      { kind: "command", id: "mockups", label: "Mockups…" },
+      { kind: "command", id: "glyph-font-maker", label: "Glyph Font Maker…" },
       { kind: "separator" },
       { kind: "command", id: "close-document", label: "Close Document", accelerator: "CmdOrCtrl+W" },
     ],

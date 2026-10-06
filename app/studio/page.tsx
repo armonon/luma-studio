@@ -10,7 +10,7 @@ import { PHONE_VIEWPORT_LIMITS } from "./phone-workspace";
 import BrushToolbox, { type PaintSection } from "./brush-toolbox";
 import { BrushMirrorGuides } from "./brush-mirror-guides";
 import { brushMirror, type BrushRecipe, type MirrorMode } from "./brush-library";
-import { FONT_CHOICES } from "./font-catalog";
+import { FONT_CHOICES, fontFamilyValue } from "./font-catalog";
 import { ShellErrorBoundary } from "./shell-error-boundary";
 import { WorkspaceRulers, useWorkspaceRulers } from "./workspace-rulers";
 import { captureCustomShape, decodeShapeLibrary, encodeShapeLibrary, DEFAULT_SHAPE_SETTINGS, SHAPE_LIBRARY_KEY, SHAPE_LIBRARY_LIMIT, SHAPE_PRESETS, type CustomShape, type ShapeSettings } from "../engine/shape-library";
@@ -257,6 +257,8 @@ const PdfImportDialog = lazy(() => import("./pdf-import-dialog"));
 const LayerFocusPanel = lazy(() => import("./layer-focus-panel"));
 const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
 const RecolorDialog = lazy(() => import("./recolor-dialog"));
+const MockupDialog = lazy(() => import("./mockup-dialog"));
+const GlyphDialog = lazy(() => import("./glyph-dialog"));
 const CampaignPanel = lazy(() => import("./panels/campaign-panel"));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
@@ -507,6 +509,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [aiTemperature, setAiTemperature] = useState(0);
   const aiAbort = useRef<AbortController | null>(null);
   const [showBatch, setShowBatch] = useState(false);
+  const [showMockups, setShowMockups] = useState(false);
+  const [showGlyph, setShowGlyph] = useState(false);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ i: number; total: number; name: string } | null>(null);
   const batchAbortRef = useRef<AbortController | null>(null);
@@ -2372,7 +2376,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       event.preventDefault();
       depth = 0;
       setDropActive(false);
-      if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || showNewDocument || recolorSession || pdfChoiceResolver.current) {
+      if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || showNewDocument || recolorSession || showMockups || showGlyph || pdfChoiceResolver.current) {
         notify("Finish the current dialog or file operation before dropping files");
         return;
       }
@@ -2394,7 +2398,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       window.removeEventListener("drop", onDrop);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studio, showBatch, pendingCloseDocumentId, pendingNativeClose, showNewDocument, recolorSession]);
+  }, [studio, showBatch, pendingCloseDocumentId, pendingNativeClose, showNewDocument, recolorSession, showMockups, showGlyph]);
 
   // The engine owns document identity. UI-only copies drift after close,
   // recovery, scripting and AI branches and can save a tab under another name.
@@ -3009,6 +3013,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       case "export": setShowExportMenu(true); return;
       case "export-print": if (studio && isNativeFilesystemAvailable()) { const state = studio.activeDocumentState(); setPrintTarget({ id: state.id, name: state.name }); } return;
       case "batch": setShowBatch(true); return;
+      case "mockups": setShowMockups(true); return;
+      case "glyph-font-maker": setShowGlyph(true); return;
 
       case "undo":
         if (distortDraft || ftDragRef.current || dragRef.current?.kind === "move-layer") cancelTransformGesture();
@@ -3269,6 +3275,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     enabled: (command) => {
       if (!startupReady) return false;
       if (desktopUpdateInstalling || projectSaving || nativeOpening || pendingCloseDocumentId || pendingNativeClose || layerRenameTarget || showExportMenu || printTarget || vectorTarget || recolorSession) return false;
+      if (showMockups || showGlyph) return false;
+      if (command === "mockups") return Boolean(studio);
       if (command === "export-print") return Boolean(studio && isNativeFilesystemAvailable() && studio.doc.bitDepth === 8 && studio.doc.colorSpace === "srgb" && studio.doc.width * studio.doc.height <= 4_000_000);
       if (command === "new-document" || command === "close-document") return Boolean(studio && startupReady);
       if (command === "undo") return studio?.canUndo() ?? false;
@@ -3900,6 +3908,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (e.defaultPrevented) return;
       if (!startupReadyRef.current || projectSavingRef.current || nativeOpeningRef.current) return;
       if (pendingCloseDocumentId || pendingNativeClose || showNewDocument || pdfChoiceResolver.current) return;
+      // Full-screen creative tools own the keyboard while open.
+      if (showMockups || showGlyph) return;
       if (desktopUpdateInstalling) {
         e.preventDefault();
         return;
@@ -4080,7 +4090,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, desktopUpdateInstalling, pendingCloseDocumentId, pendingNativeClose, showNewDocument, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck, distortDraft]);
+  }, [desktop, desktopUpdateInstalling, pendingCloseDocumentId, pendingNativeClose, showNewDocument, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, showMockups, showGlyph, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck, distortDraft]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -5871,6 +5881,32 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                 setActiveLayerId(id); forceUpdate(); recolorSession.release(); setRecolorSession(null);
                 notify(output === "selection" ? "Color range selected" : output.startsWith("mask") ? "Color mask applied" : "Recolor applied · undo available");
               }} />
+          </Suspense>
+        </ShellErrorBoundary>
+      )}
+
+      {showMockups && studio && (
+        <ShellErrorBoundary title="Mockups" region="dialog" onDismiss={() => setShowMockups(false)}>
+          <Suspense fallback={null}>
+            <MockupDialog projectName={projectName} getDocumentArt={() => studio.exportImage("image/png")}
+              onSave={downloadOrSave} onClose={() => setShowMockups(false)}
+              onOpenAsDocument={async (file) => { await importDocumentFile(file); }} />
+          </Suspense>
+        </ShellErrorBoundary>
+      )}
+
+      {showGlyph && (
+        <ShellErrorBoundary title="Glyph" region="dialog" onDismiss={() => setShowGlyph(false)}>
+          <Suspense fallback={null}>
+            <GlyphDialog onClose={() => setShowGlyph(false)} onSave={downloadOrSave}
+              onAddText={studio ? (family, sample) => {
+                try {
+                  const size = Math.max(24, Math.round(Math.min(studio.doc.width, studio.doc.height) / 8));
+                  const layer = studio.addTextLayer(sample, { x: studio.doc.width * 0.08, y: studio.doc.height * 0.5, color: brushColor, font: `400 ${size}px ${fontFamilyValue(family)}` });
+                  setActiveLayerId(layer.id); forceUpdate();
+                  notify(`Text layer set in ${family} · edit it with the Type tool`);
+                } catch (error) { notify(error instanceof Error ? error.message : "Could not add the text layer"); }
+              } : undefined} />
           </Suspense>
         </ShellErrorBoundary>
       )}
