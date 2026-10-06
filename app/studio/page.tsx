@@ -4,6 +4,7 @@ import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
 import { useTabletCanvas } from "./use-tablet-canvas";
 import { PwaToast, useInstallPrompt, usePwaUpdate } from "./pwa";
+import { isFontFile, saveToLocker, useLockerAvailable, useLockerOpen, useSuiteKit, type LockerFile } from "./suite";
 import DownloadConfirmation from "./download-confirmation";
 import { canvasPointerIntent } from "./pointer-intent";
 import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
@@ -337,6 +338,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const initialPresentation = initialStudioPresentation(desktop);
   const pwaUpdate = usePwaUpdate();
   const installPrompt = useInstallPrompt();
+  useSuiteKit(!desktop);
+  const lockerAvailable = useLockerAvailable();
+  const [lockerOffer, setLockerOffer] = useState<{ blob: Blob; name: string; state: "idle" | "saving" | "saved" } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const dynamicCursorRef = useRef<HTMLDivElement>(null);
@@ -2407,7 +2411,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   // recovery, scripting and AI branches and can save a tab under another name.
   const projectName = openDocuments.find(document => document.active)?.name ?? "Untitled";
 
-  const downloadOrSave = async (blob: Blob, fileName: string) => {
+  const downloadOrSave = async (blob: Blob, fileName: string, options: { locker?: boolean } = {}) => {
     if (isNativeFilesystemAvailable()) return saveNativeFile(blob, fileName);
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -2415,8 +2419,52 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     a.download = fileName;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
+    // Offer the same file to the thecreateco Locker (browser-local library).
+    if (options.locker) setLockerOffer({ blob, name: fileName, state: "idle" });
     return true;
   };
+
+  const saveOfferToLocker = () => {
+    const offer = lockerOffer;
+    if (!offer || offer.state !== "idle") return;
+    setLockerOffer({ ...offer, state: "saving" });
+    // Called synchronously from the click so the kit may open its popup.
+    saveToLocker(offer.blob, offer.name, { project: projectName })
+      .then(() => { setLockerOffer(current => current?.blob === offer.blob ? { ...offer, state: "saved" } : current); })
+      .catch((error: unknown) => {
+        setLockerOffer(current => current?.blob === offer.blob ? { ...offer, state: "idle" } : current);
+        notify(error instanceof Error ? error.message : "Locker save failed");
+      });
+  };
+
+  const openFromLocker = async (file: LockerFile) => {
+    try {
+      if (isFontFile(file)) {
+        const [{ installUserFont }, { notifyTextFontsChanged }, opentype] = await Promise.all([
+          import("../engine/user-fonts"), import("../engine/text-font-resources"), import("opentype.js"),
+        ]);
+        const bytes = await file.blob.arrayBuffer();
+        let family = file.name.replace(/\.(otf|ttf)$/i, "");
+        try {
+          const names = opentype.parse(bytes.slice(0)).names as unknown as Record<string, Record<string, string> | undefined>;
+          family = names.preferredFamily?.en || names.fontFamily?.en || family;
+        } catch { /* keep the file name */ }
+        await installUserFont(family, bytes);
+        notifyTextFontsChanged();
+        notify(`“${family}” from Locker is installed. Pick it in Type & Vector → Typeface (under “Yours · Glyph”).`);
+        return;
+      }
+      const type = file.type || "";
+      if (!/^image\//.test(type) && !/\.(luma|png|jpe?g|webp|gif|svg|psd|psb)$/i.test(file.name)) {
+        notify(`Luma can't open ${file.name} (${type || "unknown type"}).`);
+        return;
+      }
+      await importDocumentFile(new File([file.blob], file.name, { type }));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : `Could not open ${file.name} from Locker`);
+    }
+  };
+  useLockerOpen(Boolean(studio) && startupReady && !desktop, openFromLocker);
 
   const sendLayerToForm = async (layer: Layer) => {
     try {
@@ -2451,7 +2499,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         if (!result) { setSaveState("unsaved"); return false; }
         savedPath = result;
       } else {
-        const saved = await downloadOrSave(blob, fileName);
+        const saved = await downloadOrSave(blob, fileName, { locker: true });
         if (!saved) { setSaveState("unsaved"); return false; }
         const verified = await new Promise<boolean>(resolve => setDownloadConfirmation({ name: fileName, resolve }));
         if (!verified) { setSaveState("unsaved"); notify("Download not confirmed. Your document remains open and unsaved."); return false; }
@@ -2855,7 +2903,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     try {
       const mime = exportFormat === "jpeg" ? "image/jpeg" : exportFormat === "webp" ? "image/webp" : "image/png";
       const blob = await studio.exportImage(mime, 0.92);
-      const saved = await downloadOrSave(blob, `${projectName}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`);
+      const saved = await downloadOrSave(blob, `${projectName}-luma.${exportFormat === "jpeg" ? "jpg" : exportFormat}`, { locker: true });
       if (saved) notify(`Exported ${exportFormat.toUpperCase()}`);
     } catch { notify("Export failed"); }
   };
@@ -2864,7 +2912,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     if (!studio) return;
     try {
       const { blob, report } = await studio.exportFigmaSvg({ outlineText });
-      const saved = await downloadOrSave(blob, `${projectName}-figma.svg`);
+      const saved = await downloadOrSave(blob, `${projectName}-figma.svg`, { locker: true });
       if (!saved) return;
       const notes = [
         `${report.editable} editable layer${report.editable === 1 ? "" : "s"}`,
@@ -2912,7 +2960,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         setPhotoshopApproval({ report, documentId: studio.activeDocumentState().id, resolve });
       }));
       const blob = new Blob([buf], { type: "image/vnd.adobe.photoshop" });
-      const saved = await downloadOrSave(blob, `${projectName}-luma.${report.container}`);
+      const saved = await downloadOrSave(blob, `${projectName}-luma.${report.container}`, { locker: true });
       if (!saved) return;
       const warnings = report.issues.filter((issue) => issue.severity === "warning").length;
       notify(`Exported ${report.container.toUpperCase()}${warnings ? ` · ${warnings} acknowledged compatibility warning${warnings === 1 ? "" : "s"}` : " · no detected compatibility warnings"}`);
@@ -4460,6 +4508,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             onCommand={executeStudioCommand}
             commandEnabled={commandRegistry.enabled}
             onInstall={!desktop && installPrompt.canInstall ? () => { void installPrompt.install(); } : undefined}
+            suiteMenu={!desktop}
             onReview={studio && activeDocumentId ? () => {
               try {
                 reviewSession.current?.();
@@ -4986,7 +5035,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                 onExportArtboard={(artboardId, artboardNameToExport) => {
                   if (!studio) return;
                   void studio.exportArtboard(artboardId).then(async (blob) => {
-                    await downloadOrSave(blob, `${artboardNameToExport.replace(/[^a-z0-9_-]+/gi, "-") || "artboard"}.png`);
+                    await downloadOrSave(blob, `${artboardNameToExport.replace(/[^a-z0-9_-]+/gi, "-") || "artboard"}.png`, { locker: true });
                     notify(`${artboardNameToExport} exported`);
                   }).catch((error) => notify(error instanceof Error ? error.message : "Artboard export failed"));
                 }}
@@ -5688,6 +5737,16 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           </StatusBarRegion>
         )}
       {!desktop && <PwaToast {...pwaUpdate} />}
+      {!desktop && lockerOffer && lockerAvailable && (
+        <div className="luma-locker-offer" role="status">
+          <span>{lockerOffer.state === "saved" ? `${lockerOffer.name} is in your Locker` : `Downloaded ${lockerOffer.name}`}</span>
+          {lockerOffer.state !== "saved"
+            ? <button type="button" onClick={saveOfferToLocker} disabled={lockerOffer.state === "saving"}>{lockerOffer.state === "saving" ? "Saving…" : "Save to Locker"}</button>
+            : <a href="https://thecreatingco.com/locker/" target="_blank" rel="noreferrer">Open Locker</a>}
+          <button type="button" className="luma-pwa-dismiss" onClick={() => setLockerOffer(null)} aria-label="Dismiss">×</button>
+          <small>Locker keeps files in this browser on this device.</small>
+        </div>
+      )}
       </AppWindow>
 
       {showExportMenu && (
@@ -5740,7 +5799,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           vectorTarget.assertCurrent();
           const blob = await studio.exportVectorDocument(vectorTarget.report.format);
           vectorTarget.assertCurrent();
-          await downloadOrSave(blob, `${vectorTarget.name}.${vectorTarget.report.format}`);
+          await downloadOrSave(blob, `${vectorTarget.name}.${vectorTarget.report.format}`, { locker: true });
         }}/></Suspense>
       </ShellErrorBoundary>}
       {showWorkspaceSettings && (
@@ -5911,7 +5970,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         <ShellErrorBoundary title="Mockups" region="dialog" onDismiss={() => setShowMockups(false)}>
           <Suspense fallback={null}>
             <MockupDialog projectName={projectName} getDocumentArt={() => studio.exportImage("image/png")}
-              onSave={downloadOrSave} onClose={() => setShowMockups(false)}
+              onSave={(blob, fileName) => downloadOrSave(blob, fileName, { locker: true })} onClose={() => setShowMockups(false)}
               onOpenAsDocument={async (file) => { await importDocumentFile(file); }} />
           </Suspense>
         </ShellErrorBoundary>
@@ -5920,7 +5979,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       {showGlyph && (
         <ShellErrorBoundary title="Glyph" region="dialog" onDismiss={() => setShowGlyph(false)}>
           <Suspense fallback={null}>
-            <GlyphDialog onClose={() => setShowGlyph(false)} onSave={downloadOrSave}
+            <GlyphDialog onClose={() => setShowGlyph(false)} onSave={(blob, fileName) => downloadOrSave(blob, fileName, { locker: true })}
               onAddText={studio ? (family, sample) => {
                 try {
                   const size = Math.max(24, Math.round(Math.min(studio.doc.width, studio.doc.height) / 8));

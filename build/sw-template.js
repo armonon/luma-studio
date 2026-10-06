@@ -108,7 +108,7 @@ async function suiteAsset(request) {
   const cache = await caches.open(SUITE);
   try {
     const response = await fetch(request);
-    if (response.ok || response.type === "opaque") cache.put(request.url, response.clone());
+    if (response.ok) cache.put(request.url, response.clone());
     return response;
   } catch {
     return (await cache.match(request.url)) || Response.error();
@@ -131,7 +131,17 @@ self.addEventListener("fetch", (event) => {
   }
   // Hashed build assets are immutable; ignore cache-busting queries on them.
   if (PRECACHED.has(url.pathname) && (!url.search || url.pathname.startsWith("/_next/static/"))) {
-    event.respondWith((async () => (await precached(url.pathname)) || fetch(request))());
+    event.respondWith((async () => {
+      const hit = await precached(url.pathname);
+      if (!hit) return fetch(request);
+      const isWorker = request.destination === "worker" || request.destination === "sharedworker";
+      if (!url.search && !url.hash && !isWorker) return hit;
+      // Turbopack workers read their bootstrap config from ?params= or
+      // #params= on their own location. A cached Response carries the cache
+      // key's URL, which would become the worker's location; a fresh
+      // Response takes the request URL (query and fragment included).
+      return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers: hit.headers });
+    })());
     return;
   }
   if (url.pathname.startsWith("/fonts/") || url.pathname.startsWith("/pdfjs/")) {

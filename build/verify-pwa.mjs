@@ -9,7 +9,8 @@
  * 2. /sw.js is served with Cache-Control: no-cache and controls /studio.
  * 3. The precache completes (every URL listed in sw.js is in Cache Storage).
  * 4. Offline: reload /studio, open a .luma file, edit (hide a layer), export
- *    PNG and Export for Figma — both downloads succeed; reload again offline.
+ *    PNG and Export for Figma (live and outlined text, which runs the cached
+ *    shaping worker) — downloads succeed; reload again offline.
  * 5. Server routes are untouched: /api/ai/edit still reaches the function.
  * 0 console errors required (offline network failures of the optional suite
  * script are reported separately, not counted).
@@ -117,6 +118,12 @@ const svg = await exportVia(() => page.getByRole("button", { name: "Export for F
 const svgText = svg.bytes.toString("utf8");
 check("offline Export for Figma", /<svg[^>]+width="480"/.test(svgText) && !/id="Badge \(shadow\)"/.test(svgText), `${svg.name} ${svg.bytes.length} bytes`);
 await writeFile(join(outDir, "offline-figma.svg"), svg.bytes);
+const outlined = await exportVia(async () => {
+  await page.getByLabel(/Outline text/).check();
+  await page.getByRole("button", { name: "Export for Figma" }).click();
+});
+const outlinedText = outlined.bytes.toString("utf8");
+check("offline Export for Figma with outlined text (shaping worker from cache)", !/<text /.test(outlinedText) && /id="Title"/.test(outlinedText), `${outlined.bytes.length} bytes`);
 await page.reload({ waitUntil: "load" });
 check("second offline reload still works", await page.locator("button.spatial-export").isVisible({ timeout: 30000 }));
 await page.screenshot({ path: join(outDir, "offline.png") });

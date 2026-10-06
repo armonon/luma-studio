@@ -23,6 +23,7 @@ export default function StudioTitlebar({
   commandEnabled,
   onReview,
   onInstall,
+  suiteMenu = false,
   onFocusCanvas,
   recoveryUnavailable = false,
 }: {
@@ -43,6 +44,8 @@ export default function StudioTitlebar({
   commandEnabled: (command: StudioCommand) => boolean;
   onReview?: () => void;
   onInstall?: () => void;
+  /** Render the shared thecreateco suite menu (filled in by suite.js). */
+  suiteMenu?: boolean;
   onFocusCanvas?: () => void;
   recoveryUnavailable?: boolean;
 }) {
@@ -54,6 +57,8 @@ export default function StudioTitlebar({
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, []);
+  // Tablet and phone layouts hide the brand area; keep the menu reachable.
+  const suiteInActions = phone || Boolean(tabletControls);
   const run = (action: () => void) => {
     menuRef.current?.removeAttribute("open");
     action();
@@ -63,8 +68,9 @@ export default function StudioTitlebar({
     <header className="spatial-topbar studio-titlebar">
       {desktop && <div className="desktop-titlebar-drag" data-tauri-drag-region="true" aria-hidden="true" />}
       <div className="studio-brand-area">
+        {suiteMenu && !suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         <button className="studio-app-mark" onClick={onBack} aria-label="Back to Luma home">L</button>
-        <strong className="studio-product-name">Luma Studio</strong>
+        <strong className="studio-product-name">Luma</strong>
       </div>
 
       <div className="studio-project-title">
@@ -73,6 +79,7 @@ export default function StudioTitlebar({
       </div>
 
       <div className="spatial-share-actions">
+        {suiteMenu && suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         {phone && <span className="studio-phone-brand" role="img" aria-label="Luma Studio" title="Luma Studio"><span className="studio-app-mark" aria-hidden="true">L</span></span>}
         {onReview && !phone && <button className="studio-icon-button" onClick={onReview} title="Shared layer editing (alpha)" aria-label="Start shared editing"><Users size={16} /></button>}
         {tabletControls && <div className="tablet-title-controls">{tabletControls}</div>}

@@ -13946,3 +13946,68 @@ html .virtual-layer-stack .spatial-layer:has(> .layer-group-toggle) > .spatial-l
   background: transparent;
   color: #8b93a1;
 }
+
+/* Shared thecreateco suite menu (rendered by thecreatingco.com/suite/v1/suite.js).
+ * Reserve its box so the header never shifts when the deferred script runs. */
+tcc-suite-menu.studio-suite-menu {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  color: inherit;
+}
+
+/* "Save to Locker" offer after an export (app/studio/page.tsx). */
+.luma-locker-offer {
+  position: fixed;
+  right: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 2147483000;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 4px 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 8px 8px 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: #1a1e27;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  color: #d9dde4;
+  font-size: 12px;
+}
+
+.luma-locker-offer > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.luma-locker-offer > button:not(.luma-pwa-dismiss),
+.luma-locker-offer > a {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(142, 127, 250, 0.45);
+  border-radius: 7px;
+  background: rgba(142, 127, 250, 0.18);
+  color: #c9c1ff;
+  font-size: 12px;
+  line-height: 26px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.luma-locker-offer .luma-pwa-dismiss {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  color: #8b93a1;
+  cursor: pointer;
+}
+
+.luma-locker-offer small {
+  grid-column: 1 / -1;
+  color: #7d8592;
+  font-size: 10.5px;
+}
