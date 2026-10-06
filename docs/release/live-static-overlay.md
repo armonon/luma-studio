@@ -55,3 +55,15 @@ no automation tying the two together — re-run the capture process above
 (diff the live deploy's file manifest against a Next-only build's manifest,
 download and sha1-verify anything new) before the next promotion if it has
 been more than a few days, or confirm with whoever owns that pipeline.
+
+## 2026-10-06 (Wave 4) — previous app build's chunks carried forward
+
+Publishing `wave4/luma-suite` replaces the app build that went live as deploy
+`6ac515315dc9673521b09163` ("Mockup preview recovery…"). A full manifest
+diff against that deploy showed 21 live-only paths, all of them that build's
+hashed `/_next/static` files (3 build-manifest files under
+`17yerx9wbocjj3wchczbw/`, 18 chunks/CSS). They are now in `live-static/`
+(sha1-verified against the deploy manifest, 0 mismatches, 1.27 MB) so a tab
+still running the previous `/studio` can lazily load its own chunks after
+the new deploy goes live, instead of hitting 404s. Everything else live was
+already covered by the snapshot.
