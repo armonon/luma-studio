@@ -261,6 +261,8 @@ const LayerStyleDialog = lazy(() => import("./layer-style-dialog"));
 const RecolorDialog = lazy(() => import("./recolor-dialog"));
 const MockupDialog = lazy(() => import("./mockup-dialog"));
 const GlyphDialog = lazy(() => import("./glyph-dialog"));
+const UpscaleDialog = lazy(() => import("./upscale-dialog"));
+const ThumbDialog = lazy(() => import("./thumb-dialog"));
 const CampaignPanel = lazy(() => import("./panels/campaign-panel"));
 const CurvesEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.CurvesEditor })));
 const LevelsEditor = lazy(() => import("./layer-editors").then((module) => ({ default: module.LevelsEditor })));
@@ -518,6 +520,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [showBatch, setShowBatch] = useState(false);
   const [showMockups, setShowMockups] = useState(false);
   const [showGlyph, setShowGlyph] = useState(false);
+  const [showUpscale, setShowUpscale] = useState(false);
+  const [showThumb, setShowThumb] = useState(false);
+  const [cutoutProgress, setCutoutProgress] = useState<{ msg: string; pct: number } | null>(null);
   const [batchFiles, setBatchFiles] = useState<File[]>([]);
   const [batchProgress, setBatchProgress] = useState<{ i: number; total: number; name: string } | null>(null);
   const batchAbortRef = useRef<AbortController | null>(null);
@@ -2383,7 +2388,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       event.preventDefault();
       depth = 0;
       setDropActive(false);
-      if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || showNewDocument || recolorSession || showMockups || showGlyph || pdfChoiceResolver.current) {
+      if (projectSavingRef.current || nativeOpeningRef.current || pendingCloseDocumentId || pendingNativeClose || showNewDocument || recolorSession || showMockups || showGlyph || showUpscale || showThumb || pdfChoiceResolver.current) {
         notify("Finish the current dialog or file operation before dropping files");
         return;
       }
@@ -2405,7 +2410,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       window.removeEventListener("drop", onDrop);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [studio, showBatch, pendingCloseDocumentId, pendingNativeClose, showNewDocument, recolorSession, showMockups, showGlyph]);
+  }, [studio, showBatch, pendingCloseDocumentId, pendingNativeClose, showNewDocument, recolorSession, showMockups, showGlyph, showUpscale, showThumb]);
 
   // The engine owns document identity. UI-only copies drift after close,
   // recovery, scripting and AI branches and can save a tab under another name.
@@ -2841,6 +2846,25 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     }
   };
 
+  const runCutout = async () => {
+    if (!studio || !activeLayer || activeLayer.kind !== "raster") { notify("Select a raster layer for Cutout"); return; }
+    if (cutoutProgress) return;
+    setCutoutProgress({ msg: "Starting", pct: 0 });
+    try {
+      const result = await studio.cutoutSubject(activeLayer.id, (msg, pct) => setCutoutProgress({ msg, pct }));
+      setCutoutProgress(null);
+      setActiveLayerId(result.layerId);
+      executeStudioCommand("panel-mask");
+      forceUpdate();
+      notify(result.used === "neural"
+        ? "Cutout added as a new layer · refine the mask with the Mask brush"
+        : "Cutout model unavailable, used the luma fallback · refine the mask with the Mask brush");
+    } catch (error) {
+      setCutoutProgress(null);
+      notify(error instanceof Error ? error.message : "Cutout failed. It needs a connection the first time to download the model.");
+    }
+  };
+
   const currentAiControls = (): AiOperationControls => {
     switch (aiOperation) {
       case "remove": return { operation: "remove", removeShadows: true, backgroundContinuity: aiStrength };
@@ -3087,6 +3111,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       case "batch": setShowBatch(true); return;
       case "mockups": setShowMockups(true); return;
       case "glyph-font-maker": setShowGlyph(true); return;
+      case "cutout": void runCutout(); return;
+      case "upscale": setShowUpscale(true); return;
+      case "thumb": setShowThumb(true); return;
 
       case "undo":
         if (distortDraft || ftDragRef.current || dragRef.current?.kind === "move-layer") cancelTransformGesture();
@@ -3347,8 +3374,11 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     enabled: (command) => {
       if (!startupReady) return false;
       if (desktopUpdateInstalling || projectSaving || nativeOpening || pendingCloseDocumentId || pendingNativeClose || layerRenameTarget || showExportMenu || printTarget || vectorTarget || recolorSession) return false;
-      if (showMockups || showGlyph) return false;
+      if (showMockups || showGlyph || showUpscale || showThumb) return false;
       if (command === "mockups") return Boolean(studio);
+      if (command === "cutout") return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap && !cutoutProgress);
+      if (command === "upscale") return Boolean(studio && activeLayer?.kind === "raster" && activeLayer.bitmap);
+      if (command === "thumb") return Boolean(studio);
       if (command === "export-print") return Boolean(studio && isNativeFilesystemAvailable() && studio.doc.bitDepth === 8 && studio.doc.colorSpace === "srgb" && studio.doc.width * studio.doc.height <= 4_000_000);
       if (command === "new-document" || command === "close-document") return Boolean(studio && startupReady);
       if (command === "undo") return studio?.canUndo() ?? false;
@@ -3981,7 +4011,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (!startupReadyRef.current || projectSavingRef.current || nativeOpeningRef.current) return;
       if (pendingCloseDocumentId || pendingNativeClose || showNewDocument || pdfChoiceResolver.current) return;
       // Full-screen creative tools own the keyboard while open.
-      if (showMockups || showGlyph) return;
+      if (showMockups || showGlyph || showUpscale || showThumb) return;
       if (desktopUpdateInstalling) {
         e.preventDefault();
         return;
@@ -4162,7 +4192,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     };
     // The open/save closures are fully represented by studio, projectName and notify.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [desktop, desktopUpdateInstalling, pendingCloseDocumentId, pendingNativeClose, showNewDocument, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, showMockups, showGlyph, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck, distortDraft]);
+  }, [desktop, desktopUpdateInstalling, pendingCloseDocumentId, pendingNativeClose, showNewDocument, workspace, studio, projectName, activeLayerId, activeLayer, activeTool, commitPenPath, showHistory, showWorkspaceSettings, showExportMenu, showFilters, showBatch, showMockups, showGlyph, showUpscale, showThumb, batchProgress, pointDraft, pointSelectionTool, feather, notify, captureSampling, capturedBrushTip, workflowPreferences, resolvedSelectionMode, resolvedFocusState.scope, exitFocusMode, enterFocusMode, passDeckOpen, passDeckPinned, openSpaceDeck, distortDraft]);
 
   const currentTools = modeTools[workspace].filter(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
   const activeToolMeta = Object.values(modeTools).flat().find(([tool]) => tool === activeTool) ?? currentTools[0];
@@ -5981,6 +6011,36 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         </ShellErrorBoundary>
       )}
 
+      {showUpscale && studio && (
+        <ShellErrorBoundary title="Upscale" region="dialog" onDismiss={() => setShowUpscale(false)}>
+          <Suspense fallback={null}>
+            <UpscaleDialog
+              getLayerCanvas={() => (activeLayer?.kind === "raster" ? activeLayer.bitmap ?? null : null)}
+              onApply={(canvas, scale) => {
+                const layer = studio.addRasterLayerFromCanvas(canvas, `${activeLayer?.name ?? "Layer"} ${scale}x`, activeLayer?.id);
+                setActiveLayerId(layer.id);
+                forceUpdate();
+                notify(`Upscaled ${scale}× · added as a new layer`);
+              }}
+              onSave={(blob, fileName) => downloadOrSave(blob, fileName, { locker: true })}
+              onClose={() => setShowUpscale(false)}
+            />
+          </Suspense>
+        </ShellErrorBoundary>
+      )}
+
+      {showThumb && studio && (
+        <ShellErrorBoundary title="Thumb" region="dialog" onDismiss={() => setShowThumb(false)}>
+          <Suspense fallback={null}>
+            <ThumbDialog
+              getSubjectImage={() => studio.exportImage("image/png")}
+              onSave={(blob, fileName) => downloadOrSave(blob, fileName, { locker: true })}
+              onClose={() => setShowThumb(false)}
+            />
+          </Suspense>
+        </ShellErrorBoundary>
+      )}
+
       {showGlyph && (
         <ShellErrorBoundary title="Glyph" region="dialog" onDismiss={() => setShowGlyph(false)}>
           <Suspense fallback={null}>
@@ -6263,6 +6323,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         ref={batchInput}
         className="visually-hidden"
         type="file"
+        aria-label="Choose images for batch processing"
         accept="image/png,image/jpeg,image/webp"
         multiple
         onChange={(e) => {
@@ -6310,10 +6371,49 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           </div>
         </div>
       )}
-      <input ref={fileInput} className="visually-hidden" type="file" accept={`.luma,.pdf,.lumaformtext,.lumaformmesh,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
-      <input ref={psdInput} className="visually-hidden" type="file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
-      <input ref={projectInput} className="visually-hidden" type="file" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
-      <input ref={smartContentInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" onChange={async event => {
+      {cutoutProgress && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "fixed",
+            bottom: 32,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "12px 20px",
+            background: "rgba(18,18,22,0.94)",
+            border: "1px solid rgba(255,255,255,0.14)",
+            borderRadius: 14,
+            color: "#fff",
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            minWidth: 320,
+            zIndex: 40,
+            boxShadow: "0 20px 60px rgba(0,0,0,.5)",
+          }}
+        >
+          <span style={{ fontSize: 18 }}>✦</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 4 }}>Cutout</div>
+            <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.14)", overflow: "hidden" }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: `${Math.min(100, Math.max(2, cutoutProgress.pct))}%`,
+                  background: "linear-gradient(90deg,#7c5ce7,#2385f4)",
+                  transition: "width 200ms ease",
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>{cutoutProgress.msg}</div>
+          </div>
+        </div>
+      )}
+      <input ref={fileInput} className="visually-hidden" type="file" aria-label="Open a file" accept={`.luma,.pdf,.lumaformtext,.lumaformmesh,.psd,.psb,image/*,${RAW_EXTENSIONS.map((extension) => `.${extension}`).join(",")}`} onChange={onFileChange} />
+      <input ref={psdInput} className="visually-hidden" type="file" aria-label="Import a Photoshop file" accept=".psd,.psb,image/vnd.adobe.photoshop" onChange={onPsdImport} />
+      <input ref={projectInput} className="visually-hidden" type="file" aria-label="Open a Luma project" accept=".luma,application/x-luma-project" onChange={onProjectImport} />
+      <input ref={smartContentInput} className="visually-hidden" type="file" aria-label="Replace smart content" accept="image/png,image/jpeg,image/webp" onChange={async event => {
         const file = event.target.files?.[0];
         event.target.value = "";
         const target = smartContentTarget.current;
@@ -6326,9 +6426,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
           forceUpdate();
         } catch (error) { notify(error instanceof Error ? error.message : "Content replacement failed"); }
       }} />
-      <input ref={captureInput} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
-      <input ref={focusImportInput} className="visually-hidden" type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
-      <input ref={pluginInput} className="visually-hidden" type="file" accept=".luma-plugin,application/json" onChange={onPluginInstall} />
+      <input ref={captureInput} className="visually-hidden" type="file" aria-label="Upload a sample image" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onCaptureUpload} />
+      <input ref={focusImportInput} className="visually-hidden" type="file" multiple aria-label="Import images" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" onChange={onFocusImportChange} />
+      <input ref={pluginInput} className="visually-hidden" type="file" aria-label="Install a Luma plugin" accept=".luma-plugin,application/json" onChange={onPluginInstall} />
       {dropActive && (
         <div className="studio-drop-overlay" aria-hidden="true">
           <div className="studio-drop-card">

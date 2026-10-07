@@ -118,6 +118,9 @@ export default function StudioTitlebar({
             <button onClick={() => run(() => onCommand("batch"))} disabled={!commandEnabled("batch")}><span>Batch processing</span></button>
             <button onClick={() => run(() => onCommand("mockups"))} disabled={!commandEnabled("mockups")}><span>Mockups</span><kbd>alpha</kbd></button>
             <button onClick={() => run(() => onCommand("glyph-font-maker"))} disabled={!commandEnabled("glyph-font-maker")}><span>Glyph font maker</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("cutout"))} disabled={!commandEnabled("cutout")}><span>Cutout</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("upscale"))} disabled={!commandEnabled("upscale")}><span>Upscale…</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("thumb"))} disabled={!commandEnabled("thumb")}><span>Thumb…</span><kbd>alpha</kbd></button>
             <button onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><span>Version history</span></button>
             <button onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Workspaces & shortcuts</span></button>
             {onInstall && <><hr /><button onClick={() => run(onInstall)}><span>Install Luma app</span><kbd>offline</kbd></button></>}
