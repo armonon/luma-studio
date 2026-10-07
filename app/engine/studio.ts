@@ -3410,6 +3410,33 @@ export class Studio {
     return layer;
   }
 
+  /**
+   * Add a new raster layer from an arbitrary-sized canvas, such as Upscale's
+   * result. If `sourceLayerId` names an existing raster layer, the new layer
+   * inherits its position and is scaled down so it occupies the same
+   * document-space size as the source despite having more pixels — Upscale
+   * is about resolution, not enlarging the placement.
+   */
+  addRasterLayerFromCanvas(canvas: HTMLCanvasElement, name: string, sourceLayerId?: string) {
+    if (!fitsBrowserCanvas(canvas.width, canvas.height)) throw new Error("Upscaled image is too large for this browser's canvas limits");
+    const layer = createRasterLayer(name, canvas);
+    layer.surface = this.surfaceFromCanvas(canvas);
+    layer.surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+    const source = sourceLayerId ? this.findLayer(sourceLayerId) : undefined;
+    if (source?.bitmap) {
+      layer.transform = {
+        ...source.transform,
+        sx: source.transform.sx * source.bitmap.width / canvas.width,
+        sy: source.transform.sy * source.bitmap.height / canvas.height,
+      };
+    }
+    this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addRaster", name });
+    this.checkpointLayerSurface(layer);
+    this.requestRender();
+    return layer;
+  }
+
   duplicateLayer(id: string) {
     return this.duplicateLayers([id])[0] ?? null;
   }
@@ -5993,6 +6020,53 @@ export class Studio {
       console.warn("Neural subject failed, falling back to luma", err);
       this.autoLumaMask(layerId);
       return { used: "luma" };
+    }
+  }
+
+  /**
+   * Cutout: duplicate the layer and matte the copy with the on-device MODNet
+   * model, leaving the original untouched. The copy's mask is paintable
+   * immediately with the mask brush (mask-add/mask-remove), so a soft neural
+   * edge is never the final word. Falls back to the luma threshold mask, like
+   * neuralSubject, if the model can't load (offline, blocked CDN, etc.).
+   */
+  async cutoutSubject(
+    layerId: string,
+    onProgress?: (msg: string, pct: number) => void,
+  ): Promise<{ layerId: string; used: "neural" | "luma" }> {
+    const assertCurrent = this.guardDocumentOperation("cutout");
+    const layer = this.findLayer(layerId);
+    if (!layer || layer.kind !== "raster" || !layer.bitmap) {
+      throw new Error("Cutout needs a raster layer");
+    }
+    const [copy] = this.duplicateLayers([layerId]);
+    if (!copy) throw new Error("Could not duplicate the layer for Cutout");
+    copy.name = `${layer.name} cutout`;
+    try {
+      const { neuralMatte } = await import("./neural");
+      assertCurrent();
+      const matte = await neuralMatte(copy.bitmap!, onProgress);
+      assertCurrent();
+      const before = [this.maskSnapshot(copy)];
+      setLayerMaskFromCanvas(copy, matte, this.doc.width, this.doc.height);
+      this.commit({
+        label: "Cutout mask",
+        before,
+        after: [this.maskSnapshot(copy)],
+      });
+      // Not added to the Actions-panel replay log: duplicate + async matte
+      // doesn't fit that macro format (same as Select Subject and the other
+      // neural-model ops, which are also replay-exempt).
+      this.requestRender();
+      return { layerId: copy.id, used: "neural" };
+    } catch (err) {
+      assertCurrent();
+      console.warn("Cutout neural matte failed, falling back to luma", err);
+      const before = [this.maskSnapshot(copy)];
+      if (!autoLumaMaskInPlace(copy, this.doc.width, this.doc.height)) throw err instanceof Error ? err : new Error("Cutout failed");
+      this.commit({ label: "Cutout mask (luma fallback)", before, after: [this.maskSnapshot(copy)] });
+      this.requestRender();
+      return { layerId: copy.id, used: "luma" };
     }
   }
 
