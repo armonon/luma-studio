@@ -655,6 +655,10 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&item("mockups", "Mockups…", None)?)
         .item(&item("glyph-font-maker", "Glyph Font Maker…", None)?)
         .separator()
+        .item(&item("cutout", "Cutout", None)?)
+        .item(&item("upscale", "Upscale…", None)?)
+        .item(&item("thumb", "Thumb…", None)?)
+        .separator()
         .item(&item("close-document", "Close Document", Some("CmdOrCtrl+W"))?)
         .build()?;
 
