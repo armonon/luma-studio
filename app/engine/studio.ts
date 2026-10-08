@@ -4555,6 +4555,9 @@ export class Studio {
     layer[key] = value;
     this.markTransientDirty();
     this.requestRender();
+    // Dirty-state notification happens only once per gesture. Controlled
+    // opacity inputs still need every preview value, not just the first one.
+    this.emit();
     return true;
   }
 

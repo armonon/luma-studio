@@ -1210,6 +1210,20 @@ function compositeAdjustment(
   frame: RenderFrame,
 ) {
   const vectorMask = layer.vectorMask;
+  const passes = resolvedBlendPasses(layer).filter(pass => pass.enabled);
+  if (!hasLayerMask(layer) && !vectorMask && !layer.effects?.some(effect => effect.enabled) &&
+      layer.opacity === 1 && resolvedFillOpacity(layer) === 1 && isNeutralBlendIf(resolvedBlendIf(layer)) &&
+      passes.length === 1 && passes[0].mode === "source-over" && passes[0].opacity === 1) {
+    // This is the fully adjusted backdrop, not a new layer of paint. Painting
+    // it source-over would apply the backdrop alpha twice (160 -> 220), making
+    // transparent artwork more opaque and attenuating the color adjustment.
+    composite.save();
+    composite.globalAlpha = 1;
+    composite.globalCompositeOperation = "copy";
+    composite.drawImage(source, 0, 0);
+    composite.restore();
+    return;
+  }
   let adjusted = source;
   if (hasLayerMask(layer) || vectorMask) {
     const bctx = s.layerBuf.getContext("2d")!;
