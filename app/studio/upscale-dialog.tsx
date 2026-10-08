@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Image from "next/image";
 import { neuralUpscale, UpscaleCancelledError } from "../engine/upscale";
 
 export type UpscaleDialogProps = {
@@ -95,7 +96,7 @@ export default function UpscaleDialog({ getLayerCanvas, onApply, onSave, onClose
         )}
         {result && (
           <div style={{ marginTop: 12, maxHeight: 280, overflow: "auto", border: "1px solid rgba(255,255,255,0.12)" }}>
-            <img alt={`${scale}x upscaled preview`} src={result.toDataURL("image/png")} style={{ width: "100%", display: "block" }} />
+            <Image alt={`${scale}x upscaled preview`} src={result.toDataURL("image/png")} width={result.width} height={result.height} unoptimized style={{ width: "100%", height: "auto", display: "block" }} />
           </div>
         )}
       </div>
