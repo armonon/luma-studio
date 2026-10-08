@@ -381,6 +381,10 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     // not a render-delayed listener, before allowing tool or edit shortcuts.
     const block = (event: KeyboardEvent) => {
       if (startupReadyRef.current && !projectSavingRef.current && !nativeOpeningRef.current) return;
+      // Browser saves await this dialog. It stops key propagation itself;
+      // allow its focus/activation keys without reopening editor shortcuts.
+      if (startupReadyRef.current && projectSavingRef.current && !nativeOpeningRef.current &&
+          event.target instanceof Element && event.target.closest('.download-confirmation[role="dialog"]')) return;
       event.preventDefault(); event.stopImmediatePropagation();
     };
     window.addEventListener("keydown", block, true);
@@ -6305,7 +6309,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       {pdfChoice && <ShellErrorBoundary title="PDF import" region="dialog" onDismiss={() => { pdfChoice.resolve(null); setPdfChoice(null); }}><Suspense fallback={null}><PdfImportDialog name={pdfChoice.name} onChoose={page => { pdfChoice.resolve(page); setPdfChoice(null); }} /></Suspense></ShellErrorBoundary>}
       {!startupReady && <div className="spatial-modal" style={{ zIndex: 10000 }} role="status" aria-label="Restoring workspace"><section className="unsaved-document-dialog"><header><strong>Restoring workspace…</strong></header><p>Preparing your documents before editing begins.</p></section></div>}
       {nativeOpening && <div className="spatial-modal" style={{ zIndex: 10000 }} role="status"><section className="unsaved-document-dialog"><header><strong>Opening document…</strong></header><p>Files open in order. Your existing documents stay open.</p></section></div>}
-      {projectSaving && <div className="spatial-modal" style={{ zIndex: 10000 }}>
+      {projectSaving && !downloadConfirmation && <div className="spatial-modal" style={{ zIndex: 10000 }}>
         <section className="unsaved-document-dialog" role="alertdialog" aria-modal="true" aria-label="Saving project" tabIndex={-1}>
           <header><strong>Saving project…</strong></header><p role="status">Writing your document and history. Editing resumes when the save finishes.</p>
         </section>

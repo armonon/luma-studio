@@ -36,7 +36,9 @@ test("merged eyedropper sampling uses the bounded viewport compositor", () => {
   const studio = new Studio(32, 32, testCanvas(32, 32));
   const layer = studio.addBlankRaster("merged sample");
   studio.fillLayer(layer.id, "#39b86a");
-  assert.equal(studio.sampleLayerColor(layer.id, 7, 11, true), "#38b86a");
+  // Sampling the merged 8-bit bitmap must retain the fill's exact sRGB code,
+  // not the old one-code drift introduced by its linear rgba8 derivative.
+  assert.equal(studio.sampleLayerColor(layer.id, 7, 11, true), "#39b86a");
   studio.dispose();
 });
 

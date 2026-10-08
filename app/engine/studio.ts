@@ -2339,6 +2339,14 @@ export class Studio {
       layer.surface = layer.surface
         ? layer.surface.convert(format, colorSpace)
         : this.surfaceFromCanvas(layer.bitmap, format, colorSpace);
+      // Precision conversion makes a new master. Before the 8-bit renderer
+      // prefers its exact bitmap, replace any stale/high-depth preview with
+      // that converted master's display samples (including absent clear tiles).
+      if (format === "rgba8" && layer.bitmap.width === layer.surface.grid.width && layer.bitmap.height === layer.surface.grid.height) {
+        layer.bitmap.getContext("2d")!.clearRect(0, 0, layer.bitmap.width, layer.bitmap.height);
+        for (const key of layer.surface.store.keys()) this.updateLayerBitmapTile(layer, key);
+        bumpBitmapVersion(layer.bitmap);
+      }
       this.checkpointLayerSurface(layer);
     }
     this.doc.bitDepth = bitDepth;

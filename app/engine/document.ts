@@ -1542,7 +1542,7 @@ export type Layer = {
    */
   blendClippedAsGroup?: boolean;
   bitmap?: HTMLCanvasElement;
-  /** Linear-light edit master; bitmap is its clamped display/compatibility mirror. */
+  /** Linear-light master for high-depth/tile-only layers. Full-size rgba8 bitmaps retain exact display samples. */
   surface?: PrecisionTileSurface;
   /** Sparse 8-bit layer-mask edit master. Missing tiles inherit default alpha. */
   maskSurface?: SparseAlphaSurface;

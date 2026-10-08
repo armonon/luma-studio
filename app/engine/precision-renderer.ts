@@ -81,13 +81,24 @@ function previewTile(surface: PrecisionTileSurface, key: string) {
   return canvas;
 }
 
-/** Draw raster masters tile-by-tile; vector layers retain their native path. */
+/**
+ * Eight-bit edits/imports retain exact display samples in a full-size bitmap.
+ * Their linear rgba8 tile derivative quantizes dark sRGB values (up to 7 codes)
+ * and must not become the export/display source. High-depth masters, tile-only
+ * layers and downsampled preview proxies still require the precision surface.
+ */
+export function usesFullResolutionRgba8Bitmap(layer: Layer) {
+  return !!layer.bitmap && layer.surface?.format === "rgba8" &&
+    layer.bitmap.width === layer.surface.grid.width && layer.bitmap.height === layer.surface.grid.height;
+}
+
+/** Draw precision masters tile-by-tile; exact 8-bit and vector layers retain their native path. */
 export function drawLayerContentManaged(
   ctx: CanvasRenderingContext2D,
   layer: Layer,
   projection?: { a: number; b: number; c: number; d: number; e: number; f: number },
 ) {
-  if ((layer.kind !== "raster" && layer.kind !== "smart-object") || !layer.surface) {
+  if ((layer.kind !== "raster" && layer.kind !== "smart-object") || !layer.surface || usesFullResolutionRgba8Bitmap(layer)) {
     drawLayerContent(ctx, layer, projection);
     return;
   }
