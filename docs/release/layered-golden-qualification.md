@@ -53,16 +53,19 @@ source layer thumbnail is not falsely described as a masked-composite preview.
   This is admission accounting, not a measurement or guarantee of process RSS.
 - A full-strength normal, unmasked, unstyled adjustment replaces its backdrop
   instead of source-over painting that backdrop a second time. Tone and curves
-  regressions cover partially transparent input. Partial opacity, masks, effects,
-  non-normal blends and non-neutral BlendIf deliberately retain their existing
-  behavior; their compositing semantics need separate qualification, not a claim
-  of comprehensive alpha correctness.
+  regressions cover partially transparent input. Normal single-pass partial master/fill/pass opacity and raster/vector masks
+  now interpolate opaque adjusted color using source-atop, preserving backdrop
+  alpha exactly. Node fixed fixtures and Chromium/Firefox/WebKit renderer probes
+  cover this bounded path; RGB allows two premultiplied byte units for Canvas
+  quantization. Enabled effects, non-normal blends, multi-pass stacks and
+  non-neutral BlendIf retain existing behavior and remain unqualified. This is
+  not a claim of comprehensive alpha correctness or full application UI testing.
 
 ## Remaining qualification and release gates
 
 Native packaging/real OS pickers, filesystem write failure, missing-file handling,
-GPU/physical platforms, mask enable/disable UI, thumbnail convention, partial or
-masked adjustment variants, large documents and Photoshop interoperability remain
+GPU/physical platforms, mask enable/disable UI, thumbnail convention, styled/non-normal/multi-pass
+adjustment variants and full adjustment persistence/UI workflows, large documents and Photoshop interoperability remain
 unverified. Resident history byte estimates may increase after decoding because
 independent backing stores replace shared in-memory references; history topology,
 parameters and output must still match. Hosted CI, source/live provenance and

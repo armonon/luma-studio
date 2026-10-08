@@ -1224,6 +1224,28 @@ function compositeAdjustment(
     composite.restore();
     return;
   }
+  if (!layer.effects?.some(effect => effect.enabled) && isNeutralBlendIf(resolvedBlendIf(layer)) &&
+      passes.length === 1 && passes[0].mode === "source-over") {
+    // An adjustment changes color, not backdrop coverage. Make the adjusted
+    // colors opaque before masking, then source-atop interpolates them using
+    // only adjustment strength and mask coverage, preserving destination alpha.
+    // Retaining the backdrop alpha here would apply that alpha a second time.
+    const adjustedCtx = s.layerBuf.getContext("2d")!;
+    clearContext(adjustedCtx, frame.outputWidth, frame.outputHeight);
+    const colors = source.getContext("2d")!.getImageData(0, 0, frame.outputWidth, frame.outputHeight);
+    for (let i = 3; i < colors.data.length; i += 4) colors.data[i] = 255;
+    adjustedCtx.putImageData(colors, 0, 0);
+    adjustedCtx.globalCompositeOperation = "destination-in";
+    if (hasLayerMask(layer)) drawLayerMaskProjected(adjustedCtx, doc, layer, frame);
+    if (vectorMask) drawVectorMaskProjected(adjustedCtx, layer, frame);
+    adjustedCtx.globalCompositeOperation = "source-over";
+    composite.save();
+    composite.globalAlpha = layer.opacity * resolvedFillOpacity(layer) * passes[0].opacity;
+    composite.globalCompositeOperation = "source-atop";
+    composite.drawImage(s.layerBuf, 0, 0);
+    composite.restore();
+    return;
+  }
   let adjusted = source;
   if (hasLayerMask(layer) || vectorMask) {
     const bctx = s.layerBuf.getContext("2d")!;
