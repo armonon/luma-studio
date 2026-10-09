@@ -174,16 +174,35 @@ contains a live Photoshop preflight for the selected PSD/PSB output mode.
 - An untouched imported PSD/PSB can be returned byte-for-byte.
 - Original Photoshop resources and unsupported descriptors are retained where
   possible for round trips.
-- An edited 16-bit document can write native planar 16-bit PSD/PSB data when it
-  is exactly one opaque, untransformed sRGB precision raster with normal 100%
-  blending and no masks, filters, effects, or out-of-range samples.
-- Other 16-bit documents, 32-bit documents, and wide-gamut projects export
-  through an 8-bit RGB compatibility mirror and show a warning before export.
+- Edited 16-bit and 32-bit documents can write native planar RGB layers and
+  composite samples to PSD/PSB through a bounded sRGB precision-raster path.
+  Supported stacks have at most 128 layers and 8 million document pixels, and
+  must fit the writer's 384 MiB estimated working-memory admission bound (not a
+  measured peak-RAM guarantee).
+- Each layer must have a matching-color-space precision surface (not an 8-bit
+  mirror or deferred source), normal single-pass blending at full pass strength,
+  full fill opacity, and finite layer opacity from 0 to 100%. Integer translation
+  is supported; scaling, rotation, skew, groups/parented layers, clipping, Blend
+  If/channel restrictions, knockout, enabled spatial processing, RAW payloads,
+  filters, effects, and unsupported Photoshop descriptors are not.
+- Separate full-document raster mask surfaces are supported above the bottom
+  layer and remain editable; their source precision is 8-bit even in high-depth
+  containers. Legacy bitmap masks, vector masks and mismatched mask dimensions
+  are excluded from this native path. The bottom layer must be visible, opaque,
+  unmasked, untranslated and cover the full canvas.
+- Native output rejects non-finite color samples and invalid alpha. The 16-bit
+  path also refuses out-of-range color samples instead of silently clipping;
+  finite extended-range 32-bit color samples are supported.
+- High-depth documents outside native admission, and wide-gamut projects, use
+  an 8-bit RGB compatibility mirror with a preflight warning when export is
+  otherwise permitted. Other preflight errors can block export; save the Luma
+  master to preserve unsupported editable content. The current wide-gamut
+  compatibility writer does not embed an ICC profile.
 - Luma smart-filter results remain visible, but are not translated to native
   Photoshop smart-filter descriptors.
 - Multi-pass Luma blending expands to ordered Photoshop layers.
 
-Those last two items, general multilayer high-depth PSD writing, CMYK/Lab
+Those last two items, unrestricted high-depth Photoshop descriptor parity, CMYK/Lab
 editing, ICC device-link and arbitrary multi-process execution,
 Photoshop-native artboard/layer-comp interchange, and parity with Photoshop's
 entire plugin ecosystem remain real gaps. They are not advertised as complete.
