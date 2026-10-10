@@ -12,7 +12,7 @@
     "benchmark:matched": "tsx build/compare-matched-evidence.ts",
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
-    "build:netlify": "next build",
+    "build:netlify": "next build && node build/generate-sw.mjs",
     "bundle:check": "npm run build && node build/report-client-bundle.mjs --check",
     "corpus:check": "tsx build/run-compatibility-corpus.ts --manifest compatibility-corpus/manifest.json --minimum 50",
     "corpus:external": "tsx build/qualify-photoshop-external.ts",
@@ -47,7 +47,7 @@
     "harfbuzzjs": "1.6.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
-    "next": "16.3.6",
+    "next": "16.3.8",
     "opentype.js": "2.0.0",
     "paper": "0.12.18",
     "pdf-lib": "1.17.1",
@@ -72,7 +72,7 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.11",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.6",
+    "eslint-config-next": "16.3.8",
     "fake-indexeddb": "6.2.5",
     "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
@@ -87,7 +87,9 @@
     "image-size": "2.0.4",
     "@esbuild-kit/core-utils": {
       "esbuild": "0.25.12"
-    }
+    },
+    "sharp": "0.35.5",
+    "source-map-js": "1.2.2"
   },
   "type": "module"
 }

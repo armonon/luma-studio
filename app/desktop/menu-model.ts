@@ -28,6 +28,9 @@ export type StudioCommand =
   | "batch"
   | "mockups"
   | "glyph-font-maker"
+  | "cutout"
+  | "upscale"
+  | "thumb"
   // Edit
   | "undo"
   | "redo"
@@ -150,6 +153,14 @@ export const DESKTOP_MENU: MenuSection[] = [
       // document (Mockups reads the flattened artwork; Glyph needs none).
       { kind: "command", id: "mockups", label: "Mockups…" },
       { kind: "command", id: "glyph-font-maker", label: "Glyph Font Maker…" },
+      { kind: "separator" },
+      // On-device (no server round trip): Cutout runs the moment it's chosen
+      // on the active raster layer, so it has no dialog of its own. Upscale
+      // and Thumb open dialogs. All three download their model on first use
+      // and need a connection then; inference itself stays on-device after.
+      { kind: "command", id: "cutout", label: "Cutout" },
+      { kind: "command", id: "upscale", label: "Upscale…" },
+      { kind: "command", id: "thumb", label: "Thumb…" },
       { kind: "separator" },
       { kind: "command", id: "close-document", label: "Close Document", accelerator: "CmdOrCtrl+W" },
     ],

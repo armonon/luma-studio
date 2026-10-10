@@ -273,7 +273,39 @@ export type DecodeLumaProjectOptions = {
   restoreHistory?: boolean;
 };
 
-/** Count references, not unique ZIP entries: each mutable canvas is decoded separately. */
+/** Only these schema positions restore surface tiles serially into owned stores. */
+function serialPrecisionReferences(manifest: unknown) {
+  const counts = new Map<string, number>();
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const layers = (value: unknown) => {
+    if (!Array.isArray(value)) return;
+    for (const layer of value) {
+      const surface = record(record(layer)?.surface);
+      if (!Array.isArray(surface?.tiles)) continue;
+      for (const tile of surface.tiles) {
+        const asset = record(tile)?.asset;
+        if (typeof asset === "string" && asset.startsWith("assets/precision/") && asset.endsWith(".bin")) {
+          counts.set(asset, (counts.get(asset) ?? 0) + 1);
+        }
+      }
+    }
+  };
+  const document = (value: unknown) => layers(record(value)?.layers);
+  const root = record(manifest);
+  if (root?.format !== "luma-project") return counts;
+  document(root.document);
+  const nodes = record(root.history)?.nodes;
+  if (Array.isArray(nodes)) for (const node of nodes) {
+    const entry = record(record(node)?.value);
+    if (!entry) continue;
+    for (const key of ["before", "after", "layersBefore", "layersAfter"]) layers(entry[key]);
+    document(entry.documentBefore); document(entry.documentAfter);
+  }
+  return counts;
+}
+
+/** Count references, not unique ZIP entries: each mutable canvas/tile is decoded separately. */
 export async function assertProjectDecodeAdmission(zip: JSZip, manifest: unknown, ceiling = LUMA_PROJECT_LIMITS.decodedBytes as number, encodedSizes?: ReadonlyMap<string, number>, encodedPrefixes?: ReadonlyMap<string, Uint8Array>) {
   if (!Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > LUMA_PROJECT_LIMITS.decodedBytes) throw new Error("Invalid project decoded-memory ceiling");
   const references = new Map<string, number>();
@@ -309,8 +341,10 @@ export async function assertProjectDecodeAdmission(zip: JSZip, manifest: unknown
       for (const child of Object.values(value)) pending.push(child);
     }
   }
+  const serialPrecision = serialPrecisionReferences(manifest);
   let estimatedBytes = descriptorBytes;
   let bitmapScratchBytes = 0;
+  let precisionScratchBytes = 0;
   for (const [asset, count] of references) {
     const file = zip.file(asset) as SizedZipEntry | null;
     if (!file) throw new Error(`Missing project asset: ${asset}`);
@@ -339,14 +373,21 @@ export async function assertProjectDecodeAdmission(zip: JSZip, manifest: unknown
         estimatedBytes += bytes! * 4 * (count - Math.min(count, canvasReferences.get(asset) ?? 0));
         bitmapScratchBytes = Math.max(bitmapScratchBytes, plane + bytes! * 3);
       } else {
-        estimatedBytes += bytes! * ((count - streamed) * 4 + (streamed ? 1 : 0));
+        const serialTiles = Math.min(count - streamed, serialPrecision.get(asset) ?? 0);
+        // deserializePrecisionSurface retains one independent store-owned tile
+        // per reference. Its bounded reader and store copy run serially, so
+        // reserve their conservative three-buffer scratch once, not per history
+        // snapshot. Opaque assets, LUTs and parallel history patches keep their
+        // original accounting; merely using a precision filename grants nothing.
+        estimatedBytes += bytes! * ((count - streamed - serialTiles) * 4 + serialTiles + (streamed ? 1 : 0));
+        if (serialTiles) precisionScratchBytes = Math.max(precisionScratchBytes, bytes! * 3);
       }
-      if (!Number.isSafeInteger(estimatedBytes + bitmapScratchBytes) || estimatedBytes + bitmapScratchBytes > ceiling) {
-        throw new Error(`Project exceeds the aggregate decoded-memory ceiling (${Math.ceil((estimatedBytes + bitmapScratchBytes) / 1024 / 1024)} MiB required so far; ${Math.floor(ceiling / 1024 / 1024)} MiB limit; asset ${asset}, ${count} references). The document has not been saved or changed.`);
+      if (!Number.isSafeInteger(estimatedBytes + bitmapScratchBytes + precisionScratchBytes) || estimatedBytes + bitmapScratchBytes + precisionScratchBytes > ceiling) {
+        throw new Error(`Project exceeds the aggregate decoded-memory ceiling (${Math.ceil((estimatedBytes + bitmapScratchBytes + precisionScratchBytes) / 1024 / 1024)} MiB required so far; ${Math.floor(ceiling / 1024 / 1024)} MiB limit; asset ${asset}, ${count} references). The document has not been saved or changed.`);
       }
     }
   }
-  return estimatedBytes + bitmapScratchBytes;
+  return estimatedBytes + bitmapScratchBytes + precisionScratchBytes;
 }
 
 type EncodeContext = {
@@ -609,7 +650,12 @@ async function deserializePrecisionSurface(source: SerializedPrecisionSurface, z
   for (const tile of source.tiles) {
     if (keys.has(tile.key)) throw new Error("Duplicate precision tile");
     keys.add(tile.key);
-    surface.store.write(tile.key, await readPrecisionAsset(zip, tile.asset));
+    if (typeof tile.asset !== "string" || !tile.asset.startsWith("assets/precision/") || !tile.asset.endsWith(".bin")) throw new Error(`Invalid precision asset: ${tile.asset}`);
+    const file = zip.file(tile.asset) as SizedZipEntry | null;
+    if (!file) throw new Error(`Missing precision asset: ${tile.asset}`);
+    // A single bounded output, then one owned store copy; never accumulate and
+    // concatenate all decompressed chunks for every historical tile.
+    surface.store.write(tile.key, await readProjectEntryBytes(file, file._data?.uncompressedSize ?? 0, LUMA_PROJECT_LIMITS.entryBytes));
   }
   surface.store.drainDirty();
   return surface;

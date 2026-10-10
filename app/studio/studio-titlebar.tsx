@@ -22,6 +22,8 @@ export default function StudioTitlebar({
   onCommand,
   commandEnabled,
   onReview,
+  onInstall,
+  suiteMenu = false,
   onFocusCanvas,
   recoveryUnavailable = false,
 }: {
@@ -41,6 +43,9 @@ export default function StudioTitlebar({
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
   onReview?: () => void;
+  onInstall?: () => void;
+  /** Render the shared thecreateco suite menu (filled in by suite.js). */
+  suiteMenu?: boolean;
   onFocusCanvas?: () => void;
   recoveryUnavailable?: boolean;
 }) {
@@ -52,6 +57,8 @@ export default function StudioTitlebar({
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, []);
+  // Tablet and phone layouts hide the brand area; keep the menu reachable.
+  const suiteInActions = phone || Boolean(tabletControls);
   const run = (action: () => void) => {
     menuRef.current?.removeAttribute("open");
     action();
@@ -61,8 +68,9 @@ export default function StudioTitlebar({
     <header className="spatial-topbar studio-titlebar">
       {desktop && <div className="desktop-titlebar-drag" data-tauri-drag-region="true" aria-hidden="true" />}
       <div className="studio-brand-area">
+        {suiteMenu && !suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         <button className="studio-app-mark" onClick={onBack} aria-label="Back to Luma home">L</button>
-        <strong className="studio-product-name">Luma Studio</strong>
+        <strong className="studio-product-name">Luma</strong>
       </div>
 
       <div className="studio-project-title">
@@ -71,6 +79,7 @@ export default function StudioTitlebar({
       </div>
 
       <div className="spatial-share-actions">
+        {suiteMenu && suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         {phone && <span className="studio-phone-brand" role="img" aria-label="Luma Studio" title="Luma Studio"><span className="studio-app-mark" aria-hidden="true">L</span></span>}
         {onReview && !phone && <button className="studio-icon-button" onClick={onReview} title="Shared layer editing (alpha)" aria-label="Start shared editing"><Users size={16} /></button>}
         {tabletControls && <div className="tablet-title-controls">{tabletControls}</div>}
@@ -109,8 +118,12 @@ export default function StudioTitlebar({
             <button onClick={() => run(() => onCommand("batch"))} disabled={!commandEnabled("batch")}><span>Batch processing</span></button>
             <button onClick={() => run(() => onCommand("mockups"))} disabled={!commandEnabled("mockups")}><span>Mockups</span><kbd>alpha</kbd></button>
             <button onClick={() => run(() => onCommand("glyph-font-maker"))} disabled={!commandEnabled("glyph-font-maker")}><span>Glyph font maker</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("cutout"))} disabled={!commandEnabled("cutout")}><span>Cutout</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("upscale"))} disabled={!commandEnabled("upscale")}><span>Upscale…</span><kbd>alpha</kbd></button>
+            <button onClick={() => run(() => onCommand("thumb"))} disabled={!commandEnabled("thumb")}><span>Thumb…</span><kbd>alpha</kbd></button>
             <button onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><span>Version history</span></button>
             <button onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Workspaces & shortcuts</span></button>
+            {onInstall && <><hr /><button onClick={() => run(onInstall)}><span>Install Luma app</span><kbd>offline</kbd></button></>}
           </div>
         </details>
         <button className={`spatial-export ${exportOpen ? "active" : ""}`} onClick={() => onCommand("export")} aria-haspopup="dialog" aria-expanded={exportOpen} disabled={!commandEnabled("export")}>

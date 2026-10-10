@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as THREE from "three";
 import { formMeshFromObject, createFormMesh, disposeFormMesh } from "../app/engine/form-mesh-geometry.ts";
 import { parseFormMesh, validateFormMesh, meshAssetBytes } from "../app/engine/form-mesh-asset.ts";
@@ -16,10 +19,32 @@ function fixture() {
 }
 const render = async () => testCanvas(1600, 1200);
 
-test("Luma and Form share identical bounded mesh contracts and constructors", () => {
+// The committed fixture is actual Form source pinned to a verified commit, not a
+// regenerated copy of Luma. CI always checks it; an explicit current Form path
+// additionally verifies a coordinated cross-app change, and fails if unavailable.
+function verifyFormContract(source: string, formPath: string | URL) {
+  assert.equal(source, readFileSync(formPath, "utf8"), "Luma/Form mesh contract drift");
+}
+test("Luma matches the provenance-verified Form contract and any explicit current source", () => {
   const here = readFileSync(new URL("../app/engine/form-mesh-asset.ts", import.meta.url), "utf8");
-  const there = readFileSync(new URL("../../sculptor-studio/app/luma-mesh-asset.ts", import.meta.url), "utf8");
-  assert.equal(here, there);
+  const fixture = new URL("./fixtures/form-contract/luma-mesh-asset.ts", import.meta.url);
+  const provenance = JSON.parse(readFileSync(new URL("./fixtures/form-contract/provenance.json", import.meta.url), "utf8"));
+  assert.match(provenance.commit, /^[a-f0-9]{40}$/);
+  assert.equal(createHash("sha256").update(readFileSync(fixture)).digest("hex"), provenance.sha256);
+  verifyFormContract(here, fixture);
+  if (process.env.LUMA_FORM_CONTRACT_SOURCE !== undefined) {
+    verifyFormContract(here, process.env.LUMA_FORM_CONTRACT_SOURCE);
+  }
+});
+
+test("required Form contract validation rejects drift and unavailable sources", () => {
+  const dir = mkdtempSync(join(tmpdir(), "luma-form-contract-"));
+  try {
+    const contract = join(dir, "contract.ts");
+    writeFileSync(contract, "changed contract");
+    assert.throws(() => verifyFormContract("expected contract", contract), /contract drift/);
+    assert.throws(() => verifyFormContract("expected contract", join(dir, "missing.ts")), /ENOENT/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("edited topology, mirrored transforms and materials survive repeated exchange", () => {

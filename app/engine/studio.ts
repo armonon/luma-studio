@@ -2339,6 +2339,14 @@ export class Studio {
       layer.surface = layer.surface
         ? layer.surface.convert(format, colorSpace)
         : this.surfaceFromCanvas(layer.bitmap, format, colorSpace);
+      // Precision conversion makes a new master. Before the 8-bit renderer
+      // prefers its exact bitmap, replace any stale/high-depth preview with
+      // that converted master's display samples (including absent clear tiles).
+      if (format === "rgba8" && layer.bitmap.width === layer.surface.grid.width && layer.bitmap.height === layer.surface.grid.height) {
+        layer.bitmap.getContext("2d")!.clearRect(0, 0, layer.bitmap.width, layer.bitmap.height);
+        for (const key of layer.surface.store.keys()) this.updateLayerBitmapTile(layer, key);
+        bumpBitmapVersion(layer.bitmap);
+      }
       this.checkpointLayerSurface(layer);
     }
     this.doc.bitDepth = bitDepth;
@@ -3403,6 +3411,33 @@ export class Studio {
         this.doc.colorSpace,
       );
     layer.surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+    this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
+    this.actions.push({ op: "addRaster", name });
+    this.checkpointLayerSurface(layer);
+    this.requestRender();
+    return layer;
+  }
+
+  /**
+   * Add a new raster layer from an arbitrary-sized canvas, such as Upscale's
+   * result. If `sourceLayerId` names an existing raster layer, the new layer
+   * inherits its position and is scaled down so it occupies the same
+   * document-space size as the source despite having more pixels — Upscale
+   * is about resolution, not enlarging the placement.
+   */
+  addRasterLayerFromCanvas(canvas: HTMLCanvasElement, name: string, sourceLayerId?: string) {
+    if (!fitsBrowserCanvas(canvas.width, canvas.height)) throw new Error("Upscaled image is too large for this browser's canvas limits");
+    const layer = createRasterLayer(name, canvas);
+    layer.surface = this.surfaceFromCanvas(canvas);
+    layer.surface.store.bindMemoryBudget(this.residentMemoryBudget, `pixels:${layer.id}`);
+    const source = sourceLayerId ? this.findLayer(sourceLayerId) : undefined;
+    if (source?.bitmap) {
+      layer.transform = {
+        ...source.transform,
+        sx: source.transform.sx * source.bitmap.width / canvas.width,
+        sy: source.transform.sy * source.bitmap.height / canvas.height,
+      };
+    }
     this.commitStructural(`${name} added`, () => this.doc.layers.unshift(layer));
     this.actions.push({ op: "addRaster", name });
     this.checkpointLayerSurface(layer);
@@ -4520,6 +4555,9 @@ export class Studio {
     layer[key] = value;
     this.markTransientDirty();
     this.requestRender();
+    // Dirty-state notification happens only once per gesture. Controlled
+    // opacity inputs still need every preview value, not just the first one.
+    this.emit();
     return true;
   }
 
@@ -5996,6 +6034,53 @@ export class Studio {
     }
   }
 
+  /**
+   * Cutout: duplicate the layer and matte the copy with the on-device MODNet
+   * model, leaving the original untouched. The copy's mask is paintable
+   * immediately with the mask brush (mask-add/mask-remove), so a soft neural
+   * edge is never the final word. Falls back to the luma threshold mask, like
+   * neuralSubject, if the model can't load (offline, blocked CDN, etc.).
+   */
+  async cutoutSubject(
+    layerId: string,
+    onProgress?: (msg: string, pct: number) => void,
+  ): Promise<{ layerId: string; used: "neural" | "luma" }> {
+    const assertCurrent = this.guardDocumentOperation("cutout");
+    const layer = this.findLayer(layerId);
+    if (!layer || layer.kind !== "raster" || !layer.bitmap) {
+      throw new Error("Cutout needs a raster layer");
+    }
+    const [copy] = this.duplicateLayers([layerId]);
+    if (!copy) throw new Error("Could not duplicate the layer for Cutout");
+    copy.name = `${layer.name} cutout`;
+    try {
+      const { neuralMatte } = await import("./neural");
+      assertCurrent();
+      const matte = await neuralMatte(copy.bitmap!, onProgress);
+      assertCurrent();
+      const before = [this.maskSnapshot(copy)];
+      setLayerMaskFromCanvas(copy, matte, this.doc.width, this.doc.height);
+      this.commit({
+        label: "Cutout mask",
+        before,
+        after: [this.maskSnapshot(copy)],
+      });
+      // Not added to the Actions-panel replay log: duplicate + async matte
+      // doesn't fit that macro format (same as Select Subject and the other
+      // neural-model ops, which are also replay-exempt).
+      this.requestRender();
+      return { layerId: copy.id, used: "neural" };
+    } catch (err) {
+      assertCurrent();
+      console.warn("Cutout neural matte failed, falling back to luma", err);
+      const before = [this.maskSnapshot(copy)];
+      if (!autoLumaMaskInPlace(copy, this.doc.width, this.doc.height)) throw err instanceof Error ? err : new Error("Cutout failed");
+      this.commit({ label: "Cutout mask (luma fallback)", before, after: [this.maskSnapshot(copy)] });
+      this.requestRender();
+      return { layerId: copy.id, used: "luma" };
+    }
+  }
+
   async generativeEditVariations(
     layerId: string,
     prompt: string,
@@ -7185,6 +7270,47 @@ export class Studio {
     const svg = exportVectorSvg(source);
     assertCurrent();
     return new Blob([svg], { type: "image/svg+xml" });
+  }
+
+  /**
+   * Layered SVG for Figma: one group per layer, editable where SVG allows,
+   * flattened (and reported) where it does not. See figma-export.ts.
+   */
+  async exportFigmaSvg(
+    options: { outlineText?: boolean; computeOutlines?: (text: import("./document").TextStyle) => Promise<import("./text-outline-model").ShapedOutlines> } = {},
+  ): Promise<{ blob: Blob; report: import("./figma-export").FigmaExportReport }> {
+    const assertCurrent = this.guardDocumentOperation("Figma export");
+    if (!fitsBrowserCanvas(this.doc.width, this.doc.height)) throw new Error("Figma export needs a document within the browser canvas limit (16,384 px). Export a PNG instead.");
+    await this.prepareFontsForExport();
+    assertCurrent();
+    const outlines = new Map<string, PathStyle>();
+    const outlineFailures = new Map<string, string>();
+    if (options.outlineText) {
+      const { outlinedVectorPath, validateOutlineText } = await import("./text-outline-model");
+      const compute = options.computeOutlines ?? (await import("./text-shaping-client")).computeTextOutlines;
+      for (const layer of this.doc.layers) {
+        if (layer.kind !== "text" || !layer.text || !layer.visible) continue;
+        try {
+          if (layer.text.spatial?.enabled || layer.spatial?.enabled) throw new Error("3D text stays live");
+          const { style } = validateOutlineText(layer.text);
+          if (layer.text.appearance || style.decoration !== "none") throw new Error("appearance stacks and decorations are not outlined");
+          const text = structuredClone(layer.text);
+          outlines.set(layer.id, outlinedVectorPath(text, await compute(text)));
+        } catch (error) {
+          outlineFailures.set(layer.id, error instanceof Error ? error.message : "outline unavailable");
+        }
+        assertCurrent();
+      }
+    }
+    const bytes = this.doc.width * this.doc.height * 12 + 16 * 1024 * 1024;
+    const release = this.reserveOperationMemory(bytes);
+    try {
+      const { buildFigmaSvg } = await import("./figma-export");
+      assertCurrent();
+      const { svg, report } = buildFigmaSvg(this.doc, { title: this.activeDocumentState().name, outlines, outlineFailures });
+      assertCurrent();
+      return { blob: new Blob([svg], { type: "image/svg+xml" }), report };
+    } finally { release(); }
   }
 
   async exportImage(type: "image/png" | "image/jpeg" | "image/webp" = "image/png", quality = 0.92): Promise<Blob> {

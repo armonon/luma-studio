@@ -13,7 +13,7 @@ import {
   resolvedFillOpacity,
   rasterizeVectorMask,
 } from "./document";
-import { drawLayerContentManaged } from "./precision-renderer";
+import { drawLayerContentManaged, usesFullResolutionRgba8Bitmap } from "./precision-renderer";
 import { applySmartFilters } from "./filters";
 import { composeLayerWithEffects, effectNeedsBackdrop } from "./layer-effects";
 import { blendPassSeed, isNeutralBlendIf } from "./blend";
@@ -365,7 +365,7 @@ function readCompositeBackdrop(
 
 function canUploadPrecisionDirect(layer: Layer, doc: Document) {
   const t = layer.transform;
-  return !!layer.surface && layer.surface.grid.width === doc.width && layer.surface.grid.height === doc.height &&
+  return !!layer.surface && !usesFullResolutionRgba8Bitmap(layer) && layer.surface.grid.width === doc.width && layer.surface.grid.height === doc.height &&
     t.tx === 0 && t.ty === 0 && t.sx === 1 && t.sy === 1 && t.rotation === 0 && !(t.skewX ?? 0) &&
     !layer.filters?.length && !layer.effects?.length && !layer.clipping && resolvedFillOpacity(layer) === 1;
 }

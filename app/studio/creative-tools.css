@@ -46,7 +46,7 @@
 /* Mockup */
 .mk-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 148px minmax(0, 1fr) 300px; grid-template-rows: minmax(0, 1fr); }
 .mk-scenes { display: flex; flex-direction: column; gap: 8px; padding: 12px; overflow-y: auto; border-right: 1px solid #ffffff12; }
-.ct-dialog .mk-scenes button { flex-direction: column; padding: 6px; gap: 4px; background: transparent; }
+.ct-dialog .mk-scenes button { flex-direction: column; flex-shrink: 0; padding: 6px; gap: 4px; background: transparent; }
 .mk-scenes canvas { width: 100%; aspect-ratio: 1; border-radius: 4px; background: #0f1218; }
 .mk-scenes span { font-size: 11px; }
 .mk-stage { position: relative; min-width: 0; min-height: 0; overflow: hidden; display: grid; place-items: center; background: repeating-conic-gradient(#1b1f27 0% 25%, #20242c 0% 50%) 0 / 18px 18px; }
@@ -54,7 +54,9 @@
    while shrinking to whichever stage dimension is tighter. */
 .mk-stage canvas { position: absolute; inset: 0; margin: auto; width: auto; height: auto; max-width: calc(100% - 32px); max-height: calc(100% - 32px); border-radius: 6px; box-shadow: 0 10px 40px #0007; cursor: grab; touch-action: none; }
 .mk-stage canvas:active { cursor: grabbing; }
-.mk-stage-note { position: absolute; color: #afbfda; }
+.mk-stage-note { position: absolute; color: #dce8ff; background: #171b22e6; padding: 6px 10px; border-radius: 4px; }
+.mk-dialog > header > div:first-child { min-width: 0; }
+.mk-dialog .ct-header-actions { flex-shrink: 0; }
 
 /* Glyph */
 .gl-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 260px minmax(580px, 1fr) 320px; }
@@ -81,10 +83,11 @@
 .ct-dialog .gl-installed button { min-height: 22px; padding: 2px 6px; }
 
 @media (max-width: 1100px) {
-  .mk-body { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: auto; overflow-y: auto; }
-  .mk-scenes { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid #ffffff12; }
+  .mk-body { display: flex; flex-direction: column; overflow-y: auto; }
+  .mk-scenes { flex: 0 0 auto; flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid #ffffff12; }
   .ct-dialog .mk-scenes button { width: 96px; flex: 0 0 auto; }
-  .mk-stage { min-height: 60vh; }
+  .mk-stage { flex: 0 0 auto; height: min(60vh, 560px); min-height: 300px; }
+  .mk-dialog .ct-controls { flex: 0 0 auto; overflow: visible; }
   .ct-controls { border-left: 0; }
   .gl-body { grid-template-columns: 1fr; overflow-y: auto; }
   .gl-grid { border-right: 0; max-height: 220px; }
