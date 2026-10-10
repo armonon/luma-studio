@@ -73,3 +73,12 @@ Same again for the short-lived Wave 4 deploy `6ac56dc71801b94db5089256`
 hashed `/_next/static` files (plus its CSS chunk, which differs between builds
 because Tailwind also scans `live-static/`) are in `live-static/` too
 (sha1-verified).
+
+## Production promotion guard
+
+Repository merges build deploy previews without automatically replacing production
+or branch deployments. The Netlify ignore command requires
+`LUMA_PRODUCTION_BUILDS=on` for those deployments. Set this only after refreshing
+the overlay against the current live manifest and verifying existing functions,
+redirects, headers and runtime behavior. This guard does not qualify direct CLI
+deploys; apply the same checks before publishing those.

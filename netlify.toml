@@ -3,6 +3,8 @@
 # deploy target is worse than none.
 
 [build]
+  # The live-only overlay must be refreshed and runtime coverage verified before promotion.
+  ignore = "node build/netlify-promotion-guard.mjs"
   command = "npm run build:netlify"
 
 # Required for App Router: /api/ai/edit is a server route, so publishing the
