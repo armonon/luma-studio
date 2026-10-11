@@ -82,3 +82,17 @@ or branch deployments. The Netlify ignore command requires
 the overlay against the current live manifest and verifying existing functions,
 redirects, headers and runtime behavior. This guard does not qualify direct CLI
 deploys; apply the same checks before publishing those.
+
+## Immutable capture for a scoped release
+
+Set `LUMA_LIVE_STATIC_DIR` to an absolute directory containing a fresh,
+checksum-verified capture of the current deploy. The overlay plugin uses that
+capture instead of the historical tracked `live-static/` snapshot. Its existing
+additive behavior still preserves freshly built files, with the marketing
+`index.html` as the intentional replacement.
+
+Keep the deploy ID and file manifest with the capture. Netlify lists its protected
+`netlify.toml` file in the manifest but does not serve it publicly: retain that
+entry's existing digest in the additive deployment manifest rather than substituting
+local configuration. Verify server functions, headers, routes and a draft before
+publishing, and refuse promotion if the live deploy has changed since capture.

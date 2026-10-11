@@ -39,7 +39,11 @@ function copyRecursive(src, dest, { overwrite }) {
 
 module.exports = {
   onPostBuild: async ({ constants, utils }) => {
-    const liveStaticDir = path.join(__dirname, "..", "..", "..", "live-static");
+    // A release can supply an immutable, checksum-verified live capture without
+    // changing the tracked historical snapshot or copying it over newer pages.
+    const liveStaticDir = process.env.LUMA_LIVE_STATIC_DIR
+      ? path.resolve(process.env.LUMA_LIVE_STATIC_DIR)
+      : path.join(__dirname, "..", "..", "..", "live-static");
     if (!fs.existsSync(liveStaticDir)) {
       console.log("[overlay-live-static] no live-static/ directory found, skipping");
       return;
