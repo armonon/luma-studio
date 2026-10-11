@@ -66,7 +66,7 @@
       "slug": "form",
       "name": "Form",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/form.png",
-      "status": "latest Sites source opened; working CAD baseline visually audited; implementation pending",
+      "status": "first concept navigation slice published; architectural layout refinements remain",
       "existing_features": [
         "Exact CAD model/sketch/document workspaces",
         "Shared project save session with Fabric and Animation",
@@ -79,14 +79,35 @@
         "Concept apartment object hierarchy needs mapping to real CAD/BIM objects",
         "Glazing and architectural fields need capability verification before UI exposure"
       ],
-      "verified": [],
+      "verified": [
+        "TypeScript check passed",
+        "33 project, appearance, save-session and selection tests passed",
+        "Vinext production build passed",
+        "Browser search, selection, width editing, undo/redo, save/reopen passed at 1440, 1280 and 390 pixels",
+        "STEP independently parsed: one closed solid, 8 faces, finite coordinates and edited 90x50x24 mm bounds",
+        "Sites version 50 published successfully"
+      ],
       "source": "/Users/lillypad/Projects/form-sites-integration-20261010",
-      "source_commit": "20271980e3fb832bfe3671eab73ce7e0e14cca0a",
+      "source_commit": "8752f2225ebd98a3a68ea7f4e0046873f611dad8",
       "next_slice": [
         "Separate project navigation from contextual properties on desktop",
         "Reduce viewport overlays while preserving command discoverability",
         "Use actual selection and feature commands for object navigation",
         "Keep phone controls and document operations accessible"
+      ],
+      "deploy": "appgdep_6acbc108a4d0819191c26b0f9e487755",
+      "version": 50,
+      "url": "https://form-3d-studio.armonon.chatgpt.site",
+      "implemented_this_pass": [
+        "Searchable project browser grouped by actual profiles, imported exact solids and meshes",
+        "Selection reuses workspace selection and clears stale mesh/topology targets",
+        "Desktop project navigation separate from contextual Properties",
+        "Phone object drawer hands selection to Properties; Escape and close restore access"
+      ],
+      "remaining": [
+        "Complete architectural concept hierarchy and compact property layout",
+        "Validate imported-solid and mesh navigation with richer project fixtures",
+        "Persist object-browser preference with workspace settings"
       ]
     },
     {
