@@ -39,7 +39,10 @@
         "6 Cutout mask/project/MODNet tests passed",
         "Draft Cutout mask editing/undo/save/reopen/transparent PNG passed at 1440 and 390 pixels",
         "Home and Learn static content matches previous production digests",
-        "Guarded publication preserved latest Cutout route and fixes"
+        "Guarded publication preserved latest Cutout route and fixes",
+        "Layered text/raster/shape composition inspected at 1920, 1440 and 1280 pixels with no viewport overflow",
+        "B/V shortcuts agree with toolbar controls",
+        "Layers float/resize/reload persistence/redock passed on live build"
       ],
       "source": "/Users/lillypad/Projects/luma-integration-20261009",
       "implemented_this_pass": [
@@ -53,8 +56,8 @@
         "Align webpack optional browser aliases"
       ],
       "remaining": [
-        "Qualify richer image/text/mask compositions and workspace persistence against concept",
-        "Complete broader desktop/tablet keyboard and docking validation"
+        "Qualify richer mask compositions and tablet workflow",
+        "Complete dirty-document and workspace reset checks"
       ],
       "deploy": "6acbba29559b54491aacdb84",
       "url": "https://luma.thecreatingco.com/studio"
