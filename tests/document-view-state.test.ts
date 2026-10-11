@@ -6,7 +6,7 @@ import { FIT_VIEW, reconcileDocumentViews, updateDocumentView, type DocumentView
 const initial = (): DocumentViews => ({ activeId: null, views: {}, initial: { zoom: 1.2, panX: 0, panY: 0 } });
 
 test("New Document does not reset the outgoing render's document view", () => {
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   const creation = page.slice(page.indexOf("{showNewDocument &&"), page.indexOf("{nativeOpening &&"));
   assert.ok(creation.includes("studio.resetDocument(width, height, name)"));
   assert.ok(!creation.includes("setView("));

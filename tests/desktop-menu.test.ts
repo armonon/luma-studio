@@ -33,7 +33,7 @@ import type { StudioCommand } from "../app/desktop/menu-model.ts";
 // ---------------------------------------------------------------------------
 
 const rust = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
-const studioPage = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+const studioPage = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
 
 test("Cocoa termination is intercepted before Tao's non-cancellable termination notification", () => {
   const guard = readFileSync(new URL("../src-tauri/src/termination.rs", import.meta.url), "utf8");

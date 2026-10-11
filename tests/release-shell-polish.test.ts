@@ -36,7 +36,7 @@ test("optional shell failures offer Save/Close without reloading or replacing th
 });
 
 test("shell chunks and modal import routes are protected and shortcuts use the tool activation route", () => {
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   for (const title of ["Application controls", "Tools", "Tool options", "Status", "Export", "New document", "Rename layer", "PDF import", "Layer Focus", "Layer style"]) assert.ok(page.includes(`<ShellErrorBoundary title="${title}"`));
   assert.match(page, /activateTool\(t\.id, t\.workspace\)/);
   assert.match(page, /pdfChoice\.resolve\(null\)/);

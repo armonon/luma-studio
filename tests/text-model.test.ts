@@ -102,7 +102,7 @@ test("typography buttons and keyboard shortcuts execute the same registered comm
 });
 
 test("the type editor is wired into the contextual inspector, options bar and Space HUD", () => {
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   const panel = readFileSync(new URL("../app/studio/panels/type-panel.tsx", import.meta.url), "utf8");
   const toolbar = readFileSync(new URL("../app/studio/context-toolbar.tsx", import.meta.url), "utf8");
   assert.match(page, /<TypePanel/);

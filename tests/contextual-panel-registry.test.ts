@@ -22,7 +22,7 @@ test("manual panels and mask focus outrank generic workspace routing", () => {
 });
 
 test("a docked Selection panel stays available independently of workspace and contextual routing", () => {
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   const panel = page.split('<DockPanelContent panelId="selection">')[1]?.split("</DockPanelContent>")[0];
   assert.ok(panel, "Selection is registered as dock content");
   assert.match(panel, /\{doc && \(/);

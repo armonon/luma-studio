@@ -1,0 +1,23 @@
+{
+  "base": "https://6acbba29559b54491aacdb84--luma-studio-app.netlify.app",
+  "results": [
+    {
+      "width": 1440,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    },
+    {
+      "width": 390,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    }
+  ]
+}
