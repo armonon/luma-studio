@@ -145,10 +145,30 @@
       "slug": "scenepilot",
       "name": "ScenePilot",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/scenepilot.png",
-      "status": "pending source audit",
+      "status": "first concept editing slice published; timeline and Pro qualification remain",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "30 focused tests, TypeScript, production build",
+        "Browser import, precise editing, undo/redo, save/reopen and MP4 export",
+        "H264 export independently decoded at 1280x720, 30 seconds",
+        "1440/1024/390/320 responsive checks and mobile title undo",
+        "Production retained files, functions, edges and nine routes verified"
+      ],
+      "source": "/Users/lillypad/Projects/scenepilot-concept-20261011",
+      "source_commit": "c4254bd",
+      "deploy": "6acbf04d8f9adeceab483eca",
+      "url": "https://scenepilot.thecreatingco.com/app/",
+      "implemented_this_pass": [
+        "Large media preview cards and direct media filters",
+        "Precise bounded transform inputs using existing history",
+        "Asset-only mobile sequences expose editing and playback"
+      ],
+      "remaining": [
+        "Detailed timeline filmstrips",
+        "Unified transform/blend inspector",
+        "Desktop Pro composition qualification"
+      ]
     },
     {
       "slug": "cast",
