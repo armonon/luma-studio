@@ -25,6 +25,11 @@ const RAIL_FAMILIES: Record<string, readonly string[]> = {
   "sel-sam": ["sel-sam"],
 };
 
+const RAIL_LABELS: Record<string, string> = {
+  "radial-warp": "Warp", heal: "Heal", "sel-lasso": "Lasso", "sel-ellipse": "Marquee",
+  "direct-select": "Paths", "sel-sam": "Smart select",
+};
+
 type CategoryId = "move" | "paint" | "select" | "retouch" | "create" | "ai";
 
 const categories: ReadonlyArray<{ id: CategoryId; label: string; tools: readonly string[] }> = [
@@ -154,6 +159,7 @@ export default function ToolDock({
                 title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}${family.length > 1 ? " · Right-click for related tools" : ""}`}
               >
                 <ToolIcon id={tool.id} />
+                <span className="tool-rail-label">{RAIL_LABELS[tool.id] ?? tool.label}</span>
                 {family.length > 1 && <i className="tool-family-indicator" aria-hidden="true" />}
               </button>
             );

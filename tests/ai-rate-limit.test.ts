@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { acquireAiEditPermit, resetAiEditRateLimitsForTests } from "../app/api/ai/edit/route";
+import { acquireAiEditPermit, resetAiEditRateLimitsForTests } from "../app/api/ai/edit/handler";
 
 test("AI edit permits cap concurrent work and release idempotently", () => {
   resetAiEditRateLimitsForTests();

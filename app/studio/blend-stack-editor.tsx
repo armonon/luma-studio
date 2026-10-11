@@ -48,6 +48,7 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
   const fillOpacity = resolvedFillOpacity(layer);
   const hasAdvancedSettings = !isNeutralBlendIf(blendIf) || fillOpacity < 1;
   const [advancedOpen, setAdvancedOpen] = useState(hasAdvancedSettings);
+  const [stackOpen, setStackOpen] = useState(passes.length > 1);
   const [draggedPass, setDraggedPass] = useState<string | null>(null);
   const activeBlendIf = blendIf.channels[blendIf.activeChannel];
   const settingsWithRange = (key: "source" | "underlying", range: BlendIfRange) => ({
@@ -61,6 +62,14 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
   const commitRange = (key: "source" | "underlying", range: BlendIfRange) => studio.commitLayerBlendIf(layer.id, settingsWithRange(key, range));
   return (
     <div className="blend-stack-editor">
+      {passes.length === 1 && passes[0].enabled && <label className="layer-blend-mode">
+        <span>Blend</span>
+        <select aria-label="Layer blend mode" value={passes[0].mode} onChange={(event) => studio.updateBlendPass(layer.id, passes[0].id, { mode: event.target.value as BlendMode })}>
+          {BLEND_MODE_GROUPS.map(group => <optgroup key={group.label} label={group.label}>{group.modes.map(mode => <option key={mode} value={mode}>{BLEND_LABELS[mode]}</option>)}</optgroup>)}
+        </select>
+      </label>}
+      <details className="blend-stack-disclosure" open={stackOpen} onToggle={event => setStackOpen(event.currentTarget.open)}>
+      <summary>Blend stack <span>{passes.length > 1 ? `${passes.length} passes` : "Recipes & passes"}</span></summary>
       <div className="blend-stack-heading">
         <span><strong>Blend Graph</strong><small>{passes.length} of {MAX_LAYER_BLEND_PASSES} passes</small></span>
         <button type="button" onClick={() => studio.addBlendPass(layer.id)} disabled={passes.length >= MAX_LAYER_BLEND_PASSES} title="Add another blend pass">＋ Add blend mode</button>
@@ -116,6 +125,7 @@ export default function BlendStackEditor({ layer, studio }: { layer: Layer; stud
           </div>
         ))}
       </div>
+      </details>
       <details className="advanced-blending" open={advancedOpen} onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}>
         <summary><span>Advanced blending</span><small>Fill · Blend If</small></summary>
         <div className="advanced-blending-body">

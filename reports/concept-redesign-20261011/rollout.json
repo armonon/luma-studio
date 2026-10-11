@@ -1,0 +1,396 @@
+{
+  "updated": "2026-10-11",
+  "purpose": "Implement approved UI concepts as working applications. Concept controls are not evidence of implemented capabilities.",
+  "release_gates": [
+    "Audit current source and map concept controls to real commands",
+    "Record proposed functionality separately from existing behavior",
+    "Implement desktop and responsive touch layouts without replacing editor engines",
+    "Verify edit and undo/redo with output/state assertions",
+    "Verify save and reopen preserve document state",
+    "Verify export content and dimensions",
+    "Inspect desktop and phone screenshots and keyboard interaction",
+    "Build, deploy a draft, verify the draft, then publish with baseline guard"
+  ],
+  "apps": [
+    {
+      "slug": "luma",
+      "name": "Luma",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/luma.png",
+      "status": "first concept shell slice published and verified; deeper concept workflows remain",
+      "existing_features": [
+        "Registry-backed tools and command search",
+        "Contextual controls",
+        "Dockable layers and properties",
+        "Document history",
+        "Luma project save and open",
+        "Raster export"
+      ],
+      "proposed_features": [],
+      "verified": [
+        "60 focused shell/registry/dock tests passed",
+        "19 document/dock/history tests passed",
+        "Desktop UI add-layer/undo/redo passed",
+        "Import/save/reopen/PNG export passed at 1440, 390, 320 pixels",
+        "Export pixel assertions passed; zero browser page errors",
+        "Production webpack build passed",
+        "Production browser flows passed at 1440/390/320 pixels",
+        "42 additional editor tests and 11 API tests passed",
+        "Compact blend selection and multi-pass disclosure passed browser undo checks",
+        "6 Cutout mask/project/MODNet tests passed",
+        "Draft Cutout mask editing/undo/save/reopen/transparent PNG passed at 1440 and 390 pixels",
+        "Home and Learn static content matches previous production digests",
+        "Guarded publication preserved latest Cutout route and fixes"
+      ],
+      "source": "/Users/lillypad/Projects/luma-integration-20261009",
+      "implemented_this_pass": [
+        "Expose direct tool rail on desktop browser",
+        "Show tool labels on wide displays",
+        "Correct inherited tool-family indicator styling",
+        "Unify legacy panel colors with graphite shell",
+        "Layers-first Essentials default, preserving saved workspaces",
+        "Prevent collapsed layer list",
+        "Extract reusable studio client from Next route",
+        "Align webpack optional browser aliases"
+      ],
+      "remaining": [
+        "Qualify richer image/text/mask compositions and workspace persistence against concept",
+        "Complete broader desktop/tablet keyboard and docking validation"
+      ],
+      "deploy": "6acbba29559b54491aacdb84",
+      "url": "https://luma.thecreatingco.com/studio"
+    },
+    {
+      "slug": "form",
+      "name": "Form",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/form.png",
+      "status": "latest Sites source opened; working CAD baseline visually audited; implementation pending",
+      "existing_features": [
+        "Exact CAD model/sketch/document workspaces",
+        "Shared project save session with Fabric and Animation",
+        "Contextual dimensions and direct movement",
+        "Appearance and render controls",
+        "Feature history and rollback",
+        "Command previews and explicit application"
+      ],
+      "proposed_features": [
+        "Concept apartment object hierarchy needs mapping to real CAD/BIM objects",
+        "Glazing and architectural fields need capability verification before UI exposure"
+      ],
+      "verified": [],
+      "source": "/Users/lillypad/Projects/form-sites-integration-20261010",
+      "source_commit": "20271980e3fb832bfe3671eab73ce7e0e14cca0a",
+      "next_slice": [
+        "Separate project navigation from contextual properties on desktop",
+        "Reduce viewport overlays while preserving command discoverability",
+        "Use actual selection and feature commands for object navigation",
+        "Keep phone controls and document operations accessible"
+      ]
+    },
+    {
+      "slug": "stemdeck",
+      "name": "StemDeck",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/stemdeck.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "scenepilot",
+      "name": "ScenePilot",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/scenepilot.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "cast",
+      "name": "Cast",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/cast.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "mockup",
+      "name": "Mockups",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/mockup.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "glyph-studio",
+      "name": "Glyph Studio",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/glyph-studio.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "ghost",
+      "name": "Ghost",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/ghost.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "autocut",
+      "name": "AutoCut",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/autocut.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "captions",
+      "name": "Captions",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/captions.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "board",
+      "name": "Board",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/board.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "grade",
+      "name": "Grade",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/grade.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "reframe",
+      "name": "Reframe",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/reframe.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "split",
+      "name": "Split",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/split.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "key-bpm",
+      "name": "Key & BPM",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/key-bpm.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "vox",
+      "name": "Vox",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/vox.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "canvas",
+      "name": "Canvas",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/canvas.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "pocket",
+      "name": "Pocket",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/pocket.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "press",
+      "name": "Press",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/press.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "librarian",
+      "name": "Librarian",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/librarian.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "reclaim",
+      "name": "Reclaim",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/reclaim.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "bounce",
+      "name": "Bounce",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/bounce.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "locker",
+      "name": "Locker",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/locker.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "sessions",
+      "name": "Sessions",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/sessions.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "pocket-studio",
+      "name": "Pocket Studio",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/pocket-studio.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "cutout",
+      "name": "Cutout",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/cutout.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "loop",
+      "name": "Loop",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/loop.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "glyph",
+      "name": "Glyph in Luma",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/glyph.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "weblab",
+      "name": "WebLab",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/weblab.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "circle",
+      "name": "The Circle",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/circle.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "animate",
+      "name": "Animate",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/animate.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "moodboard",
+      "name": "Moodboard",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/moodboard.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "portfolio",
+      "name": "Portfolio Studio",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/portfolio.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "website-checkup",
+      "name": "Website Checkup",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/website-checkup.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "hole",
+      "name": "HOLE",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/hole.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    },
+    {
+      "slug": "now-messenger",
+      "name": "NOW Messenger",
+      "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/now-messenger.png",
+      "status": "pending source audit",
+      "existing_features": [],
+      "proposed_features": [],
+      "verified": []
+    }
+  ]
+}

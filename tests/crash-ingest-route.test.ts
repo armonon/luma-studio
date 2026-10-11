@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OPTIONS, POST, resetCrashIngestRateLimitsForTests } from "../app/api/diagnostics/crash/route.ts";
+import { OPTIONS, POST, resetCrashIngestRateLimitsForTests } from "../app/api/diagnostics/crash/handler.ts";
 
 const validReport = {
   schema: "luma-crash/1",

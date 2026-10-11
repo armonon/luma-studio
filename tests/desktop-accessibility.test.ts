@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
 const registeredPanels = [
   "layers-panel.tsx",
   "operational-panels.tsx",

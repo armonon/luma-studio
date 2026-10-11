@@ -7,6 +7,15 @@ import type { NextConfig } from "next";
 const emptyModule = "./build/empty-module.cjs";
 
 const nextConfig: NextConfig = {
+  webpack(config, { isServer }) {
+    // Match the optional Node-only aliases when using the webpack QA server.
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "jsdom/lib/jsdom/living/generated/utils": false,
+      ...(!isServer ? { module: false } : {}),
+    };
+    return config;
+  },
   // Keep Next/Turbopack scoped to this project when the parent folder also
   // contains a lockfile (as it does in the desktop development workspace).
   turbopack: {

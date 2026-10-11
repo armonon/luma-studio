@@ -147,6 +147,10 @@ type Tensor = { data: Float32Array; dims: number[] };
 type ProcessorFn = (image: unknown) => Promise<Record<string, Tensor>>;
 type ModelFn = (inputs: Record<string, Tensor>) => Promise<Record<string, Tensor>>;
 
+export function mattingModelInputs<T>(inputs: Record<string, T>, name: string) {
+  return name === "Xenova/modnet" && !inputs.input && inputs.pixel_values ? { ...inputs, input: inputs.pixel_values } : inputs;
+}
+
 export async function neuralMatte(
   source: HTMLCanvasElement,
   onProgress?: ProgressFn,
@@ -169,7 +173,8 @@ export async function neuralMatte(
   onProgress?.("Running inference", 0);
   const inputs = await (processor as ProcessorFn)(img);
   throwIfAborted(signal);
-  const outputs = await (model as ModelFn)(inputs);
+  // MODNet calls the image input "input"; its processor emits "pixel_values".
+  const outputs = await (model as ModelFn)(mattingModelInputs(inputs, modelName));
   throwIfAborted(signal);
 
   // MODNet's ONNX export names its output "output" (a [1,1,H,W] alpha matte).

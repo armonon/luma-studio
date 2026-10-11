@@ -21,7 +21,7 @@ function jpegDimensions(bytes: Uint8Array) {
 }
 
 test("the studio page composes the seven structural shell regions", () => {
-  const source = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   for (const region of [
     "AppShell", "MenuBarRegion", "ToolRailRegion", "DocumentAreaRegion",
     "DockRegion", "ContextualTaskBarRegion", "StatusBarRegion",
@@ -37,7 +37,7 @@ test("the studio page composes the seven structural shell regions", () => {
 });
 
 test("document title and save names come from the engine, not a second UI identity", () => {
-  const source = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(source, /customName|setCustomName/);
   assert.match(source, /const projectName = openDocuments\.find\(document => document\.active\)\?\.name/);
   assert.match(source, /const saveName = nameOverride \?\? studio\.activeDocumentState\(\)\.name/);

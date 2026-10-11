@@ -279,7 +279,7 @@ test("the studio page reports a perspective refusal instead of claiming success"
   // A source assertion because the branch lives inside the pointer handler of a
   // component this suite cannot mount. The bug was structural: the notify call
   // did not depend on the return value, so no message could ever be wrong.
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   const handler = page.slice(page.indexOf("if (quadTool) {"));
   const branch = handler.slice(0, 1800);
   assert.match(branch, /perspectiveCropRefusal\(/, "the engine must be asked why it would refuse");

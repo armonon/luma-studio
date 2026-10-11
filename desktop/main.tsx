@@ -1,6 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
-import StudioPage from "../app/studio/page";
+import StudioPage from "../app/studio/studio-client";
 import "../app/globals.css";
 
 const root = document.getElementById("root");

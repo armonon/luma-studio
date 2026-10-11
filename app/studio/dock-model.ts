@@ -34,13 +34,13 @@ export const BUILT_IN_WORKSPACES: BuiltInWorkspace[] = ["Essentials", "Photograp
 
 export function defaultDockLayout(workspace: BuiltInWorkspace = "Essentials"): DockLayout {
   const topPanels: PanelId[] = workspace === "Painting" ? ["properties"] : ["properties", "neural"];
+  const properties: DockGroup = { id: "right-properties", dock: "right", panelIds: topPanels, activePanelId: "properties", size: 300, weight: 1, collapsed: false };
+  const layers: DockGroup = { id: "right-layers", dock: "right", panelIds: ["layers"], activePanelId: "layers", size: 300, weight: workspace === "Photography" ? 0.85 : 1.3, collapsed: false };
   return {
     version: DOCK_LAYOUT_VERSION,
     workspace,
-    groups: [
-      { id: "right-properties", dock: "right", panelIds: topPanels, activePanelId: "properties", size: 300, weight: 1, collapsed: false },
-      { id: "right-layers", dock: "right", panelIds: ["layers"], activePanelId: "layers", size: 300, weight: workspace === "Photography" ? 0.85 : 1.1, collapsed: false },
-    ],
+    // Only defaults change: saved custom arrangements remain untouched.
+    groups: workspace === "Essentials" ? [layers, properties] : [properties, layers],
     floating: [],
     closed: [],
   };

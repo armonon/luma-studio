@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readBoundedText, UploadLimitError, UploadTimeoutError } from "../app/engine/bounded-upload";
-import { POST, resetCrashIngestRateLimitsForTests } from "../app/api/diagnostics/crash/route";
+import { POST, resetCrashIngestRateLimitsForTests } from "../app/api/diagnostics/crash/handler";
 import { RemoteCrashReporter } from "../app/engine/crash-reporting";
 import type { DiagnosticEvent } from "../app/engine/diagnostics";
 

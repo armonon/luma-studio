@@ -219,7 +219,7 @@ test("paste routes internal pixels without replacing external text with stale pi
 });
 
 test("the document canvas binds on mount, not only after viewport effects", () => {
-  const page = readFileSync(new URL("../app/studio/page.tsx", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   assert.match(page, /<canvas\s+key=\{activeDocumentId\}\s+ref=\{bindDisplayCanvas\}/);
   assert.match(page, /if \(canvas\) studio\?\.attachDisplayTarget\(canvas\)/);
 });

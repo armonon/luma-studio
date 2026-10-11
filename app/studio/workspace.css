@@ -457,3 +457,80 @@ html[data-luma-platform="desktop"] body .spatial-studio[data-app-shell][data-ui=
 .delivery-preflight-issues li > strong { font-size: 12px; }
 .delivery-preflight-issues li p { margin: 6px 0; }
 .delivery-preflight-issues .delivery-preflight-action { opacity: .85; }
+
+/* Concept-led desktop rail: keep the actual registry-backed tools visible.
+   Touch layouts retain their dedicated sheets and full-size touch targets. */
+@media (min-width: 1100px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface="desktop"] {
+    & .spatial-workspace { grid-template-columns: 116px auto minmax(0, 1fr) auto; }
+    & .spatial-toolbar { padding: 10px 8px; }
+    & .tool-family-menu { left: 124px; }
+    & .tool-family-scrim { left: 116px; }
+    & .primary-tool-categories { width: 100%; min-width: 0; gap: 3px; align-items: stretch; scrollbar-width: thin; }
+    & .primary-tool-categories > button {
+      width: 100%; min-width: 0; justify-content: flex-start; gap: 9px; padding: 0 9px;
+      flex-basis: 36px; border-radius: 6px;
+    }
+    & .primary-tool-categories > button svg { flex: 0 0 18px; }
+    & .primary-tool-categories > button > span {
+      display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; font-size: 11px; font-weight: 500; text-align: left;
+    }
+    & .primary-tool-categories > button[data-family-start="true"] { margin-top: 6px; }
+    & .tool-rail-colors { padding: 12px 0 0; grid-template-columns: 36px 28px; justify-content: center; align-items: center; }
+    & .spatial-canvas-stage { padding: clamp(12px, 1.5vw, 24px); }
+  }
+}
+
+/* Native and web share the same graphite surfaces, including legacy panels. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"] {
+  & .primary-tool-categories > button > .tool-family-indicator {
+    position: absolute; inset: auto 3px 3px auto; width: 0; height: 0;
+    min-width: 0; min-height: 0; padding: 0; margin: 0;
+    border: 0; border-right: 4px solid currentColor; border-top: 4px solid transparent;
+    border-radius: 0; background: none; box-shadow: none; transform: none;
+    pointer-events: none;
+  }
+  & :is(.layer-focus-panel, .blend-pass, .advanced-blending) {
+    background: var(--ui-panel); color: var(--ui-text); border-color: var(--ui-border); box-shadow: none;
+  }
+  & .layer-focus-panel { margin: 0; border-radius: 0; border-width: 1px 0 0; }
+  & .focus-status { border-color: var(--ui-border); }
+  & .focus-status :is(strong, span) { color: var(--ui-text); }
+  & :is(.focus-status small, .focus-add, .focus-collapse) { color: var(--ui-muted); }
+  & :is(.blend-pass, .advanced-blending, .studio-contextbar, .dock-panel-body) :is(select, input[type="text"], input[type="search"], input[type="number"]) {
+    background: var(--ui-field); color: var(--ui-text); border-color: var(--ui-border);
+  }
+  & :is(.blend-pass-order button, .blend-pass-toggle, .blend-add, .advanced-blending summary) {
+    background: var(--ui-raised); color: var(--ui-text); border-color: var(--ui-border);
+  }
+}
+
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"] .virtual-layer-stack {
+  min-height: 92px;
+}
+
+/* Override the legacy light-theme !important rules only inside the editor. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"] {
+  & :is(.blend-pass, .blend-stack-heading button, .blend-pass-order button, .blend-pass-toggle) {
+    background: var(--ui-raised) !important; color: var(--ui-text) !important;
+    border-color: var(--ui-border) !important;
+  }
+  & :is(.layer-controls, .mask-controls, .tone-controls, .blend-stack-heading, .blend-pass-topline) :is(label, output, strong, span) { color: var(--ui-text); }
+  & :is(.advanced-blending-body, .focus-add-menu > summary) { background: var(--ui-field); color: var(--ui-muted); border-color: var(--ui-border); }
+  & :is(.dock-panel-body, .studio-contextbar) :is(select, input[type="search"], input[type="text"], input[type="number"]) {
+    background: var(--ui-field) !important; color: var(--ui-text) !important;
+    border-color: var(--ui-border) !important;
+  }
+  & .primary-tool-categories > button { box-sizing: border-box; margin-left: 0; margin-right: 0; }
+}
+
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"] {
+  & .layer-blend-mode { display: grid; grid-template-columns: 48px minmax(0, 1fr); align-items: center; gap: 8px; }
+  & .layer-blend-mode select { width: 100%; }
+  & .blend-stack-disclosure > summary { display: flex; align-items: center; gap: 8px; min-height: 34px; color: var(--ui-muted); cursor: pointer; }
+  & .blend-stack-disclosure > summary::before { content: "›"; font-size: 16px; }
+  & .blend-stack-disclosure[open] > summary::before { transform: rotate(90deg); }
+  & .blend-stack-disclosure > summary > span { margin-left: auto; font-size: 10px; }
+  & .blend-stack-disclosure > .blend-stack-heading { margin-top: 4px; }
+}

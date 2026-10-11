@@ -30,17 +30,17 @@ test("every shipped studio panel has complete, valid central metadata", () => {
 
 test("dock layout supports tabs, ordering, collapse, resize, close, reopen, dock and float", () => {
   let layout = defaultDockLayout("Essentials");
-  const groupId = layout.groups[0].id;
+  const groupId = layout.groups.find(group => group.panelIds.includes("properties"))!.id;
   layout = selectDockPanel(layout, groupId, "properties");
-  assert.equal(layout.groups[0].activePanelId, "properties");
+  assert.equal(layout.groups.find(group => group.id === groupId)!.activePanelId, "properties");
   layout = reorderDockPanel(layout, groupId, "neural", 0);
-  assert.equal(layout.groups[0].panelIds[0], "neural");
+  assert.equal(layout.groups.find(group => group.id === groupId)!.panelIds[0], "neural");
   layout = collapseDockGroup(layout, groupId, true);
-  assert.equal(layout.groups[0].collapsed, true);
+  assert.equal(layout.groups.find(group => group.id === groupId)!.collapsed, true);
   layout = resizeDockGroup(layout, groupId, 420);
-  assert.equal(layout.groups[0].size, 420);
+  assert.equal(layout.groups.find(group => group.id === groupId)!.size, 420);
   layout = resizeDockSplit(layout, groupId, 1.8);
-  assert.equal(layout.groups[0].weight, 1.8);
+  assert.equal(layout.groups.find(group => group.id === groupId)!.weight, 1.8);
   layout = splitDockPanel(layout, "neural", "bottom", STUDIO_PANEL_REGISTRY);
   assert.equal(layout.groups.find((group) => group.panelIds.includes("neural"))?.dock, "bottom");
   layout = moveDockPanelToGroup(layout, "neural", groupId, 0);
