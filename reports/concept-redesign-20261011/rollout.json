@@ -329,10 +329,36 @@
       "slug": "captions",
       "name": "Captions",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/captions.png",
-      "status": "pending source audit",
-      "existing_features": [],
+      "status": "qualified first concept slice published; full project persistence remains",
+      "existing_features": [
+        "Local Whisper transcription",
+        "SRT/VTT import/export",
+        "Canvas caption styling and WebM burn-in",
+        "ScenePilot cue handoff"
+      ],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "9 tests passed",
+        "TypeScript and tools build passed",
+        "Browser 1440/1024/390/320 passed",
+        "Real 15-second WebM export",
+        "3669 production assets retained; 25 exact assets; 9 routes"
+      ],
+      "implemented": [
+        "Transcript-first light workspace",
+        "Mobile preview-first layout",
+        "Transcript undo/redo",
+        "Typeface, size, colors and vertical position",
+        "Working subtitle-only exports"
+      ],
+      "deploy": "6acd53d3c7ffcb2f6d8b3846",
+      "commit": "19b6857",
+      "remaining": [
+        "Native style-preserving project save/reopen",
+        "Word timing drag controls",
+        "Safe-area/placement grid",
+        "Broader live transcription regression"
+      ]
     },
     {
       "slug": "board",
