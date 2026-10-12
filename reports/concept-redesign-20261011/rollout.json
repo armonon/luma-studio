@@ -505,37 +505,117 @@
       "slug": "vox",
       "name": "Vox",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/vox.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "13 settings/history and DSP tests",
+        "Build and TypeScript",
+        "4-second voiced fixture through pitch tracking and harmony DSP",
+        "24-bit mono 44.1kHz WAV, duration 4 seconds",
+        "Browser checks at 1440, 1024, 390, 320 pixels",
+        "Hosted browser zero page errors; backend and routes preserved"
+      ],
+      "implemented": [
+        "Dark peach pitch editor with responsive control column",
+        "Undoable key, strength, glide and harmony settings",
+        "Validated portable settings JSON (audio separate)",
+        "Only current-settings renders can play/export"
+      ],
+      "remaining": [
+        "Phrase selection and per-note painting",
+        "Multiple harmony lanes",
+        "Full take project with embedded audio",
+        "Playback seeking and synchronized playhead",
+        "Formant and timing editing"
+      ],
+      "commit": "3395dfb",
+      "deploy": "6acd6610476e8e1e8d43a271"
     },
     {
       "slug": "canvas",
       "name": "Canvas",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/canvas.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "16 tests",
+        "Build and TypeScript",
+        "Hosted 4-width browser workflows",
+        "PNG export and H264 720x1280 4-second loop export",
+        "Hosted browser and production routes verified; backend preserved"
+      ],
+      "implemented": [
+        "Engine-rendered scene thumbnails",
+        "Three-column dark cyan workspace, preview-first mobile",
+        "Bounded visual/loop settings undo-redo",
+        "Validated portable settings JSON (source media separate)"
+      ],
+      "remaining": [
+        "Additional fluid and particle scene engines",
+        "Full embedded-media project format",
+        "Track waveform and markers",
+        "Smoothing/speed/scale controls"
+      ],
+      "commit": "0d07c10",
+      "deploy": "6acd68935f6b01c2af2c3c8c"
     },
     {
       "slug": "pocket",
       "name": "Pocket",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/pocket.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "33 focused tests",
+        "Build and TypeScript",
+        "4-width browser edit/history/play/save/reload/WAV/stem export",
+        "Hosted browser and production routes verified; backend preserved"
+      ],
+      "implemented": [
+        "Purple beat workspace with six live synthesis audition pads",
+        "Undo/redo for pattern notes, tempo, swing and mixing",
+        "Existing draft recovery and saved patterns preserved"
+      ],
+      "remaining": [
+        "Pattern banks and chaining",
+        "Pad recording and keyboard performance shortcuts",
+        "Portable editable pattern import/export",
+        "Step-number header and collapsible bass/mixer panels"
+      ],
+      "commit": "fe0d502",
+      "deploy": "6acd6a5358ef3e20e1f82d07"
     },
     {
       "slug": "press",
       "name": "Press",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/press.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "17 tests",
+        "Build and TypeScript",
+        "Four-width browser editing/history/photo/save/open/autosave",
+        "Self-contained HTML export includes edited text and embedded photo",
+        "Hosted browser and production routes verified; backend preserved"
+      ],
+      "implemented": [
+        "Light editorial workspace",
+        "Focused Bio/photo, Music/links, Press/contact and Style sections",
+        "Undoable draft edits",
+        "Draft import rejects unrelated JSON without replacing current work"
+      ],
+      "remaining": [
+        "Rich text biography editing",
+        "Photo gallery and additional editorial templates",
+        "Print regression across browsers",
+        "AI writing requires a real integration; no pretend AI button"
+      ],
+      "commit": "af4438f",
+      "deploy": "6acd6c277f607af0002ce759"
     },
     {
       "slug": "librarian",
