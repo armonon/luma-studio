@@ -364,19 +364,58 @@
       "slug": "board",
       "name": "Board",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/board.png",
-      "status": "pending source audit",
+      "status": "qualified first concept slice published",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "8 engine/history tests",
+        "TypeScript and tools build",
+        "Draft desktop and phone editing, undo, sketch, upload, autosave, board save/reopen and CSV",
+        "3674 retained files; 25 exact assets; 9 routes"
+      ],
+      "implemented": [
+        "Paper contact sheet",
+        "Frames and details views",
+        "Per-shot disclosure",
+        "Board undo/redo",
+        "Restore-before-edit startup"
+      ],
+      "deploy": "6acd56cc2d934db72608ceaa",
+      "commit": "1b4e819",
+      "remaining": [
+        "Dedicated selected-shot inspector",
+        "Reference asset shelf and moodboard",
+        "Grouped text-edit history and keyboard shortcuts"
+      ]
     },
     {
       "slug": "grade",
       "name": "Grade",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/grade.png",
-      "status": "pending source audit",
+      "status": "qualified first concept slice published",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "12 adjustment and color-transfer tests",
+        "TypeScript/tools build",
+        "Five draft browser configurations incl forced CPU fallback",
+        "Settings save/reopen and export pixel checks",
+        "3675 retained files; 26 exact assets; 9 routes"
+      ],
+      "implemented": [
+        "Three-column reference/preview/grade workspace",
+        "Real exposure, contrast, saturation in LUT and preview",
+        "Undo/redo and validated portable settings",
+        "Target-only preview and correct CPU PNG export"
+      ],
+      "deploy": "6acd593d4a4537915d9287e5",
+      "commit": "b06e201",
+      "remaining": [
+        "Curves and per-channel controls",
+        "Saved reference/look gallery",
+        "Portable full-media project",
+        "Broader video/failure-recovery regression"
+      ]
     },
     {
       "slug": "reframe",
