@@ -174,10 +174,47 @@
       "slug": "cast",
       "name": "Cast",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/cast.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "first model-review concept slice published; review persistence and advanced concept functions remain",
+      "existing_features": [
+        "Ring sizing",
+        "Sampled wall thickness",
+        "Mesh health and reversible repairs",
+        "Material weight estimates",
+        "Print orientation and STL export"
+      ],
+      "proposed_features": [
+        "Sprue authoring",
+        "Interactive selected-wall measurement",
+        "Cross-section view",
+        "Design review report and checklist",
+        "Persisted Cast review session"
+      ],
+      "verified": [
+        "23 analytical geometry tests",
+        "TypeScript and production build",
+        "Browser view controls, repair/undo, thickness analysis, STL export and reopen at 1440/1024/390/320 pixels",
+        "Desktop and phone screenshots inspected",
+        "Sites version 51 published, storage bindings preserved"
+      ],
+      "source": "/Users/lillypad/Projects/form-sites-integration-20261010",
+      "source_commit": "d3ca0762ab478048b719b0c9378958023c6b325a",
+      "implemented_this_pass": [
+        "Warm material-review palette",
+        "Wider central viewport",
+        "Phone model-first layout",
+        "Solid, X-ray and wireframe display",
+        "Perspective, top and side camera views"
+      ],
+      "remaining": [
+        "Sprue authoring",
+        "Interactive selected-wall measurement",
+        "Cross-section view",
+        "Design review report and checklist",
+        "Persisted Cast review session"
+      ],
+      "version": 51,
+      "deploy": "appgdep_6acc47a97cf88191a7cb38fd10c50cb8",
+      "url": "https://form-3d-studio.armonon.chatgpt.site"
     },
     {
       "slug": "mockup",
