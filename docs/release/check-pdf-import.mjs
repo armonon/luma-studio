@@ -8,7 +8,7 @@ const base=process.env.LUMA_RELEASE_URL??'http://localhost:4212';
 const browser=await chromium.launch({channel:'chrome'});const results=[];
 try {for(const [route,width] of [['/studio',1440],['/iphone',390]]){
  const ctx=await browser.newContext({viewport:{width,height:900},acceptDownloads:true});await ctx.addInitScript(()=>localStorage.setItem('luma.scripting','on'));const p=await ctx.newPage();p.setDefaultTimeout(60000);const errors=[];p.on('pageerror',e=>errors.push(String(e)));
- await p.goto(base+route);await p.waitForFunction(()=>Boolean(window.luma?.studio));
+ const response=await p.goto(base+route);assert.equal(response.status(),200,`${route} must load successfully`);await p.waitForFunction(()=>Boolean(window.luma?.studio));
  await p.locator('input[type=file][accept*=".pdf"]').setInputFiles({name:'pdf-check.pdf',mimeType:'application/pdf',buffer:bytes});
  await p.getByRole('dialog').waitFor();assert.equal(await p.getByLabel('Import as').inputValue(),'raster');await p.getByRole('button',{name:'Import page',exact:true}).click();
  await p.waitForFunction(()=>window.luma.studio.activeDocumentState().name.includes('pdf-check'));
