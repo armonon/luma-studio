@@ -39,7 +39,10 @@
         "6 Cutout mask/project/MODNet tests passed",
         "Draft Cutout mask editing/undo/save/reopen/transparent PNG passed at 1440 and 390 pixels",
         "Home and Learn static content matches previous production digests",
-        "Guarded publication preserved latest Cutout route and fixes"
+        "Guarded publication preserved latest Cutout route and fixes",
+        "Layered text/raster/shape composition inspected at 1920, 1440 and 1280 pixels with no viewport overflow",
+        "B/V shortcuts agree with toolbar controls",
+        "Layers float/resize/reload persistence/redock passed on live build"
       ],
       "source": "/Users/lillypad/Projects/luma-integration-20261009",
       "implemented_this_pass": [
@@ -53,8 +56,8 @@
         "Align webpack optional browser aliases"
       ],
       "remaining": [
-        "Qualify richer image/text/mask compositions and workspace persistence against concept",
-        "Complete broader desktop/tablet keyboard and docking validation"
+        "Qualify richer mask compositions and tablet workflow",
+        "Complete dirty-document and workspace reset checks"
       ],
       "deploy": "6acbba29559b54491aacdb84",
       "url": "https://luma.thecreatingco.com/studio"
@@ -63,7 +66,7 @@
       "slug": "form",
       "name": "Form",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/form.png",
-      "status": "latest Sites source opened; working CAD baseline visually audited; implementation pending",
+      "status": "first concept navigation slice published; architectural layout refinements remain",
       "existing_features": [
         "Exact CAD model/sketch/document workspaces",
         "Shared project save session with Fabric and Animation",
@@ -76,51 +79,181 @@
         "Concept apartment object hierarchy needs mapping to real CAD/BIM objects",
         "Glazing and architectural fields need capability verification before UI exposure"
       ],
-      "verified": [],
+      "verified": [
+        "TypeScript check passed",
+        "33 project, appearance, save-session and selection tests passed",
+        "Vinext production build passed",
+        "Browser search, selection, width editing, undo/redo, save/reopen passed at 1440, 1280 and 390 pixels",
+        "STEP independently parsed: one closed solid, 8 faces, finite coordinates and edited 90x50x24 mm bounds",
+        "Sites version 50 published successfully"
+      ],
       "source": "/Users/lillypad/Projects/form-sites-integration-20261010",
-      "source_commit": "20271980e3fb832bfe3671eab73ce7e0e14cca0a",
+      "source_commit": "8752f2225ebd98a3a68ea7f4e0046873f611dad8",
       "next_slice": [
         "Separate project navigation from contextual properties on desktop",
         "Reduce viewport overlays while preserving command discoverability",
         "Use actual selection and feature commands for object navigation",
         "Keep phone controls and document operations accessible"
+      ],
+      "deploy": "appgdep_6acbc108a4d0819191c26b0f9e487755",
+      "version": 50,
+      "url": "https://form-3d-studio.armonon.chatgpt.site",
+      "implemented_this_pass": [
+        "Searchable project browser grouped by actual profiles, imported exact solids and meshes",
+        "Selection reuses workspace selection and clears stale mesh/topology targets",
+        "Desktop project navigation separate from contextual Properties",
+        "Phone object drawer hands selection to Properties; Escape and close restore access"
+      ],
+      "remaining": [
+        "Complete architectural concept hierarchy and compact property layout",
+        "Validate imported-solid and mesh navigation with richer project fixtures",
+        "Persist object-browser preference with workspace settings"
       ]
     },
     {
       "slug": "stemdeck",
       "name": "StemDeck",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/stemdeck.png",
-      "status": "pending source audit",
+      "status": "first four-deck performance slice published; full concept refinements remain",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "41 focused integration/component tests",
+        "TypeScript and production build",
+        "Desktop and phone 1440/1024/390/320 browser checks",
+        "16 prepared stem imports, playback and edit controls",
+        "Embedded project save/reopen preserves stem level and mute",
+        "18 audio/export/recovery checks including 60-second recording",
+        "Qualified production draft preserves 24 backend functions, schedules and edge code"
+      ],
+      "source": "/Users/lillypad/Projects/sattari-openclaw-integration-20261010",
+      "implemented_this_pass": [
+        "Four live decks and waveforms in one performance overview",
+        "Prepared stem import, faders, mute and solo",
+        "Detailed cue, loop, pitch and effects remain accessible",
+        "Responsive four/two/one column layouts"
+      ],
+      "remaining": [
+        "Simultaneous performance/timeline concept requires explicit audio-domain behavior",
+        "Mixer redesign and more complete keyboard navigation qualification"
+      ],
+      "deploy": "6acbc4fd07a5518f972306b8",
+      "url": "https://sattarimusic.com/studio",
+      "pull_request": "https://github.com/armonon/sattari-custom-site/pull/43"
     },
     {
       "slug": "scenepilot",
       "name": "ScenePilot",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/scenepilot.png",
-      "status": "pending source audit",
+      "status": "first concept editing slice published; timeline and Pro qualification remain",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "30 focused tests, TypeScript, production build",
+        "Browser import, precise editing, undo/redo, save/reopen and MP4 export",
+        "H264 export independently decoded at 1280x720, 30 seconds",
+        "1440/1024/390/320 responsive checks and mobile title undo",
+        "Production retained files, functions, edges and nine routes verified"
+      ],
+      "source": "/Users/lillypad/Projects/scenepilot-concept-20261011",
+      "source_commit": "c4254bd",
+      "deploy": "6acbf04d8f9adeceab483eca",
+      "url": "https://scenepilot.thecreatingco.com/app/",
+      "implemented_this_pass": [
+        "Large media preview cards and direct media filters",
+        "Precise bounded transform inputs using existing history",
+        "Asset-only mobile sequences expose editing and playback"
+      ],
+      "remaining": [
+        "Detailed timeline filmstrips",
+        "Unified transform/blend inspector",
+        "Desktop Pro composition qualification"
+      ]
     },
     {
       "slug": "cast",
       "name": "Cast",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/cast.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "first model-review concept slice published; review persistence and advanced concept functions remain",
+      "existing_features": [
+        "Ring sizing",
+        "Sampled wall thickness",
+        "Mesh health and reversible repairs",
+        "Material weight estimates",
+        "Print orientation and STL export"
+      ],
+      "proposed_features": [
+        "Sprue authoring",
+        "Interactive selected-wall measurement",
+        "Cross-section view",
+        "Design review report and checklist",
+        "Persisted Cast review session"
+      ],
+      "verified": [
+        "23 analytical geometry tests",
+        "TypeScript and production build",
+        "Browser view controls, repair/undo, thickness analysis, STL export and reopen at 1440/1024/390/320 pixels",
+        "Desktop and phone screenshots inspected",
+        "Sites version 51 published, storage bindings preserved"
+      ],
+      "source": "/Users/lillypad/Projects/form-sites-integration-20261010",
+      "source_commit": "d3ca0762ab478048b719b0c9378958023c6b325a",
+      "implemented_this_pass": [
+        "Warm material-review palette",
+        "Wider central viewport",
+        "Phone model-first layout",
+        "Solid, X-ray and wireframe display",
+        "Perspective, top and side camera views"
+      ],
+      "remaining": [
+        "Sprue authoring",
+        "Interactive selected-wall measurement",
+        "Cross-section view",
+        "Design review report and checklist",
+        "Persisted Cast review session"
+      ],
+      "version": 51,
+      "deploy": "appgdep_6acc47a97cf88191a7cb38fd10c50cb8",
+      "url": "https://form-3d-studio.armonon.chatgpt.site"
     },
     {
       "slug": "mockup",
       "name": "Mockups",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/mockup.png",
-      "status": "pending source audit",
-      "existing_features": [],
+      "status": "working concept workspace with history and project roundtrip published; photographic templates and layer controls remain",
+      "existing_features": [
+        "Six procedural scenes",
+        "Fabric displacement/shading",
+        "Placement transform and ink density",
+        "PNG/JPEG and all-scene ZIP export"
+      ],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "18 unit tests",
+        "Production and Netlify packaged builds",
+        "1440/390/320 browser history, save/reopen and 1200 PNG export",
+        "Exported pixels independently checked for original artwork colors",
+        "Qualified Netlify preview passed 1440/390/320 browser checks",
+        "Live release preserved 1666 files; studio, phone, tablet, Cutout and Learn routes verified"
+      ],
+      "source": "/Users/lillypad/Projects/luma-integration-20261009",
+      "source_commit": "86629a7",
+      "implemented_this_pass": [
+        "Warm studio shell with product gallery, central preview and placement inspector",
+        "Responsive model-first phone layout",
+        "Bounded undo/redo for placement and product settings",
+        "Portable .mockups project with embedded PNG and six scene configurations",
+        "Export-time control locks and dialog keyboard focus containment",
+        "Correct JPEG extension when opening rendered output as document"
+      ],
+      "remaining": [
+        "Photographic template import and editing",
+        "Artwork library and editable text layer workflow",
+        "Front/back garment views",
+        "Explicit blend mode controls mapped to renderer"
+      ],
+      "deploy": "6acd2c67136e02c1e31defec",
+      "url": "https://luma.thecreatingco.com/studio"
     },
     {
       "slug": "glyph-studio",
