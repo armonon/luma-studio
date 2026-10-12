@@ -1,5 +1,5 @@
 {
-  "updated": "2026-10-11",
+  "updated": "2026-10-12",
   "purpose": "Implement approved UI concepts as working applications. Concept controls are not evidence of implemented capabilities.",
   "release_gates": [
     "Audit current source and map concept controls to real commands",
@@ -259,10 +259,31 @@
       "slug": "glyph-studio",
       "name": "Glyph Studio",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/glyph-studio.png",
-      "status": "pending source audit",
+      "status": "first concept editing slice published and verified; full Bezier workflow remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "46 engine tests",
+        "Build/typecheck",
+        "Parsed OTF and TTF contain edited point at all four viewport widths",
+        "Point edit/undo/save/reopen/autosave",
+        "Storage failure/recovery and offline export",
+        "16 exact assets, nine retained files and six live routes"
+      ],
+      "source": "/Users/lillypad/Projects/glyph-concept-20261012",
+      "deployment": "6acd4156bf9d699b64ec7697",
+      "pull_request": "https://github.com/armonon/glyph-studio/pull/4",
+      "evidence": "qa/concept-20261012",
+      "implemented_this_pass": [
+        "Responsive paper workspace",
+        "Actual point selection and drag with gesture undo",
+        "Exact point coordinates, stroke width and shape smoothing"
+      ],
+      "remaining_concept_work": [
+        "Explicit Bezier handle authoring",
+        "Expanded glyph overview and dedicated side-bearing controls",
+        "Font-family projects and broader character coverage"
+      ]
     },
     {
       "slug": "ghost",
@@ -277,10 +298,32 @@
       "slug": "autocut",
       "name": "AutoCut",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/autocut.png",
-      "status": "pending source audit",
+      "status": "visual shot review and shot-history slice published and verified; full concept remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "51 AutoCut engine/session/export tests",
+        "Production tools build and TypeScript",
+        "1440/1024/390/320 real-media browser flows",
+        "Exact exported cut restoration after swap/slip undo",
+        "Full-byte verified session relink",
+        "15-second H264/AAC 960x540 export",
+        "23 exact assets and 3667 retained files; nine live routes"
+      ],
+      "source": "/Users/lillypad/Projects/scenepilot-concept-20261011",
+      "deployment": "6acd4602ff4eb6faa886f9ba",
+      "pull_request": "https://github.com/armonon/scenepilot-studio-badass/pull/102",
+      "evidence": "qa/autocut-concept-20261012",
+      "implemented_this_pass": [
+        "Proposed shot list beside preview",
+        "Keep/Unlock controls and exact shot history",
+        "Responsive preview-first mobile workspace"
+      ],
+      "remaining_concept_work": [
+        "Per-shot source-frame thumbnails",
+        "Split/extend authoring and similarity search",
+        "History for other project controls"
+      ]
     },
     {
       "slug": "captions",
