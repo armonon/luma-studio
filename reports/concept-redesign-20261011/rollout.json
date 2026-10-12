@@ -451,19 +451,55 @@
       "slug": "split",
       "name": "Split",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/split.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "Build and TypeScript pass",
+        "51 focused Split and Key & BPM tests pass",
+        "Hosted browser workflow passed at 1440, 1024, 390 and 320 pixels",
+        "Actual audio processing/playback and file exports; report or separation recovery",
+        "24 backend functions, schedules and edge configuration preserved"
+      ],
+      "implemented": [
+        "Light waveform workspace with responsive lanes",
+        "Undo/redo/reset for stem mute, solo and gain",
+        "Collapsible source picker; original inference and audio engine preserved"
+      ],
+      "remaining": [
+        "Persist mix controls alongside recovered separation",
+        "Source library and artwork metadata",
+        "Grouped gain gestures"
+      ],
+      "commit": "91b61c3",
+      "deploy": "6acd638608d651ec683de84c"
     },
     {
       "slug": "key-bpm",
       "name": "Key & BPM",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/key-bpm.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "Build and TypeScript pass",
+        "51 focused Split and Key & BPM tests pass",
+        "Hosted browser workflow passed at 1440, 1024, 390 and 320 pixels",
+        "Actual audio processing/playback and file exports; report or separation recovery",
+        "24 backend functions, schedules and edge configuration preserved"
+      ],
+      "implemented": [
+        "Searchable track cards and expanded analysis",
+        "Playback of source audio with object URL cleanup",
+        "Measurements-only report and CSV export preserved"
+      ],
+      "remaining": [
+        "Waveform visualization and harmonic wheel",
+        "Manual tempo overrides with history",
+        "Persistent library and playlists"
+      ],
+      "commit": "91b61c3",
+      "deploy": "6acd638608d651ec683de84c"
     },
     {
       "slug": "vox",
