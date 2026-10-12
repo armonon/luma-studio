@@ -421,10 +421,31 @@
       "slug": "reframe",
       "name": "Reframe",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/reframe.png",
-      "status": "pending source audit",
+      "status": "qualified first concept slice published",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "38 tests",
+        "TypeScript and tools build",
+        "Four-width browser workflows using real user footage",
+        "SHA256 session relink and H264 export",
+        "3682 retained files; 26 exact assets; 9 routes"
+      ],
+      "implemented": [
+        "Source/output responsive workspace",
+        "Correct aspect-dependent preview canvas",
+        "Composition guides excluded from export",
+        "Numeric crop pins",
+        "Undo/redo manual crop and letterbox edits"
+      ],
+      "deploy": "6acd5c91e9274c3af0212e0d",
+      "commit": "f513ed0",
+      "remaining": [
+        "Source media library",
+        "Filmstrip timeline",
+        "Full settings history and grouped gestures",
+        "Advanced easing and zoom"
+      ]
     },
     {
       "slug": "split",
