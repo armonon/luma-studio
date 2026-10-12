@@ -1,0 +1,29 @@
+[
+  {
+    "width": 1440,
+    "image": [
+      1200,
+      1200
+    ],
+    "red_pixels": 34371,
+    "blue_pixels": 22519
+  },
+  {
+    "width": 390,
+    "image": [
+      1200,
+      1200
+    ],
+    "red_pixels": 34371,
+    "blue_pixels": 22519
+  },
+  {
+    "width": 320,
+    "image": [
+      1200,
+      1200
+    ],
+    "red_pixels": 34371,
+    "blue_pixels": 22519
+  }
+]

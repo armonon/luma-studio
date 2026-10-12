@@ -1,0 +1,29 @@
+{
+  "reference": "company-launch/output/ui-concepts-v2/mockup.png",
+  "implemented": [
+    "Warm studio shell with product gallery, central preview and placement inspector",
+    "Responsive model-first phone layout",
+    "Bounded undo/redo for placement and product settings",
+    "Portable .mockups project with embedded PNG and six scene configurations",
+    "Export-time control locks and dialog keyboard focus containment",
+    "Correct JPEG extension when opening rendered output as document"
+  ],
+  "existing": [
+    "Six procedural scenes",
+    "Fabric displacement/shading",
+    "Placement transform and ink density",
+    "PNG/JPEG and all-scene ZIP export"
+  ],
+  "remaining": [
+    "Photographic template import and editing",
+    "Artwork library and editable text layer workflow",
+    "Front/back garment views",
+    "Explicit blend mode controls mapped to renderer"
+  ],
+  "qualification": [
+    "18 unit tests",
+    "Production and Netlify packaged builds",
+    "1440/390/320 browser history, save/reopen and 1200 PNG export",
+    "Exported pixels independently checked for original artwork colors"
+  ]
+}
