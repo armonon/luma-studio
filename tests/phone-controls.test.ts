@@ -11,7 +11,7 @@ import DownloadConfirmation from "../app/studio/download-confirmation";
 const props = {
   desktop: false, phone: true, projectName: "Poster", saveState: "unsaved" as const,
   dirty: true, projectSaving: false, zoom: 100, canUndo: true, canRedo: false,
-  exportOpen: false, filtersOpen: false, onBack() {}, onCommand() {},
+  exportOpen: false, filtersOpen: false, onBack() {}, onCommand() {}, onImport() {},
   commandEnabled: () => true, onReview() {},
 };
 const render = (overrides: Partial<Parameters<typeof StudioTitlebar>[0]> = {}) =>
