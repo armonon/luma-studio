@@ -621,10 +621,27 @@
       "slug": "librarian",
       "name": "Librarian",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/librarian.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "58 unit tests and 9 browser reading regressions passed",
+        "Hosted PDF import, cover rendering, bookmark/resume, exact original download passed",
+        "1440/1024/390/320 layouts without overflow or page errors",
+        "Hosted collection draft import/read/reload and sign-in gate passed at 1440/390/320",
+        "Production verified; four backend functions and current metadata retained"
+      ],
+      "commit": "cbe7d8d",
+      "deploy": "6acd70d17a2257b5a16c5638",
+      "implemented": [
+        "Warm responsive bookshelf and persistent list view",
+        "Real PDF first-page thumbnails loaded lazily",
+        "Reading-status counts and preserved reader/collection services"
+      ],
+      "remaining": [
+        "Richer document annotations and highlighting",
+        "Further concept reading-workspace functionality"
+      ]
     },
     {
       "slug": "reclaim",
