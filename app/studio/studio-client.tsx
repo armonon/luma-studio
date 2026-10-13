@@ -4544,6 +4544,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             exportOpen={showExportMenu}
             filtersOpen={showFilters}
             onBack={() => history.back()}
+            onImport={() => focusImportInput.current?.click()}
             onCommand={executeStudioCommand}
             commandEnabled={commandRegistry.enabled}
             onInstall={!desktop && installPrompt.canInstall ? () => { void installPrompt.install(); } : undefined}

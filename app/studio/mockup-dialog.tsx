@@ -1,21 +1,18 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, FileImage, ImagePlus, Package, RotateCcw, Upload, X } from "lucide-react";
+import { Download, FileImage, ImagePlus, Package, RotateCcw, Undo2, Redo2, Save, FolderOpen, Upload, X } from "lucide-react";
 import JSZip from "jszip";
 import { mockupFileName, normalizePlacement, sceneDeltaToOffset, type MockupPlacement, type MockupSceneId, type Quad, type RasterImage } from "../engine/mockup";
 import { MOCKUP_SCENES, sceneInfo } from "../engine/mockup-scenes";
 import { MockupClient } from "./mockup-client";
 import type { MockupRenderResult } from "./mockup-renderer";
+import { initialMockupStates, readMockupProject, type MockupStates } from "../engine/mockup-project";
 import "./creative-tools.css";
 
 const PREVIEW_SIZE = 760, THUMB_SIZE = 200, MAX_ART = 2048;
 const EXPORT_SIZES = [1200, 1600, 2000] as const;
 type ExportType = "image/png" | "image/jpeg";
 type SceneState = { placement: MockupPlacement; color: string; ink: number };
-
-function initialStates(): Record<MockupSceneId, SceneState> {
-  return Object.fromEntries(MOCKUP_SCENES.map(info => [info.id, { placement: { ...info.defaultPlacement }, color: info.defaultColor, ink: 0.94 }])) as Record<MockupSceneId, SceneState>;
-}
 
 /** Decode to RGBA, bounded: the print area never needs more than ~2k pixels of artwork. */
 async function decodeArt(blob: Blob): Promise<RasterImage> {
@@ -66,7 +63,27 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
   const getArtRef = useRef(getDocumentArt);
   const [art, setArt] = useState<RasterImage | null>(null);
   const [sceneId, setSceneId] = useState<MockupSceneId>("tshirt");
-  const [states, setStates] = useState(initialStates);
+  const [states, updateStates] = useState(initialMockupStates);
+  const history = useRef<{past: MockupStates[]; future: MockupStates[]}>({past:[],future:[]});
+  const [historyRevision, setHistoryRevision] = useState(0);
+  const gesture = useRef(false), recordedGesture = useRef(false);
+  const stateNow = useRef(states); stateNow.current = states;
+  const setStates = (change: (current: MockupStates) => MockupStates) => {
+    const current = stateNow.current, next = change(current);
+    if (JSON.stringify(current) === JSON.stringify(next)) return;
+    if (!gesture.current || !recordedGesture.current) { history.current.past.push(current); if (history.current.past.length > 80) history.current.past.shift(); }
+    recordedGesture.current = gesture.current;
+    history.current.future = []; stateNow.current = next; updateStates(next); setHistoryRevision(r=>r+1);
+  };
+  const travel = (redo: boolean) => {
+    const from = redo ? history.current.future : history.current.past;
+    const next = from.pop(); if (!next) return;
+    (redo ? history.current.past : history.current.future).push(stateNow.current);
+    stateNow.current = next; updateStates(next); setHistoryRevision(r=>r+1);
+  };
+  const beginGesture = () => { gesture.current = true; recordedGesture.current = false; };
+  const endGesture = () => { gesture.current = false; recordedGesture.current = false; };
+  const projectInput = useRef<HTMLInputElement>(null);
   const [artLabel, setArtLabel] = useState("Loading the current document…");
   const [artRevision, setArtRevision] = useState(0);
   const [hasArt, setHasArt] = useState(false);
@@ -206,52 +223,79 @@ export default function MockupDialog({ projectName, getDocumentArt, onOpenAsDocu
 
   const openAsDocument = () => run("Rendering…", async () => {
     const blob = await exportOne(sceneId, state);
-    const name = mockupFileName(projectName, sceneId, "image/png");
+    const name = mockupFileName(projectName, sceneId, exportType);
     await onOpenAsDocument(new File([blob], name, { type: exportType }));
     onClose();
   });
 
+  const saveProject = () => run("Saving project…", async () => {
+    if (!art) return;
+    const canvas = document.createElement("canvas"); canvas.width=art.width; canvas.height=art.height;
+    canvas.getContext("2d")!.putImageData(new ImageData(new Uint8ClampedArray(art.data), art.width, art.height),0,0);
+    await onSave(new Blob([JSON.stringify({format:"luma-mockups",version:1,scene:sceneId,states:stateNow.current,artwork:canvas.toDataURL("image/png")})],{type:"application/json"}), `${projectName.replace(/[^a-z0-9_-]/gi,"-")}.mockups`);
+  });
+  const openProject = (file: File) => run("Opening project…", async () => {
+    if(file.size > 34_000_000) throw new Error("This project exceeds the 34 MB limit.");
+    const project = readMockupProject(JSON.parse(await file.text()));
+    const decoded = await decodeArt(await (await fetch(project.artwork)).blob());
+    artLoad.current++; setArt(decoded); setArtLabel(file.name); setHasArt(false); setPreviewPending(true); setArtRevision(0);
+    history.current={past:[],future:[]}; stateNow.current=project.states; updateStates(project.states); setHistoryRevision(r=>r+1); setSceneId(project.scene);
+  });
   const pct = (v: number) => `${Math.round(v * 100)}%`;
   return <div className="ct-backdrop" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onClose(); }}>
-    <section ref={root} tabIndex={-1} className="ct-dialog mk-dialog" role="dialog" aria-modal="true" aria-labelledby="mockup-title" onKeyDown={event => {
+    <section ref={root} tabIndex={-1} data-history-revision={historyRevision} className="ct-dialog mk-dialog" role="dialog" aria-modal="true" aria-labelledby="mockup-title" onKeyDown={event => {
       event.stopPropagation();
+      if (event.key === "Tab") {
+        const controls = [...(root.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not([hidden]):not(:disabled),select:not(:disabled),[tabindex="0"]') ?? [])].filter(el=>el.getClientRects().length);
+        const first=controls[0], last=controls.at(-1);
+        if(event.shiftKey && (document.activeElement===first || document.activeElement===root.current)){event.preventDefault();last?.focus();}
+        else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first?.focus();}
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z" && !(event.target instanceof HTMLInputElement) && !busy) { event.preventDefault(); travel(event.shiftKey); }
       if (event.key === "Escape" && !busy) { event.preventDefault(); onClose(); }
     }}>
       <header>
         <div><span className="ct-eyebrow">MOCKUP · ALPHA</span><h2 id="mockup-title">Mockups</h2><p>{artLabel}</p></div>
-        <div className="ct-header-actions"><button disabled={!!busy} onClick={onClose} aria-label="Close Mockups"><X size={18} /></button></div>
+        <div className="ct-header-actions">
+          <button disabled={!!busy || !history.current.past.length} aria-label="Undo mockup change" onClick={()=>travel(false)}><Undo2 size={16}/></button>
+          <button disabled={!!busy || !history.current.future.length} aria-label="Redo mockup change" onClick={()=>travel(true)}><Redo2 size={16}/></button>
+          <button disabled={!!busy} aria-label="Open Mockups project" onClick={()=>projectInput.current?.click()}><FolderOpen size={16}/></button>
+          <button disabled={!!busy || !hasArt} aria-label="Save Mockups project" onClick={()=>void saveProject()}><Save size={16}/></button>
+          <input ref={projectInput} hidden type="file" accept=".mockups,application/json" onChange={e=>{const f=e.target.files?.[0];e.target.value="";if(f)void openProject(f);}}/>
+          <button disabled={!!busy} onClick={onClose} aria-label="Close Mockups"><X size={18} /></button></div>
       </header>
       <div className="mk-body">
-        <nav className="mk-scenes" aria-label="Mockup scenes">
-          {MOCKUP_SCENES.map(scene => <button key={scene.id} aria-pressed={scene.id === sceneId} onClick={() => setSceneId(scene.id)} title={scene.description}>
-            <canvas ref={node => { if (node) thumbs.current.set(scene.id, node); else thumbs.current.delete(scene.id); }} width={THUMB_SIZE} height={THUMB_SIZE} aria-hidden="true" />
-            <span>{scene.name}</span>
-          </button>)}
-        </nav>
-        <div className="mk-stage">
-          <canvas ref={preview} width={PREVIEW_SIZE} height={PREVIEW_SIZE} aria-label={`${info.name} mockup preview. Drag to move the artwork, scroll to scale.`}
-            onPointerDown={event => { if (!quad) return; event.currentTarget.setPointerCapture(event.pointerId); const [x, y] = scenePoint(event); drag.current = { x, y, start: state.placement }; }}
-            onPointerMove={event => {
-              if (!drag.current || !quad) return;
-              const [x, y] = scenePoint(event), [du, dv] = sceneDeltaToOffset({ quad }, [drag.current.x, drag.current.y], [x, y]);
-              place({ offsetX: drag.current.start.offsetX + du, offsetY: drag.current.start.offsetY + dv });
-            }}
-            onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
-            onWheel={event => { if (!hasArt) return; place({ scale: state.placement.scale * (event.deltaY < 0 ? 1.05 : 1 / 1.05) }); }} />
-          {previewPending && !error && <p className="mk-stage-note" role="status">{hasArt ? "Rendering preview…" : "Preparing artwork…"}</p>}
-        </div>
-        <fieldset className="ct-controls" disabled={!!busy}>
-          <div className="ct-section">
+        <aside className="mk-library">          <div className="ct-section">
             <h3>Artwork</h3>
             <div className="ct-row-buttons">
-              <button onClick={() => void loadArt(getDocumentArt, "Current document")}><FileImage size={14} /> Current document</button>
-              <button onClick={() => fileInput.current?.click()}><Upload size={14} /> Upload image…</button>
+              <button disabled={!!busy} onClick={() => void loadArt(getDocumentArt, "Current document")}><FileImage size={14} /> Current document</button>
+              <button disabled={!!busy} onClick={() => fileInput.current?.click()}><Upload size={14} /> Upload image…</button>
             </div>
             <input ref={fileInput} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => {
               const file = event.target.files?.[0]; event.target.value = "";
               if (file) void loadArt(() => Promise.resolve(file), file.name.slice(0, 60));
             }} />
           </div>
+<h3 className="mk-library-title">Products</h3>
+        <nav className="mk-scenes" aria-label="Mockup scenes">
+          {MOCKUP_SCENES.map(scene => <button key={scene.id} disabled={!!busy} aria-pressed={scene.id === sceneId} onClick={() => setSceneId(scene.id)} title={scene.description}>
+            <canvas ref={node => { if (node) thumbs.current.set(scene.id, node); else thumbs.current.delete(scene.id); }} width={THUMB_SIZE} height={THUMB_SIZE} aria-hidden="true" />
+            <span>{scene.name}</span>
+          </button>)}
+        </nav></aside>
+        <div className="mk-stage">
+          <canvas ref={preview} width={PREVIEW_SIZE} height={PREVIEW_SIZE} aria-label={`${info.name} mockup preview. Drag to move the artwork, scroll to scale.`}
+            onPointerDown={event => { if (!quad || busy) return; beginGesture(); event.currentTarget.setPointerCapture(event.pointerId); const [x, y] = scenePoint(event); drag.current = { x, y, start: state.placement }; }}
+            onPointerMove={event => {
+              if (!drag.current || !quad) return;
+              const [x, y] = scenePoint(event), [du, dv] = sceneDeltaToOffset({ quad }, [drag.current.x, drag.current.y], [x, y]);
+              place({ offsetX: drag.current.start.offsetX + du, offsetY: drag.current.start.offsetY + dv });
+            }}
+            onPointerUp={() => { drag.current = null; endGesture(); }} onPointerCancel={() => { drag.current = null; endGesture(); }}
+            onWheel={event => { if (!hasArt || busy) return; place({ scale: state.placement.scale * (event.deltaY < 0 ? 1.05 : 1 / 1.05) }); }} />
+          {previewPending && !error && <p className="mk-stage-note" role="status">{hasArt ? "Rendering preview…" : "Preparing artwork…"}</p>}
+        </div>
+        <fieldset className="ct-controls" disabled={!!busy} onPointerDownCapture={beginGesture} onPointerUpCapture={endGesture} onPointerCancelCapture={endGesture}>
           <div className="ct-section">
             <h3>Placement · {info.name}</h3>
             <div className="ct-segmented" role="group" aria-label="Fit">

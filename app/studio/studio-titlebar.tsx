@@ -1,4 +1,5 @@
 "use client";
+import ApplicationMenu from "./application-menu";
 import { saveStatusLabel } from "./save-status";
 
 import { useEffect, useRef, type ReactNode } from "react";
@@ -19,6 +20,7 @@ export default function StudioTitlebar({
   exportOpen,
   filtersOpen,
   onBack,
+  onImport,
   onCommand,
   commandEnabled,
   onReview,
@@ -40,6 +42,7 @@ export default function StudioTitlebar({
   exportOpen: boolean;
   filtersOpen: boolean;
   onBack: () => void;
+  onImport: () => void;
   onCommand: (command: StudioCommand) => void;
   commandEnabled: (command: StudioCommand) => boolean;
   onReview?: () => void;
@@ -65,7 +68,7 @@ export default function StudioTitlebar({
   };
 
   return (
-    <header className="spatial-topbar studio-titlebar">
+    <header className={`spatial-topbar studio-titlebar ${!phone ? "studio-titlebar-with-menus" : ""}`}>
       {desktop && <div className="desktop-titlebar-drag" data-tauri-drag-region="true" aria-hidden="true" />}
       <div className="studio-brand-area">
         {suiteMenu && !suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
@@ -106,6 +109,7 @@ export default function StudioTitlebar({
           <summary aria-label="More application actions"><Ellipsis /></summary>
           <div>
             {phone && <p className="phone-save-status" role="status">{saveStatusLabel(saveState, dirty, projectSaving)}</p>}
+            <button onClick={() => run(onImport)} disabled={!commandEnabled("open")}><FolderOpen /><span>Import images…</span></button>
             <button onClick={() => run(() => onCommand("new-document"))} disabled={!commandEnabled("new-document")}><span>New document…</span><kbd>⌘N</kbd></button>
             <button onClick={() => run(() => onCommand("open"))} disabled={!commandEnabled("open")}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
             <button onClick={() => run(() => onCommand("save"))} disabled={!commandEnabled("save")}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
@@ -130,6 +134,7 @@ export default function StudioTitlebar({
           Export <ChevronDown />
         </button>
       </div>
+      {!phone && <ApplicationMenu onCommand={onCommand} commandEnabled={commandEnabled} onImport={onImport} />}
       {phone && <div className="phone-document-status"><strong>{projectName}</strong><span id="phone-save-status" role="status" data-error={saveState === "error" || recoveryUnavailable}>{recoveryUnavailable && !projectSaving ? "Recovery unavailable · Save a copy" : saveStatusLabel(saveState, dirty, projectSaving)}</span></div>}
     </header>
   );

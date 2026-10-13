@@ -94,3 +94,53 @@
   .gl-editor { width: min(560px, calc(100vw - 64px)) !important; height: auto !important; aspect-ratio: 1; }
   .ct-dialog > footer { flex-wrap: wrap; }
 }
+
+/* Mockups uses its own warm studio shell; Glyph keeps the existing editor theme. */
+.mk-dialog { width:min(1580px,100%); background:#faf9f6; color:#273c30; border-color:#d9ded7; font-size:13px; }
+.mk-dialog > header,.mk-dialog > footer { border-color:#e2e5df; }
+.mk-dialog h2 { font-family:Georgia,serif; font-size:27px; font-weight:500; }
+.mk-dialog .ct-eyebrow,.mk-dialog header p,.mk-dialog .ct-note,.mk-dialog .ct-footer-status { color:#68736a; }
+.mk-dialog button,.mk-dialog select,.mk-dialog input:not([type=range]):not([type=checkbox]):not([type=color]) { background:#fff; border-color:#d8ded6; color:#293d31; min-height:36px; }
+.mk-dialog button:hover:not(:disabled) { background:#edf2ec; border-color:#77917d; }
+.mk-dialog button[aria-pressed=true] { background:#e9efe8; border-color:#365641; color:#203a29; }
+.mk-dialog .ct-primary { background:#294735; border-color:#294735; color:#fff; }
+.mk-dialog .ct-primary:hover:not(:disabled) { background:#365b43; color:#fff; }
+.mk-dialog :is(button,input,select,canvas):focus-visible { outline-color:#437352; }
+.mk-dialog .ct-controls { border-color:#e2e5df; padding:8px 22px 20px; }
+.mk-dialog .ct-section { border-color:#e2e5df; gap:12px; padding:18px 0; }
+.mk-dialog .ct-section h3,.mk-dialog .ct-row,.mk-dialog .ct-slider,.mk-dialog .ct-slider output { color:#394d40; }
+.mk-dialog .ct-slider { min-height:40px; grid-template-columns:74px minmax(0,1fr) 42px; font-size:12px; }
+.mk-dialog .ct-slider input { accent-color:#365641; }
+.mk-dialog .ct-swatches button { width:32px; min-height:32px; }
+.mk-dialog .ct-swatches button[aria-pressed=true] { border-color:#294735; box-shadow:0 0 0 2px #fff inset; }
+.mk-dialog .ct-error { color:#7d251b; background:#fae9e5; }
+.mk-dialog .mk-stage { background:#e9e6df; }
+.mk-dialog .mk-stage canvas { box-shadow:0 12px 40px #26332624; border-radius:2px; max-width:calc(100% - 24px); max-height:calc(100% - 24px); }
+.mk-dialog .mk-stage-note { background:#faf9f6eb; color:#394d40; }
+.mk-body { grid-template-columns:230px minmax(0,1fr) 310px; }
+.mk-library { min-height:0; overflow:auto; padding:0 16px 16px; border-right:1px solid #e2e5df; }
+.mk-library-title { margin:18px 0 8px; font-size:13px; }
+.mk-dialog .mk-scenes { display:grid; grid-template-columns:1fr 1fr; overflow:visible; padding:0; border:0; align-content:start; }
+.mk-dialog .mk-scenes button { min-width:0; width:100%; padding:5px; }
+.mk-dialog .mk-scenes canvas { background:#ece9e2; }
+@media(max-width:1100px) {
+ .mk-library { flex:none; overflow:visible; border-right:0; padding:0 16px 12px; }
+ .mk-library .ct-section { padding:12px 0; }
+ .mk-dialog .mk-scenes { display:flex; overflow:auto; }
+ .mk-dialog .mk-scenes button { width:90px; }
+ .mk-dialog .mk-stage { order:-1; }
+}
+@media(max-width:600px) {
+ .ct-backdrop:has(.mk-dialog) { padding:0; }
+ .mk-dialog { height:100dvh; border-radius:0; border:0; }
+ .mk-dialog > header { align-items:flex-start; padding:12px; flex-wrap:wrap; }
+ .mk-dialog > header > div:first-child { flex:1; }
+ .mk-dialog header p { max-width:calc(100vw - 28px); }
+ .mk-dialog .ct-header-actions { gap:5px; }
+ .mk-dialog .ct-header-actions button { width:40px; min-height:40px; }
+ .mk-dialog button,.mk-dialog select { min-height:44px; }
+ .mk-dialog > footer { padding:8px 12px; gap:6px; }
+ .mk-dialog > footer button { flex:1; font-size:11px; }
+ .mk-dialog .ct-footer-status:empty { display:none; }
+ .mk-dialog .mk-stage { height:38vh; min-height:250px; }
+}
