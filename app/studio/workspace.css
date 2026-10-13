@@ -560,3 +560,9 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface
   & .studio-titlebar.spatial-topbar.studio-titlebar-with-menus { height: 104px; min-height: 104px; padding-bottom: 44px; }
   & .studio-menu-row { height: 44px; }
 }
+
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"] .studio-menu-row {
+  & [role="menu"][data-shortcut-menu="true"] { width: 320px; max-width: calc(100vw - 24px); }
+  & [role="menu"] button { align-items: center; gap: 16px; }
+  & [role="menu"] kbd { margin-left: auto; flex-shrink: 0; color: var(--ui-muted); font: 11px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+}
