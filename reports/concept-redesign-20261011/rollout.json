@@ -897,10 +897,28 @@
       "slug": "website-checkup",
       "name": "Website Checkup",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/website-checkup.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "focused concept report workspace published and verified",
+      "existing_features": [
+        "Actual public HTML/links audit",
+        "Original full JSON export",
+        "Search and priority filtering",
+        "Selected finding detail",
+        "Saved report import"
+      ],
+      "proposed_features": [
+        "Cross-scan comparison",
+        "Optional report library"
+      ],
+      "verified": [
+        "One actual example.com public scan",
+        "1440/1024/390/320: report import/export, filters, selection, invalid import, no overflow",
+        "Both backend functions and 2360 unrelated files unchanged"
+      ],
+      "deployment": {
+        "id": "6acd9ab0afb76477fd95ebdc",
+        "url": "https://thecreatingco.com/checkup/"
+      },
+      "source_handoff": "/Users/lillypad/Projects/checkup-concept-20261012/source-handoff.patch"
     },
     {
       "slug": "hole",
