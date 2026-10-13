@@ -812,10 +812,27 @@
       "slug": "circle",
       "name": "The Circle",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/circle.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "concept feed and personal-space refinement published; authenticated media qualification remains",
+      "existing_features": [
+        "Actual profiles and guest participation",
+        "Music and saved posts",
+        "Shared Circle/NOW navigation",
+        "Responsive lavender feed",
+        "Real profile sidebar"
+      ],
+      "proposed_features": [
+        "Further authenticated email/media regression qualification"
+      ],
+      "verified": [
+        "5 guest/API/profile tests",
+        "Local real D1 guest profile/edit/save/reload and navigation at 1440/1024/390/320",
+        "Live read-only feed/music navigation and overflow checks at 1440/390/320"
+      ],
+      "deployment": {
+        "version": 116,
+        "url": "https://thecreatingco.com/community/network?view=Home",
+        "commit": "eae1b4618ba6291f3f9e06d321b7412e183eb57c"
+      }
     },
     {
       "slug": "animate",
@@ -924,10 +941,31 @@
       "slug": "hole",
       "name": "HOLE",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/hole.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "Studio discovery layout and portable Trails published and verified",
+      "existing_features": [
+        "Real multi-source search and collection",
+        "Homepage screenshot previews",
+        "Visual result grid",
+        "Trail sidebar and notes",
+        "Validated import/export",
+        "Saved Trail undo/redo"
+      ],
+      "proposed_features": [
+        "Per-result annotation",
+        "Folders",
+        "Dedicated media index"
+      ],
+      "verified": [
+        "14 unit tests",
+        "TypeScript and Sites production build",
+        "Hosted 1440/1024/390/320: collection results, notes, save/reopen, undo/redo, JSON export/import, invalid input",
+        "Storage failure retains exportable draft"
+      ],
+      "deployment": {
+        "version": 115,
+        "url": "https://thecreatingco.com/community/hole",
+        "commit": "e7a05f91dcc7882f8638ffb51d6cb4433f3de252"
+      }
     },
     {
       "slug": "now-messenger",
