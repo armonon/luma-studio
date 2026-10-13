@@ -647,28 +647,73 @@
       "slug": "reclaim",
       "name": "Reclaim",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/reclaim.png",
-      "status": "pending source audit",
-      "existing_features": [],
+      "status": "native app audit in progress; retired browser hosting must remain removed",
+      "existing_features": [
+        "Native Mac duplicate scanner with metadata preservation",
+        "Quarantine and restore with original-copy protection",
+        "Disk usage, cleanup categories and local settings"
+      ],
       "proposed_features": [],
-      "verified": []
+      "verified": [],
+      "source": "/Users/lillypad/Projects/reclaim-concept-20261012",
+      "remaining": [
+        "Native duplicate-browser concept layout and file inspector",
+        "Real local image preview through scoped native API",
+        "Desktop build and fixture-only quarantine/restore qualification"
+      ],
+      "hosting_note": "Browser deployment intentionally deleted; current product offers Mac 0.1.1 download. Do not republish retired browser companion."
     },
     {
       "slug": "bounce",
       "name": "Bounce",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/bounce.png",
-      "status": "pending source audit",
+      "status": "first concept slice published and verified; remaining concept workflows tracked",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "EQ history tests passed",
+        "Hosted playback, save/reload, portable audio library export/reopen passed",
+        "1440/1024/390/320 layouts with no overflow or errors",
+        "Offline app reload, local audio import, cache audit and explicit update cycle passed",
+        "Production and retained assets verified"
+      ],
+      "commit": "2b430ad",
+      "deploy": "6acd80c26a7a57195ba63f30",
+      "implemented": [
+        "Focused listening workspace and responsive queue",
+        "Real three-band EQ presets with undo/redo",
+        "Current track playback and reduced-motion-aware record visual"
+      ],
+      "remaining": [
+        "Embedded album-art and metadata extraction",
+        "Albums, artists, favorites and richer library grouping",
+        "Ten-band EQ and output-device selection"
+      ]
     },
     {
       "slug": "locker",
       "name": "Locker",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/locker.png",
-      "status": "pending source audit",
+      "status": "first concept file-browser slice published and verified; deeper organization remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "Hosted imports, image previews, exact original downloads, rename undo/redo and reload passed",
+        "Sort/filter and inventory export verified at 1440/1024/390/320 without overflow or errors",
+        "Both main-site functions and 2337 other static paths retained"
+      ],
+      "source": "/Users/lillypad/Projects/locker-concept-20261012",
+      "deploy": "6acd8402efa3cf4105f7011c",
+      "implemented": [
+        "Light file browser with inspector and real media previews",
+        "Sort/search and persistent grid/list view",
+        "Rename undo/redo and inventory export"
+      ],
+      "remaining": [
+        "Collections, tags, notes and favorites",
+        "Deleted-file recovery workflow",
+        "Broader handoff/offline regression qualification"
+      ]
     },
     {
       "slug": "sessions",
