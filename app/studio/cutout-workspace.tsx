@@ -1,9 +1,10 @@
 "use client";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { ArrowUpRight, Download, Eraser, FolderOpen, ImagePlus, Paintbrush, RotateCcw, Save, Undo2, WandSparkles, X } from "lucide-react";
+import { ArrowUpRight, Download, Eraser, FolderOpen, ImagePlus, Paintbrush, RotateCcw, Save, Undo2, Redo2, WandSparkles, X } from "lucide-react";
 import { composeCutout, cutoutSize, paintCutoutMask, type CutoutPoint } from "../engine/cutout";
 import { CUTOUT_PROJECT_LIMIT, openCutoutProject, saveCutoutProject } from "../engine/cutout-project";
 import "./cutout.css";
+import "./cutout-workspace.css";
 
 export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSave }: {
   getDocumentArt?: () => Promise<Blob>; onClose?: () => void;
@@ -13,9 +14,12 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
   const [mode, setMode] = useState<"erase" | "restore">("erase"), [brush, setBrush] = useState(60), [feather, setFeather] = useState(0);
   const [before, setBefore] = useState(false), [busy, setBusy] = useState(""), [error, setError] = useState("");
   const source = useRef<HTMLCanvasElement | null>(null), mask = useRef<Uint8ClampedArray | null>(null), output = useRef<HTMLCanvasElement | null>(null);
-  const history = useRef<Uint8ClampedArray[]>([]), pointer = useRef<CutoutPoint | null>(null), activePointer = useRef<number | null>(null);
+  type MaskState={mask:Uint8ClampedArray;feather:number};
+  const history = useRef<MaskState[]>([]), future=useRef<MaskState[]>([]), pointer = useRef<CutoutPoint | null>(null), activePointer = useRef<number | null>(null);
   const input = useRef<HTMLInputElement>(null), preview = useRef<HTMLCanvasElement>(null), abort = useRef<AbortController | null>(null), epoch = useRef(0);
   const initialArt = useRef(getDocumentArt), busyRef = useRef(false);
+  const [background,setBackground]=useState("transparent");
+  const originalPreview=useRef<HTMLCanvasElement>(null),maskPreview=useRef<HTMLCanvasElement>(null);
   const projectInput = useRef<HTMLInputElement>(null), dirty = useRef(false);
   function download(blob: Blob, filename: string) { const url = URL.createObjectURL(blob), link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000); }
   function mayReplace() { return !dirty.current || window.confirm("Replace this Cutout? Download the project first to keep its editable mask."); }
@@ -29,7 +33,7 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
       if (id !== epoch.current) return;
       const canvas = document.createElement("canvas"); canvas.width = project.width; canvas.height = project.height;
       const ctx = canvas.getContext("2d")!, pixels = ctx.createImageData(project.width, project.height); pixels.data.set(project.rgba); ctx.putImageData(pixels, 0, 0);
-      source.current = canvas; mask.current = project.mask; history.current = []; dirty.current = false;
+      source.current = canvas; mask.current = project.mask; history.current = []; future.current=[]; dirty.current = false;
       setName(project.name); setFeather(project.feather); setBefore(false); setReady(true); revise(n => n + 1);
     } catch (reason) { if (id === epoch.current) setError(reason instanceof Error ? reason.message : "Could not open this project."); }
     finally { if (id === epoch.current) { busyRef.current = false; setBusy(""); } }
@@ -48,7 +52,8 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
     const warn = (event: BeforeUnloadEvent) => { if (dirty.current) { event.preventDefault(); event.returnValue = ""; } };
     window.addEventListener("beforeunload", warn); return () => window.removeEventListener("beforeunload", warn);
   }, []);
-  function checkpoint() { if (mask.current) { dirty.current = true; history.current = [...history.current.slice(-7), mask.current.slice()]; } }
+  function checkpoint() { if (mask.current) { dirty.current = true; future.current=[];history.current = [...history.current.slice(-7), {mask:mask.current.slice(),feather}]; } }
+  function travel(redo=false){if(!mask.current)return;const from=redo?future:history,to=redo?history:future;const next=from.current.pop();if(!next)return;to.current=[...to.current.slice(-7),{mask:mask.current.slice(),feather}];mask.current=next.mask;setFeather(next.feather);setBefore(false);dirty.current=true;revise(n=>n+1)}
   async function load(blob: Blob, title: string) {
     if (busyRef.current || !mayReplace()) return; const id = ++epoch.current; busyRef.current = true; setBusy("Opening image..."); setError("");
     try {
@@ -58,7 +63,7 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
         if (id !== epoch.current) return;
         const size = cutoutSize(image.width, image.height), canvas = document.createElement("canvas"); Object.assign(canvas, size);
         canvas.getContext("2d")!.drawImage(image, 0, 0, size.width, size.height); source.current = canvas;
-        mask.current = new Uint8ClampedArray(size.width * size.height).fill(255); history.current = []; setName(title.replace(/\.[^.]+$/, "") || "cutout");
+        mask.current = new Uint8ClampedArray(size.width * size.height).fill(255); history.current = []; future.current=[]; setName(title.replace(/\.[^.]+$/, "") || "cutout");
         dirty.current = false; setReady(true); setBefore(false); setFeather(0); revise(n => n + 1);
       } finally { image.close(); }
     } catch (reason) { if (id === epoch.current) setError(reason instanceof Error ? reason.message : "Could not open this image."); }
@@ -75,6 +80,7 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
     if (!source.current || !mask.current || !preview.current) return;
     const canvas = before ? source.current : composeCutout(source.current, mask.current, feather); output.current = canvas;
     preview.current.width = canvas.width; preview.current.height = canvas.height; preview.current.getContext("2d")!.drawImage(canvas, 0, 0);
+    for(const [target,isMask] of [[originalPreview.current,false],[maskPreview.current,true]] as const){if(!target)continue;const scale=Math.min(1,200/source.current.width);target.width=Math.round(source.current.width*scale);target.height=Math.round(source.current.height*scale);const ctx=target.getContext("2d")!;if(!isMask)ctx.drawImage(source.current,0,0,target.width,target.height);else{const matte=document.createElement("canvas");matte.width=source.current.width;matte.height=source.current.height;const m=matte.getContext("2d")!,pixels=m.createImageData(matte.width,matte.height);for(let i=0;i<mask.current.length;i++){pixels.data[i*4]=mask.current[i];pixels.data[i*4+1]=mask.current[i];pixels.data[i*4+2]=mask.current[i];pixels.data[i*4+3]=255}m.putImageData(pixels,0,0);ctx.drawImage(matte,0,0,target.width,target.height)}}
   }, [revision, before, feather, ready]);
   async function automatic() {
     if (!source.current || busyRef.current) return;
@@ -113,12 +119,13 @@ export default function Cutout({ getDocumentArt, onClose, onOpenAsDocument, onSa
     <header><a href="/studio">Luma</a><h1>Cutout</h1><span className="cutout-alpha">ALPHA</span><div className="cutout-actions"><button onClick={() => input.current?.click()} disabled={!!busy}><ImagePlus size={18} />Open image</button><button disabled={!ready || !!busy} onClick={() => void save()}><Download size={18} />PNG</button>{onClose ? <button title="Close Cutout" aria-label="Close Cutout" disabled={!!busy} onClick={() => { if (mayReplace()) onClose(); }}><X size={18} /></button> : <a href="/studio" title="Open Luma Studio"><ArrowUpRight size={20} /></a>}</div></header>
     <input ref={input} hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; if (file) void load(file, file.name); }} />
     <input ref={projectInput} hidden aria-label="Open Cutout project" type="file" accept=".cutout" onChange={e => { const file=e.target.files?.[0]; e.target.value=""; void projectFile(file); }} />
-    <div className="cutout-layout"><main className="cutout-stage" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) void load(file, file.name); }}>
+    <div className="cutout-layout"><nav className="cutout-source-panel" aria-label="Image and mask"><div className="cutout-source-heading">Your image</div><button disabled={!ready||!!busy} aria-pressed={before} onClick={()=>setBefore(v=>!v)}><span>Original photo</span><canvas ref={originalPreview} aria-label="Original image thumbnail" hidden={!ready}/></button><div className="cutout-mask-card"><span>Subject mask</span><canvas ref={maskPreview} aria-label="Actual subject mask" hidden={!ready}/><small>White keeps · black removes</small></div><p>Refine the edge with Erase or Restore. Your original stays intact.</p></nav><main className="cutout-stage" style={background!=="transparent"?{background:background}:undefined} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) void load(file, file.name); }}>
       {!ready && <button className="cutout-empty" onClick={() => input.current?.click()} disabled={!!busy}><ImagePlus size={40} /><span>Open image</span></button>}
       <canvas ref={preview} hidden={!ready} aria-label="Cutout mask editor" onPointerDown={e => paint(e, true)} onPointerMove={e => paint(e, false)} onPointerUp={() => { pointer.current = null; activePointer.current = null; }} onPointerCancel={() => { pointer.current = null; activePointer.current = null; }} />
     </main><aside><button className="cutout-primary" disabled={!ready || !!busy} onClick={() => void automatic()} title="Downloads MODNet on first use. Processing stays on this device. Best for foreground subjects; review edges."><WandSparkles size={18} />Remove background</button>
-      <fieldset disabled={!ready || !!busy}><legend>Refine mask</legend><div className="cutout-modes" role="group" aria-label="Mask brush"><button title="Erase from mask" aria-label="Erase" aria-pressed={mode === "erase"} onClick={() => { setMode("erase"); setBefore(false); }}><Eraser size={20} /></button><button title="Restore to mask" aria-label="Restore" aria-pressed={mode === "restore"} onClick={() => { setMode("restore"); setBefore(false); }}><Paintbrush size={20} /></button><button title="Undo mask edit" aria-label="Undo mask edit" disabled={!history.current.length} onClick={() => { mask.current = history.current.pop()!; dirty.current = true; revise(n => n + 1); }}><Undo2 size={20} /></button><button title="Reset mask" aria-label="Reset mask" onClick={() => { checkpoint(); mask.current!.fill(255); revise(n => n + 1); }}><RotateCcw size={20} /></button></div>
-      <label>Brush size <output>{brush}px</output><input aria-label="Brush size" type="range" min="4" max="240" value={brush} onChange={e => setBrush(+e.target.value)} /></label><label>Feather <output>{feather}px</output><input aria-label="Feather" type="range" min="0" max="8" step=".5" value={feather} onChange={e => { dirty.current = true; setFeather(+e.target.value); }} /></label><label className="cutout-check"><input type="checkbox" checked={before} onChange={e => setBefore(e.target.checked)} />Original</label></fieldset>
+      <fieldset disabled={!ready || !!busy}><legend>Refine mask</legend><div className="cutout-modes" role="group" aria-label="Mask brush"><button title="Erase from mask" aria-label="Erase" aria-pressed={mode === "erase"} onClick={() => { setMode("erase"); setBefore(false); }}><Eraser size={20} /></button><button title="Restore to mask" aria-label="Restore" aria-pressed={mode === "restore"} onClick={() => { setMode("restore"); setBefore(false); }}><Paintbrush size={20} /></button><button title="Undo mask edit" aria-label="Undo mask edit" disabled={!history.current.length} onClick={() => travel()}><Undo2 size={20} /></button><button title="Redo mask edit" aria-label="Redo mask edit" disabled={!future.current.length} onClick={()=>travel(true)}><Redo2 size={20}/></button><button title="Reset mask" aria-label="Reset mask" onClick={() => { checkpoint(); mask.current!.fill(255); revise(n => n + 1); }}><RotateCcw size={20} /></button></div>
+      <label>Brush size <output>{brush}px</output><input aria-label="Brush size" type="range" min="4" max="240" value={brush} onChange={e => setBrush(+e.target.value)} /></label><label>Feather <output>{feather}px</output><input aria-label="Feather" type="range" min="0" max="8" step=".5" value={feather} onChange={e => { checkpoint();setFeather(+e.target.value); }} /></label><label className="cutout-check"><input type="checkbox" checked={before} onChange={e => setBefore(e.target.checked)} />Original</label></fieldset>
+      <fieldset disabled={!ready||!!busy} className="cutout-background"><legend>Preview background</legend><div>{[{value:"transparent",name:"Transparent"},{value:"#ffffff",name:"White"},{value:"#141b28",name:"Dark"},{value:"#e8eaf0",name:"Gray"}].map(b=><button key={b.value} aria-label={b.name+" preview"} aria-pressed={background===b.value} title={b.name} style={{background:b.value==="transparent"?undefined:b.value}} onClick={()=>setBackground(b.value)}>{b.value==="transparent"?"▧":""}</button>)}</div><small>PNG export keeps transparency.</small></fieldset>
       {ready && <output className="cutout-meta">{name} · {source.current?.width} × {source.current?.height}</output>}
       <div className="cutout-project-actions"><button title="Download editable Cutout project" disabled={!ready || !!busy} onClick={() => void saveProject()}><Save size={18} />Save project</button><button title="Open editable Cutout project" disabled={!!busy} onClick={() => projectInput.current?.click()}><FolderOpen size={18} />Open project</button></div>
       {onOpenAsDocument && <button disabled={!ready || !!busy} onClick={() => void save(true)}><ArrowUpRight size={18} />Open result in Luma</button>}

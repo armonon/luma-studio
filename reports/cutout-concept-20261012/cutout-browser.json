@@ -1,0 +1,41 @@
+{
+  "base": "http://127.0.0.1:4217",
+  "results": [
+    {
+      "width": 1440,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    },
+    {
+      "width": 1024,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    },
+    {
+      "width": 390,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    },
+    {
+      "width": 320,
+      "maskUndoSaveReopenExport": true,
+      "erased": {
+        "width": 160,
+        "height": 120,
+        "transparent": 2828
+      }
+    }
+  ]
+}
