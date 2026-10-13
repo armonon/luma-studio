@@ -971,10 +971,26 @@
       "slug": "now-messenger",
       "name": "NOW Messenger",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/now-messenger.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "Native conversation workspace published and locally verified",
+      "existing_features": [
+        "Real guest messaging, room membership and retention",
+        "Conversation search and unread filter",
+        "Loaded-message search and derived shared links"
+      ],
+      "proposed_features": [
+        "Attachments",
+        "Equivalent inspector for Circle-backed conversations"
+      ],
+      "verified": [
+        "34 tests, TypeScript and production build",
+        "Real local guest send/join/search/filter/link review at 1440/1024/390/320",
+        "Final build repeated at all four widths"
+      ],
+      "deployment": {
+        "version": 26,
+        "url": "https://now-messenger.armonon.chatgpt.site",
+        "commit": "5a4f93fc0d8cec59f271cc4bcdb0a1fc56185080"
+      }
     }
   ]
 }
