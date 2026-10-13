@@ -746,10 +746,28 @@
       "slug": "loop",
       "name": "Loop",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/loop.png",
-      "status": "pending source audit",
+      "status": "concept loop workspace published and verified; extended media library remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "3 loop math tests and TypeScript build passed",
+        "Hosted settings undo/redo and save/reopen at 1440/1024/390/320",
+        "H.264 export verified: 36 frames, 1.5 seconds",
+        "10 routes and 3698 unrelated files retained"
+      ],
+      "commit": "4920525",
+      "deploy": "6acd8b3ab4379cf2c0953b3f",
+      "implemented": [
+        "Cyan responsive preview and controls",
+        "Six real decoded source frame previews",
+        "Settings undo/redo and atomic settings reopen",
+        "Advancing playhead and correct pause position"
+      ],
+      "remaining": [
+        "Multi-clip media library",
+        "Direct filmstrip trim handles",
+        "Expanded seam comparison"
+      ]
     },
     {
       "slug": "glyph",
@@ -782,10 +800,29 @@
       "slug": "animate",
       "name": "Animate",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/animate.png",
-      "status": "pending source audit",
+      "status": "first concept drawing workspace published and verified; advanced concept tools remain",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "67 unit tests passed",
+        "Hosted drawing undo/redo, project roundtrip and video undo/save passed",
+        "Hosted GIF/MP4 exact frame count and duration passed at desktop and phone",
+        "Offline editing and 1440/1024/390/320 layouts passed",
+        "Both public builds verified; concurrent main-site changes retained"
+      ],
+      "commit": "ce734d5",
+      "deploy": "6acd884b32fa9a8df2f37632",
+      "standalone_deploy": "6acd877f0aa278d0d3953b6e",
+      "implemented": [
+        "Warm drawing rail, canvas and layer/tween inspector",
+        "Real frame thumbnails with horizontal timeline",
+        "Bounded document undo/redo including retained imported-video references"
+      ],
+      "remaining": [
+        "Expanded brush opacity and smoothing controls",
+        "Layer blend modes and direct object transforms",
+        "Richer cel-duration editing"
+      ]
     },
     {
       "slug": "moodboard",
