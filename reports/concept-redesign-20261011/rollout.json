@@ -737,10 +737,31 @@
       "slug": "cutout",
       "name": "Cutout",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/cutout.png",
-      "status": "pending source audit",
-      "existing_features": [],
-      "proposed_features": [],
-      "verified": []
+      "status": "initial concept workspace published; deeper segmentation verification remains",
+      "existing_features": [
+        "MODNet subject mask",
+        "manual mask brush",
+        "feathering",
+        "transparent PNG",
+        "portable cutout project"
+      ],
+      "proposed_features": [
+        "Further segmentation quality and unusual-subject benchmarks"
+      ],
+      "verified": [
+        "6 engine/project tests",
+        "1440/1024/390/320 browser: mask edit, undo/redo, PNG alpha, save/reopen, no horizontal overflow",
+        "Hosted Luma application menus desktop/iPad/iPhone and PDF import desktop/iPhone"
+      ],
+      "deployment": {
+        "url": "https://luma.thecreatingco.com/cutout",
+        "id": "6acd986e9ea65da9cc24f743"
+      },
+      "implementation": [
+        "Original thumbnail and actual grayscale mask previews",
+        "Bounded mask and feather history with redo",
+        "Preview-only background swatches that preserve exported alpha"
+      ]
     },
     {
       "slug": "loop",
@@ -828,19 +849,49 @@
       "slug": "moodboard",
       "name": "Moodboard",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/moodboard.png",
-      "status": "pending source audit",
+      "status": "first concept workspace published and verified; advanced functionality remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "44 unit tests",
+        "Hosted 1440/1024/390/320 image/note edits and save/reopen",
+        "PNG/PDF/ZIP exports and offline recovery at desktop and phone"
+      ],
+      "commit": "9d71fde",
+      "deploy": "6acd8decf74853fe991defcb",
+      "implemented": [
+        "Actual reference sidebar and responsive canvas/inspector",
+        "Bounded document undo/redo with one-step drag transactions",
+        "Board title and storage failure messages"
+      ],
+      "remaining": [
+        "Multiple board library",
+        "Connector lines and freehand annotations"
+      ]
     },
     {
       "slug": "portfolio",
       "name": "Portfolio Studio",
       "reference": "/Users/lillypad/Projects/company-launch/output/ui-concepts-v2/portfolio.png",
-      "status": "pending source audit",
+      "status": "first concept workspace published and verified; advanced functionality remains",
       "existing_features": [],
       "proposed_features": [],
-      "verified": []
+      "verified": [
+        "15 unit tests",
+        "Hosted 1440/1024/390/320 media roundtrip and history",
+        "Static-site ZIP/PDF exports and offline recovery"
+      ],
+      "commit": "92a2b74",
+      "deploy": "6acd9086e8defb7402915e94",
+      "implemented": [
+        "Focused section navigation, project thumbnails and inspector",
+        "Desktop/tablet/phone live preview",
+        "Document undo/redo and storage error handling"
+      ],
+      "remaining": [
+        "Advanced spacing and typography controls",
+        "Freeform page building"
+      ]
     },
     {
       "slug": "website-checkup",
