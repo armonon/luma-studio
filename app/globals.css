@@ -11863,6 +11863,12 @@ html[data-luma-platform="desktop"] body:has(.spatial-studio) {
     #04060b;
 }
 
+/* The adaptive shell already fits phone/tablet viewports. Its body must not
+   retain the desktop minimum and create an invisible 900px page underneath. */
+html:root body:has(.spatial-studio[data-app-shell][data-ui="atelier"]:is([data-form-factor="phone"], [data-interface="tablet"])) {
+  min-width: 0;
+}
+
 html[data-luma-platform="desktop"] .spatial-studio {
   --studio-bg: #080a0e;
   --studio-surface: #111317;
