@@ -1,9 +1,12 @@
 import { TOOL_REGISTRY, type Tool, type ToolCursorVisualKind } from "./tool-registry";
 
-export type CursorSelectionMode = "replace" | "add" | "subtract" | "intersect";
+export type { CursorSelectionMode } from "../shared/creative-cursor";
+export { cursorSelectionMode, cursorRingGeometry } from "../shared/creative-cursor";
+import { cursorSelectionMode, creativeCursorCue, type CursorSelectionMode, type CreativeCursorPhase } from "../shared/creative-cursor";
 
 export type DynamicCursorContext = {
   selectionMode?: CursorSelectionMode;
+  cue?: CreativeCursorPhase;
   shiftKey?: boolean;
   altKey?: boolean;
   captureSampling?: boolean;
@@ -41,15 +44,6 @@ const GLYPHS: Record<ToolCursorVisualKind, string> = {
   gradient: "◩",
 };
 
-export function cursorSelectionMode(
-  preferred: CursorSelectionMode,
-  modifiers: { shiftKey?: boolean; altKey?: boolean },
-): CursorSelectionMode {
-  if (modifiers.shiftKey && modifiers.altKey) return "intersect";
-  if (modifiers.altKey) return "subtract";
-  if (modifiers.shiftKey) return "add";
-  return preferred;
-}
 
 export function dynamicCursorPresentation(tool: Tool, context: DynamicCursorContext): DynamicCursorPresentation {
   const registered = TOOL_REGISTRY[tool].cursorVisual;
@@ -80,6 +74,9 @@ export function dynamicCursorPresentation(tool: Tool, context: DynamicCursorCont
     readout = TOOL_REGISTRY[tool].label;
   }
 
+  if (context.cue && !context.unavailableReason && !context.needsSourceSample) {
+    const cue = creativeCursorCue(context.cue); glyph = cue.glyph; readout = cue.label;
+  }
   return {
     kind,
     glyph,
@@ -90,27 +87,5 @@ export function dynamicCursorPresentation(tool: Tool, context: DynamicCursorCont
     roundness: Math.max(0.05, Math.min(1, context.roundness)),
     angle: Number.isFinite(context.angle) ? context.angle : 0,
     color: /^#[0-9a-f]{6}$/i.test(context.color) ? context.color : "#ffffff",
-  };
-}
-
-export function cursorRingGeometry(input: {
-  documentSize: number;
-  viewportDocumentWidth: number;
-  canvasCssWidth: number;
-  pressure?: number;
-  pressureSize?: boolean;
-}) {
-  const scale = input.canvasCssWidth > 0 && input.viewportDocumentWidth > 0
-    ? input.canvasCssWidth / input.viewportDocumentWidth
-    : 1;
-  const pressure = input.pressureSize && input.pressure !== undefined
-    ? Math.max(0.08, Math.min(1, input.pressure))
-    : 1;
-  const actualDiameter = Math.max(1, input.documentSize * scale * pressure);
-  const displayDiameter = Math.max(6, Math.min(360, actualDiameter));
-  return {
-    actualDiameter,
-    displayDiameter,
-    clipped: actualDiameter > displayDiameter,
   };
 }

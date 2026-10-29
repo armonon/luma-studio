@@ -1,4 +1,5 @@
 "use client";
+import {mountDrawingDiagnostics} from "../shared/drawing-diagnostics";
 import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
@@ -7,6 +8,7 @@ import { PwaToast, useInstallPrompt, usePwaUpdate } from "./pwa";
 import { isFontFile, saveToLocker, useLockerAvailable, useLockerOpen, useSuiteKit, type LockerFile } from "./suite";
 import DownloadConfirmation from "./download-confirmation";
 import { canvasPointerIntent } from "./pointer-intent";
+import { pointerSamples,wheelZoomFactor } from "../shared/drawing-input";
 import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
 import { PHONE_VIEWPORT_LIMITS } from "./phone-workspace";
 import BrushToolbox, { type PaintSection } from "./brush-toolbox";
@@ -334,6 +336,7 @@ function formatBytes(bytes: number) {
 export default function SpatialStudio({ desktop = false, tabletMode = false, phoneMode = false }: { desktop?: boolean; tabletMode?: boolean; phoneMode?: boolean }) {
   const { tablet: detectedTablet, phone, drawWithTouch, toggleFingerDrawing } = useTabletWorkspace(phoneMode);
   const tablet = tabletMode || detectedTablet;
+  useEffect(()=>{if(window.location.hostname!=="127.0.0.1"||!new URLSearchParams(window.location.search).has("drawingDiagnostics"))return;return mountDrawingDiagnostics(document,'canvas');},[]);
   const [tabletPanel, setTabletPanel] = useState<PanelId | null>(null);
   const [phoneFocus, setPhoneFocus] = useState(false);
   const [downloadConfirmation, setDownloadConfirmation] = useState<{ name: string; resolve: (saved: boolean) => void } | null>(null);
@@ -1264,6 +1267,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const cursorDocumentSize = activeTool === "capture-brush" && captureSampling ? captureRadius * 2 : brushSize;
   const cursorBasePresentation = dynamicCursorPresentation(activeTool, {
     selectionMode,
+    cue: activeTool === "pen" && penPreview?.label ? "snap" : undefined,
     captureSampling: activeTool === "capture-brush" && captureSampling,
     unavailableReason: cursorUnavailableReason,
     needsSourceSample: cursorNeedsSourceSample,
@@ -1297,6 +1301,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     const rect = canvas.getBoundingClientRect();
     const presentation = dynamicCursorPresentation(activeTool, {
       selectionMode,
+      cue: activeTool === "pen" && penPreview?.label ? "snap" : undefined,
       shiftKey: pointer.shiftKey,
       altKey: pointer.altKey,
       captureSampling: activeTool === "capture-brush" && captureSampling,
@@ -1713,8 +1718,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (gesture.documentId !== studio.activeDocumentState().id) { studio.cancelStroke(); brushGestureRef.current = null; return; }
       if (e.buttons === 0) return;
       const source = e.nativeEvent;
-      const coalesced = typeof source.getCoalescedEvents === "function" ? source.getCoalescedEvents() : [];
-      const points = coalesced.length ? coalesced : [source];
+      const points = pointerSamples(source);
       const rect = canvasRef.current?.getBoundingClientRect();
       try {
         for (const point of points) studio.paintTo(gesture.layerId, gesture.params, eventToDoc({
@@ -1777,12 +1781,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     }
     const d = dragRef.current;
     if (retouchTool && retouchActive.current && e.buttons !== 0 && activeLayer) {
-      type WithCoalesced = { getCoalescedEvents?: () => Array<{
-        clientX: number; clientY: number; pressure?: number; tiltX?: number; tiltY?: number; azimuthAngle?: number;
-      }> };
-      const src = e.nativeEvent as WithCoalesced;
-      const events = src.getCoalescedEvents ? src.getCoalescedEvents() : [];
-      for (const event of events.length ? events : [e.nativeEvent]) studio.retouchTo(activeLayer.id, eventToDoc(event));
+      const rect=canvasRef.current?.getBoundingClientRect();
+      for (const event of pointerSamples(e.nativeEvent)) studio.retouchTo(activeLayer.id, eventToDoc(event,rect));
       return;
     }
     if (!d) return;
@@ -4705,9 +4705,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
               role="application"
               aria-label={`${projectName} image canvas. Active tool: ${activeTool}.`}
               onWheel={(e) => {
-                if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey) return;
+                if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey && e.deltaMode===0) return;
                 e.preventDefault();
-                const factor = Math.exp(-e.deltaY * 0.002);
+                const factor = wheelZoomFactor(e.deltaY,e.deltaMode,e.currentTarget.getBoundingClientRect().height);
                 // Read everything off the synthetic event synchronously, before
                 // it reaches the setView updater. React's setState updater can
                 // run outside the event's own dispatch (batched, or on a later

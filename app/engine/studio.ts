@@ -870,6 +870,9 @@ export class Studio {
     if (this.renderQualityTimer !== null) window.clearTimeout(this.renderQualityTimer);
     this.renderQualityTimer = window.setTimeout(() => {
       this.renderQualityTimer = null;
+      // A held brush may pause between packets. Do not oscillate back to a
+      // costly full preview while its transaction is still open.
+      if (this.activeStroke) return;
       if (this.renderGovernor.restoreFullQuality()) this.requestPresentationRender();
     }, 180);
   }
@@ -5365,6 +5368,7 @@ export class Studio {
       this.lastPoint = null;
       this.paintSegmentState = null;
       this.requestRender();
+      this.scheduleFullQualityPreview();
     }
   }
 
@@ -5383,6 +5387,7 @@ export class Studio {
       this.finishStroke(layerId, params);
     }
     catch (error) { this.cancelStroke(); throw error; }
+    finally { if (!this.activeStroke) this.scheduleFullQualityPreview(); }
   }
 
   private finishStroke(layerId: string, params: BrushParams) {

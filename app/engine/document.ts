@@ -1,3 +1,4 @@
+import { affineForLayerTransform } from "../shared/luma-affine";
 import type { PrecisionTileSurface } from "./tile-store";
 import { SparseAlphaSurface } from "./alpha-surface";
 import type { RawDevelopSettings } from "./raw-develop";
@@ -176,57 +177,9 @@ export const IDENTITY_TRANSFORM: Transform = {
   skewX: 0,
 };
 
-export type AffineTransform = {
-  a: number;
-  b: number;
-  c: number;
-  d: number;
-  e: number;
-  f: number;
-};
+export { affineForLayerTransform, inverseAffineForLayerTransform, transformPoint, documentPointToLayer } from "../shared/luma-affine";
+export type { AffineTransform } from "../shared/luma-affine";
 
-export function affineForLayerTransform(transform: Transform): AffineTransform {
-  const cosine = Math.cos(transform.rotation);
-  const sine = Math.sin(transform.rotation);
-  return {
-    a: cosine * transform.sx,
-    b: sine * transform.sx,
-    c: (cosine * (transform.skewX ?? 0) - sine) * transform.sy,
-    d: (sine * (transform.skewX ?? 0) + cosine) * transform.sy,
-    e: transform.tx,
-    f: transform.ty,
-  };
-}
-
-export function inverseAffineForLayerTransform(transform: Transform): AffineTransform | null {
-  const forward = affineForLayerTransform(transform);
-  const determinant = forward.a * forward.d - forward.b * forward.c;
-  if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-12) return null;
-  const a = forward.d / determinant;
-  const b = -forward.b / determinant;
-  const c = -forward.c / determinant;
-  const d = forward.a / determinant;
-  return {
-    a,
-    b,
-    c,
-    d,
-    e: -(a * forward.e + c * forward.f),
-    f: -(b * forward.e + d * forward.f),
-  };
-}
-
-export function transformPoint(matrix: AffineTransform, x: number, y: number) {
-  return {
-    x: matrix.a * x + matrix.c * y + matrix.e,
-    y: matrix.b * x + matrix.d * y + matrix.f,
-  };
-}
-
-export function documentPointToLayer(transform: Transform, x: number, y: number) {
-  const inverse = inverseAffineForLayerTransform(transform);
-  return inverse ? transformPoint(inverse, x, y) : null;
-}
 
 /** Compose a document-space rotation around an arbitrary pivot with a layer transform. */
 export function rotateLayerTransformAround(

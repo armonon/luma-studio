@@ -172,3 +172,19 @@ test("pointer-up completes the smoothed tail and masks stay sparse at extreme di
     assert.ok(layer.maskSurface!.readRegion({ x: 25118, y: 24999, width: 2, height: 2 }).some(value => value < 255));
   } finally { studio.dispose(); }
 });
+
+test('idle quality recovery waits for brush completion and cancellation', () => {
+  const g=globalThis as unknown as Record<string,unknown>,oldWindow=g.window,oldRaf=g.requestAnimationFrame;
+  const timers=new Map<number,{run:()=>void;delay:number}>();let id=0;
+  g.window={setTimeout:(run:()=>void,delay:number)=>{timers.set(++id,{run,delay});return id;},clearTimeout:(key:number)=>timers.delete(key)};
+  g.requestAnimationFrame=()=>1;
+  const studio=new Studio(32,32,testCanvas(32,32));
+  type PreviewInternals={renderGovernor:{record:(time:number,workload:string)=>boolean;scale:number};scheduleFullQualityPreview:()=>void};
+  const preview=studio as unknown as PreviewInternals;
+  const idle=()=>{const entries=[...timers].filter(([,t])=>t.delay===180);assert.ok(entries.length);for(const [key,t]of entries){timers.delete(key);t.run();}};
+  try{
+    const layer=studio.addBlankRaster("Timed gesture");studio.beginStroke(layer.id,params,{x:5,y:5,p:.5});preview.renderGovernor.record(100,'interactive');preview.renderGovernor.record(100,'interactive');assert.equal(preview.renderGovernor.scale,.85);preview.scheduleFullQualityPreview();idle();assert.equal(preview.renderGovernor.scale,.85,'pause with pointer held retains responsive preview');
+    studio.endStroke(layer.id,params,{x:10,y:10,p:.5});idle();assert.equal(preview.renderGovernor.scale,1,'finished stroke restores full quality');
+    studio.beginStroke(layer.id,params,{x:6,y:6,p:.5});preview.renderGovernor.record(100,'interactive');preview.renderGovernor.record(100,'interactive');studio.cancelStroke();idle();assert.equal(preview.renderGovernor.scale,1,'cancel also restores full preview');
+  }finally{studio.dispose();g.window=oldWindow;g.requestAnimationFrame=oldRaf;}
+});
