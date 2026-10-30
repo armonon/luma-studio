@@ -55,7 +55,7 @@ export function vectorPathBytes(path: PathStyle | undefined): number {
   if (!path) return 0;
   const contours = [...pathContours(path), ...(path.booleanSource?.operands.flat() ?? []), ...(path.offsetSource?.contours ?? [])];
   // Conservative JS-object allowance; geometry must not be free in history.
-  return 256 + contours.reduce((n, contour) => n + 128 + contour.anchors.length * 192, 0) + (path.fill.length + path.stroke.length) * 2 + (path.appearance?.reduce((n, p) => n + 128 + p.color.length * 2, 0) ?? 0) + (path.symbolId?.length ?? 0) * 2;
+  return 256 + contours.reduce((n, contour) => n + 128 + contour.anchors.reduce((bytes, a) => bytes + 192 + (a.id ? 48 + a.id.length * 2 : 0) + (a.mode ? 32 + a.mode.length * 2 : 0), 0), 0) + (path.fill.length + path.stroke.length) * 2 + (path.appearance?.reduce((n, p) => n + 128 + p.color.length * 2, 0) ?? 0) + (path.symbolId?.length ?? 0) * 2;
 }
 export function documentSnapshotBytes(doc: Document | undefined) {
   if (!doc) return 0;

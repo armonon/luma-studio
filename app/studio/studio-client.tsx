@@ -4,6 +4,7 @@ import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
 import { useTabletCanvas } from "./use-tablet-canvas";
+import { PathPointEditor, type PathPointEditorHandle } from "./path-point-editor";
 import { PwaToast, useInstallPrompt, usePwaUpdate } from "./pwa";
 import { isFontFile, saveToLocker, useLockerAvailable, useLockerOpen, useSuiteKit, type LockerFile } from "./suite";
 import DownloadConfirmation from "./download-confirmation";
@@ -50,7 +51,6 @@ import {
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
   PathAnchor,
-  PathStyle,
   type SmartFilterKind,
   ToneParams,
   Transform,
@@ -678,7 +678,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     try { localStorage.setItem(PEN_SNAP_KEY, JSON.stringify(next)); } catch { /* Session controls still work with unavailable storage. */ }
   };
   const [pointDraft, setPointDraft] = useState<Point[]>([]);
-  const directAnchorRef = useRef<{ layerId: string; index: number; contour: number; original: PathStyle; next: PathStyle } | null>(null);
+  const pathPointEditorRef = useRef<PathPointEditorHandle | null>(null);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -1665,18 +1665,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (!activeLayer?.path) { notify("Select a path layer"); return; }
       if (activeLayer.locked) { notify("Unlock this layer before editing its anchors"); return; }
       if (activeLayer.path.booleanSource || activeLayer.path.offsetSource) { notify("Expand the generated shape to editable contours first"); return; }
-      const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
-      if (!local) return;
-      let index = 0;
-      let contour = 0;
-      let distance = Infinity;
-      [activeLayer.path, ...(activeLayer.path.contours ?? [])].forEach((part, partIndex) => part.anchors.forEach((anchor, candidate) => {
-        const d = Math.hypot(anchor.x - local.x, anchor.y - local.y);
-        if (d < distance) { distance = d; index = candidate; contour = partIndex; }
-      }));
-      if (!Number.isFinite(distance)) return;
-      const original = structuredClone(activeLayer.path);
-      directAnchorRef.current = { layerId: activeLayer.id, index, contour, original, next: structuredClone(original) };
+      pathPointEditorRef.current?.down({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey });
       return;
     }
     if (moveTool && doc) {
@@ -1755,19 +1744,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       penFrameRef.current?.push({ result, index, documentId: studio.activeDocumentState().id });
       return;
     }
-    if (activeTool === "direct-select" && directAnchorRef.current && e.buttons !== 0) {
+    if (activeTool === "direct-select" && pathPointEditorRef.current?.active) {
       const p = eventToDoc(e);
-      const edit = directAnchorRef.current;
-      const pathLayer = studio.doc.layers.find((layer) => layer.id === edit.layerId);
-      if (!pathLayer) return;
-      const local = documentPointToLayer(pathLayer.transform, p.x, p.y);
-      if (!local) return;
-      const next = structuredClone(edit.next);
-      const part = edit.contour === 0 ? next : next.contours?.[edit.contour - 1];
-      if (!part?.anchors[edit.index]) return;
-      part.anchors[edit.index] = { ...part.anchors[edit.index], x: local.x, y: local.y };
-      edit.next = next;
-      studio.liveUpdatePath(edit.layerId, next);
+      pathPointEditorRef.current.move({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey });
       return;
     }
     if (quickSelectionRef.current && e.buttons !== 0) {
@@ -1847,12 +1826,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       setPenDragging(null);
       return;
     }
-    if (activeTool === "direct-select" && directAnchorRef.current) {
-      const edit = directAnchorRef.current;
-      studio.liveUpdatePath(edit.layerId, edit.original);
-      studio.updatePath(edit.layerId, edit.next);
-      directAnchorRef.current = null;
-      notify("Anchor moved");
+    if (activeTool === "direct-select" && pathPointEditorRef.current?.active) {
+      const p = eventToDoc(e);
+      pathPointEditorRef.current.end({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey }, e.type === "pointercancel");
       return;
     }
     if (retouchTool && retouchActive.current) {
@@ -1988,7 +1964,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
 
   const switchWorkspace = (next: WorkspaceMode) => {
     setPointDraft([]);
-    directAnchorRef.current = null;
+    pathPointEditorRef.current?.cancel();
     setWorkspace(next);
     selectInspectorTab("properties");
     const firstVisible = modeTools[next].find(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
@@ -1997,7 +1973,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
 
   const activateTool = (tool: Tool, nextWorkspace: WorkspaceMode = workspace) => {
     setPointDraft([]);
-    directAnchorRef.current = null;
+    pathPointEditorRef.current?.cancel();
     if (resolvedFocusState.scope?.target === "mask" && tool !== "mask-add" && tool !== "mask-remove") {
       setFocusState({
         ...resolvedFocusState,
@@ -4512,7 +4488,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     down: onPointerDown, move: onPointerMove, up: onPointerUp,
     // Only interrupt transactions with a proven rollback path. Never undo an
     // unrelated operation or cancel an already-committed one-shot tool.
-    canCancelTouch: () => Boolean(brushGestureRef.current || quickSelectionRef.current || dragRef.current?.shapeGesture || dragRef.current?.kind === "move-layer"),
+    canCancelTouch: () => Boolean(pathPointEditorRef.current?.active || brushGestureRef.current || quickSelectionRef.current || dragRef.current?.shapeGesture || dragRef.current?.kind === "move-layer"),
     cancel: event => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); },
   });
 
@@ -4777,6 +4753,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   onLostPointerCapture={(event) => {
                     const wasEditor = tabletCanvas.onLostPointerCapture(event);
                     if (tablet && !wasEditor) return;
+                    pathPointEditorRef.current?.cancel();
                     if (brushGestureRef.current) { studio?.cancelStroke(); brushGestureRef.current = null; }
                     if (quickSelectionRef.current) { studio?.cancelSelectionGesture(); quickSelectionRef.current = null; }
                   }}
@@ -4795,6 +4772,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                     display: "block",
                   }}
                 />
+                {studio && doc && displayViewport && activeTool === "direct-select" && activeLayer?.path && !activeLayer.locked && !activeLayer.path.booleanSource && !activeLayer.path.offsetSource && <PathPointEditor key={`${activeDocumentId}:${activeLayer.id}`} ref={pathPointEditorRef} studio={studio} layer={activeLayer} documentId={activeDocumentId!} viewport={displayViewport} phone={phone} notify={notify} />}
                 <div
                   ref={dynamicCursorRef}
                   className="dynamic-canvas-cursor"
@@ -5550,6 +5528,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Fill color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
                 </header>
                 <div style={{ padding: "0 12px 8px" }}>
+                  {activeLayer?.path && <button disabled={activeLayer.locked || Boolean(activeLayer.path.booleanSource || activeLayer.path.offsetSource)} onClick={() => activateTool("direct-select", "vector")} title={activeLayer.path.booleanSource || activeLayer.path.offsetSource ? "Expand the generated shape to editable contours first" : "Edit vector anchors and Bézier handles (D)"}>Edit Points</button>}
                   {studio && activeLayer && (activeLayer.path || activeLayer.shape) && <Suspense fallback={<span>Loading vector controls…</span>}>
                     <VectorConstructionPanel key={`${studio.activeDocumentState().id}:${activeLayer.id}`} studio={studio} layer={activeLayer} onSelect={setActiveLayerId} onNotify={notify} onSave={downloadOrSave} />
                   </Suspense>}

@@ -14,6 +14,7 @@
     "luma-affine.ts": "0d180e408e59ac71cffd8046ec7abc08e61900f68695fee79db16b1fb5c47595",
     "drawing-input.ts": "f88dfff5bfc7651b303bb4a4d0e2dab1c0db8dabdcf3a2de8d6e05eb58ce46f2",
     "frame-coalescer.ts": "632a969aa0e4e32c5302459225aad8090121be7eee9c4664a70d7f290559a637",
-    "drawing-diagnostics.ts": "187ba4d4d07261f8db8c5d24984e7a065cc5517ef57a60ae122eaed4259ef82b"
+    "drawing-diagnostics.ts": "187ba4d4d07261f8db8c5d24984e7a065cc5517ef57a60ae122eaed4259ef82b",
+    "path-editing.ts": "c42452235122743f834f63f8e46c973171912cd772ca9d4f3d47872328c10282"
   }
 }

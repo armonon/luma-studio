@@ -255,6 +255,9 @@ export const NEUTRAL_CURVES: Curves = {
 // Bezier path anchor for the pen tool. Each anchor stores its tangent handles
 // as offsets from the anchor point (Photoshop convention).
 export type PathAnchor = {
+  /** Stable editable identity; omitted by legacy/imported paths until edited. */
+  id?: string;
+  mode?: "corner" | "smooth" | "symmetric";
   x: number;
   y: number;
   hIn: { dx: number; dy: number };
