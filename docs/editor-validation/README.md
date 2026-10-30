@@ -9,3 +9,19 @@ Luma's heavy photo scene still has expensive synchronous CPU compositing. A cach
 The profiler is opt-in on 127.0.0.1 with `?drawingDiagnostics=1`. Start/stop controls collect event dispatch, requestAnimationFrame, phase and long-task distributions. It sends no telemetry and bounds retained samples. Production domains cannot enable it with this query parameter.
 
 Chrome describes attribution and its limits in [Long Animation Frames](https://developer.chrome.com/docs/web-platform/long-animation-frames). Worker, isolated-world and system scheduling costs are not fully attributed. Startup completed before manual capture; shader compilation and cold allocation were not independently timed.
+
+## Netlify browser vendor URL qualification — 2026-10-30
+
+The production artifact review found absolute build-machine URLs emitted by
+Webpack for `import.meta.url` in HarfBuzz, PDF.js, ONNX Runtime and Transformers
+browser bundles. Browser-only loaders now use the running page/worker URL for
+runtime fallback bases while retaining static `new URL(asset, import.meta.url)`
+expressions for Webpack's hashed WASM/worker emission. Node/server modules retain
+their original resolution. No dependency or runtime asset protection was changed.
+
+The font-loader test instantiates the installed HarfBuzz WASM under a browser-like
+VM with supplied binary data. Installed vendor checks preserve static asset
+references; PDF import/object and neural runtime tests validate explicit resource
+paths. Final public bundles must pass the local pathname/credential scan before
+deployment. Browser PDF/AI interaction on the hosted release remains a separate
+manual qualification gate, along with real pen/touch hardware and physical latency.
