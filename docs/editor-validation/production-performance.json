@@ -1,0 +1,117 @@
+{
+  "hardware": {
+    "cpu": "Apple M4",
+    "logicalCpus": 10,
+    "memoryGiB": 24,
+    "os": "Darwin 25.0.0 arm64"
+  },
+  "browser": {
+    "environment": "Codex in-app browser",
+    "ua": "Chrome/154.0.0.0",
+    "viewport": [
+      1280,
+      720
+    ],
+    "dpr": 2,
+    "observedRafMedianMs": 16.7,
+    "physicalRefreshRate": "not independently measured"
+  },
+  "method": "Built/minified desktop web editors, loopback HTTP. Manual local-only performance capture after opening the editor and selecting the tool. Each mouse drag uses two endpoints through the supported browser UI API; 9 observed move events per gesture, no additional coalesced hardware samples. Frames include tool round-trip gaps. Not physical pen latency, continuous high-density pen input, field INP, real touch or120Hz qualification.",
+  "form": {
+    "fixture": "Clean origins; Start sketching; two starter entities and identical30 Pencil strokes, (200,230+row*26) to(760,245+row*26),row=i%5. Matching834x650 CSS canvas. Previous baseline tab closed before repaired capture.",
+    "baselineCommit": "e55391f3b52d353ab188b6e9eb0778f01ad18dc2",
+    "baseline": {
+      "durationMs": 36199,
+      "gestures": 30,
+      "events": 270,
+      "samples": 270,
+      "frames": 1326,
+      "p50Ms": 16.7,
+      "p95Ms": 66.2,
+      "p99Ms": 265.8,
+      "maxMs": 1885.3,
+      "longTasks": 66,
+      "webglDraws": 1327,
+      "webglP99Ms": 247.7,
+      "webglMaxMs": 1880.7,
+      "releaseP50Ms": 34.4,
+      "releaseP95Ms": 76.2,
+      "releaseMaxMs": 77.7
+    },
+    "repaired": {
+      "durationMs": 13307,
+      "gestures": 30,
+      "events": 270,
+      "samples": 270,
+      "frames": 604,
+      "p50Ms": 16.7,
+      "p95Ms": 50,
+      "p99Ms": 149.7,
+      "maxMs": 266.7,
+      "longTasks": 2,
+      "webglDraws": 0,
+      "releaseP50Ms": 15.3,
+      "releaseP95Ms": 51.8,
+      "releaseMaxMs": 87.8
+    },
+    "attribution": "Baseline instrumented WebGL drawing and Chrome Long Animation Frames both identify the mounted but hidden Model viewport callback. Geometry calculations and history remain active; no source precision or final endpoints were removed. Cursor feedback no longer reconciles the whole workspace, and viewport prop identities remain stable.",
+    "limits": "One matched run per candidate, hardware/background load not isolated. No independent GPU shader compilation timeline; startup/cold-cache allocation may contribute to extremes. Embedded visible3D sketching, sustained high-density pen streams and large CAD documents remain unqualified. Repaired release p95 still exceeds a60Hz frame budget."
+  },
+  "luma": {
+    "heavyFixture": "Built production Dunes2200x1467, one raster and five tone layers,30 Brush strokes;270 moves/samples;823.609x525.609 CSS canvas.",
+    "baseline": {
+      "durationMs": 30242,
+      "frames": 1115,
+      "p50Ms": 16.7,
+      "p95Ms": 49.8,
+      "p99Ms": 183.3,
+      "maxMs": 3850,
+      "interactiveP50Ms": 19.7,
+      "interactiveP95Ms": 61.4,
+      "navigationP50Ms": 187.9,
+      "navigationMaxMs": 3855.3,
+      "longTasks": 36
+    },
+    "zoomBaseline": {
+      "cycles": 5,
+      "durationMs": 3777,
+      "p95Ms": 266.7,
+      "maxMs": 400,
+      "navigationP50Ms": 146.2,
+      "navigationMaxMs": 325.8,
+      "longTasks": 19
+    },
+    "revertedExperiment": {
+      "description": "Attempted document-space cache reuse across sparse edits and preview scales. Pixel tests passed, but runtime qualification failed; functional changes reverted and not published.",
+      "heavyDurationMs": 30902,
+      "heavyP95Ms": 50.7,
+      "interactiveP95Ms": 81.1,
+      "zoomDurationMs": 38563,
+      "zoomMaxMs": 13849.9,
+      "zoomNavigationMaxMs": 12674.4
+    },
+    "finalDrawing": {
+      "fixture": "1600x1067 Drawing qualification, two raster layers (one painted, one empty default). The initial scene label incorrectly said one layer; corrected after visible DOM verification.25 strokes225 moves/samples.",
+      "durationMs": 54613,
+      "frames": 1296,
+      "p50Ms": 16.7,
+      "p95Ms": 134.2,
+      "p99Ms": 552,
+      "maxMs": 781.3,
+      "viewportInteractiveP50Ms": 1.3,
+      "viewportInteractiveP95Ms": 1.9,
+      "workspaceRenderP50Ms": 347.7,
+      "workspaceRenderP95Ms": 664.3,
+      "releaseP50Ms": 310.5,
+      "releaseP95Ms": 605.3,
+      "longTasks": 67
+    },
+    "remaining": "Heavy full-quality synchronous CPU compositing and substantial React workspace refreshes in the drawing fixture remain unresolved. Published changes from this pass add diagnostics only; no Luma rendering performance improvement is claimed."
+  },
+  "toolLimits": [
+    "Only two-endpoint drag is exposed; no held-pointer arbitrary path/rate API or direct middle/Space-held pan stream. Keyboard zoom was measured; pan correctness is covered by mounted/unit tests, browser pan timing remains unmeasured.",
+    "Browser creation and one longer gesture batch timed out; interrupted embedded-sketch trace was excluded from matched results. No alternate browser-control mechanism was used.",
+    "Native screen inventory had reported locked Mac; no unlock or OS settings changes were attempted."
+  ],
+  "profilerReference": "https://developer.chrome.com/docs/web-platform/long-animation-frames"
+}

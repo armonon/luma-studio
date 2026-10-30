@@ -1,3 +1,4 @@
+import { beginDrawingPhase } from "../shared/drawing-diagnostics";
 import { selectLayerRange, selectedLayerTree, type LayerSelection, type LayerSelectionModifiers } from "./layer-selection";
 import { materializeImportedVectors } from "./vector-import-install";
 import {
@@ -537,6 +538,7 @@ export function isCompatibleApiVersion(declared: string, current = LUMA_API_VERS
 export class Studio {
   private smartContentEdits = new Map<string, { parentId: string; layerId: string; node: string; bitmap: HTMLCanvasElement }>();
   private readonly unsubscribeTextFonts = subscribeTextFonts(() => {
+    this.loadedFontRevision += 1;
     this.requestPresentationRender();
   });
   doc: Document;
@@ -630,6 +632,13 @@ export class Studio {
   private renderRevision = 0;
   // Fonts, viewports and focus invalidate preview caches, not document ownership.
   private presentationRenderRevision = 0;
+  private loadedFontRevision = 0;
+  /** Pan, zoom, remount and preview-quality changes must not discard content
+   * tiles. Their geometry/focus/color options are already in each cache key.
+   * Loaded/replaced font resources still invalidate actual composite pixels. */
+  private get compositeContentRevision() {
+    return this.renderRevision - this.presentationRenderRevision + this.loadedFontRevision;
+  }
   private actionRevision = 0;
   private layerHierarchyRevision = 0;
   private fullRenderPending = true;
@@ -870,6 +879,9 @@ export class Studio {
     if (this.renderQualityTimer !== null) window.clearTimeout(this.renderQualityTimer);
     this.renderQualityTimer = window.setTimeout(() => {
       this.renderQualityTimer = null;
+      // A held brush may pause between packets. Do not oscillate back to a
+      // costly full preview while its transaction is still open.
+      if (this.activeStroke) return;
       if (this.renderGovernor.restoreFullQuality()) this.requestPresentationRender();
     }, 180);
   }
@@ -929,15 +941,17 @@ export class Studio {
       const baseViewport = this.displayViewport ?? this.fallbackDisplayViewport();
       const governedViewport = this.renderGovernor.apply(baseViewport);
       const renderStartedAt = performance.now();
+      const finishViewportRender = beginDrawingPhase(`viewport-${workload}`);
       renderViewport(this.doc, this.target, governedViewport, {
-        cacheRevision: this.renderRevision,
+        cacheRevision: this.compositeContentRevision,
         hierarchyRevision: this.layerHierarchyRevision,
         dirtyRegions,
         channelView: this.channelView,
         focus: this.focusPreview,
       });
+      finishViewportRender();
       if (this.renderGovernor.record(performance.now() - renderStartedAt, workload)) {
-        this.requestRender();
+        this.requestPresentationRender();
       }
     });
   }
@@ -1205,7 +1219,7 @@ export class Studio {
           checkerboard: false,
           selectionOverlay: false,
           proofing: false,
-          cacheRevision: this.renderRevision,
+          cacheRevision: this.compositeContentRevision,
           hierarchyRevision: this.layerHierarchyRevision,
         });
       }
@@ -2456,7 +2470,7 @@ export class Studio {
         const canvas = newCanvas(tile.width, tile.height);
         renderViewport(this.doc, canvas, { x: tile.x, y: tile.y, width: tile.width, height: tile.height,
           outputWidth: tile.width, outputHeight: tile.height, zoom: 1, cssScale: 1, devicePixelRatio: 1 },
-        { checkerboard: false, selectionOverlay: false, proofing: false, cacheRevision: this.renderRevision, hierarchyRevision: this.layerHierarchyRevision });
+        { checkerboard: false, selectionOverlay: false, proofing: false, cacheRevision: this.compositeContentRevision, hierarchyRevision: this.layerHierarchyRevision });
         const data = canvas.getContext("2d")!.getImageData(0, 0, tile.width, tile.height).data;
         const alpha = new Uint8Array(tile.width * tile.height);
         const component = channel === "red" ? 0 : channel === "green" ? 1 : 2;
@@ -5045,7 +5059,7 @@ export class Studio {
         checkerboard: false,
         selectionOverlay: false,
         proofing: false,
-        cacheRevision: this.renderRevision,
+        cacheRevision: this.compositeContentRevision,
         hierarchyRevision: this.layerHierarchyRevision,
       });
     }
@@ -5102,7 +5116,7 @@ export class Studio {
         checkerboard: false,
         selectionOverlay: false,
         proofing: false,
-        cacheRevision: this.renderRevision,
+        cacheRevision: this.compositeContentRevision,
         hierarchyRevision: this.layerHierarchyRevision,
       });
     }
@@ -5365,6 +5379,7 @@ export class Studio {
       this.lastPoint = null;
       this.paintSegmentState = null;
       this.requestRender();
+      this.scheduleFullQualityPreview();
     }
   }
 
@@ -5383,6 +5398,7 @@ export class Studio {
       this.finishStroke(layerId, params);
     }
     catch (error) { this.cancelStroke(); throw error; }
+    finally { if (!this.activeStroke) this.scheduleFullQualityPreview(); }
   }
 
   private finishStroke(layerId: string, params: BrushParams) {
@@ -6129,7 +6145,7 @@ export class Studio {
       checkerboard: false,
       selectionOverlay: false,
       proofing: false,
-      cacheRevision: this.renderRevision,
+      cacheRevision: this.compositeContentRevision,
       hierarchyRevision: this.layerHierarchyRevision,
     });
     const image = await canvasToBlob(composite);
