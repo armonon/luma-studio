@@ -1,3 +1,4 @@
+import { beginDrawingPhase } from "../shared/drawing-diagnostics";
 import { selectLayerRange, selectedLayerTree, type LayerSelection, type LayerSelectionModifiers } from "./layer-selection";
 import { materializeImportedVectors } from "./vector-import-install";
 import {
@@ -932,6 +933,7 @@ export class Studio {
       const baseViewport = this.displayViewport ?? this.fallbackDisplayViewport();
       const governedViewport = this.renderGovernor.apply(baseViewport);
       const renderStartedAt = performance.now();
+      const finishViewportRender = beginDrawingPhase(`viewport-${workload}`);
       renderViewport(this.doc, this.target, governedViewport, {
         cacheRevision: this.renderRevision,
         hierarchyRevision: this.layerHierarchyRevision,
@@ -939,6 +941,7 @@ export class Studio {
         channelView: this.channelView,
         focus: this.focusPreview,
       });
+      finishViewportRender();
       if (this.renderGovernor.record(performance.now() - renderStartedAt, workload)) {
         this.requestRender();
       }

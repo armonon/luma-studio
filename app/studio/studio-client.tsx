@@ -1,5 +1,5 @@
 "use client";
-import {mountDrawingDiagnostics} from "../shared/drawing-diagnostics";
+import {mountDrawingDiagnostics, beginDrawingPhase} from "../shared/drawing-diagnostics";
 import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
@@ -31,6 +31,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -336,6 +337,8 @@ function formatBytes(bytes: number) {
 export default function SpatialStudio({ desktop = false, tabletMode = false, phoneMode = false }: { desktop?: boolean; tabletMode?: boolean; phoneMode?: boolean }) {
   const { tablet: detectedTablet, phone, drawWithTouch, toggleFingerDrawing } = useTabletWorkspace(phoneMode);
   const tablet = tabletMode || detectedTablet;
+  const finishWorkspaceRender = beginDrawingPhase("workspace-render-to-layout");
+  useLayoutEffect(() => { finishWorkspaceRender(); });
   useEffect(()=>{if(window.location.hostname!=="127.0.0.1"||!new URLSearchParams(window.location.search).has("drawingDiagnostics"))return;return mountDrawingDiagnostics(document,'canvas');},[]);
   const [tabletPanel, setTabletPanel] = useState<PanelId | null>(null);
   const [phoneFocus, setPhoneFocus] = useState(false);
