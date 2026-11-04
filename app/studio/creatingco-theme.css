@@ -1,0 +1,263 @@
+/*
+ * Luma Studio / The Creating Co — editorial workspace refresh.
+ * Scoped to the real AppShell, not the marketing site or the engine canvases.
+ * Purposefully preserves tablet/phone presentation; those have their own CSS.
+ * Add AFTER workspace.css, tablet-workspace.css and phone-workspace.css.
+ */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+  --ui-bg: #10141d;
+  --ui-panel: #1b202b;
+  --ui-raised: #252c39;
+  --ui-field: #161b25;
+  --ui-border: #303746;
+  --ui-text: #eef1f8;
+  --ui-muted: #a0aabc;
+  --ui-accent: #98aefb;
+  --ui-selected: #303e63;
+  --studio-line: #303746;
+  --studio-line-strong: #4a5366;
+  --studio-text: #eef1f8;
+  --studio-text-muted: #a0aabc;
+  --cc-window: #191d27;
+  --cc-bar: #222735;
+  --cc-canvas: #0b0e15;
+  --cc-depth: #080b11;
+  --cc-on-accent: #0d1732;
+  --cc-glow: #91a8fc1f;
+  color-scheme: dark;
+  background: var(--cc-depth);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] {
+  --ui-bg: #eef0f5;
+  --ui-panel: #f8f9fc;
+  --ui-raised: #e8ecf4;
+  --ui-field: #f1f3f8;
+  --ui-border: #d5dbe7;
+  --ui-text: #252b37;
+  --ui-muted: #647085;
+  --ui-accent: #4569d9;
+  --ui-selected: #dbe5fe;
+  --studio-line: #d5dbe7;
+  --studio-line-strong: #a7b2c6;
+  --studio-text: #252b37;
+  --studio-text-muted: #647085;
+  --cc-window: #f4f6fa;
+  --cc-bar: #ffffff;
+  --cc-canvas: #dce2ec;
+  --cc-depth: #cfd6e4;
+  --cc-on-accent: #fff;
+  --cc-glow: #6d8bf12c;
+  color-scheme: light;
+}
+
+/* A contained desktop window instead of a wall of tightly packed controls. */
+@media (min-width: 900px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+    padding: 6px;
+    background: radial-gradient(ellipse at 19% 0%, #5360a725, transparent 47%),
+                radial-gradient(ellipse at 86% 100%, #7b5c9221, transparent 39%), var(--cc-depth);
+  }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) > .spatial-window {
+    border: 1px solid var(--ui-border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 24px 65px #0006, inset 0 1px #ffffff12;
+    grid-template-rows: 56px minmax(0, 1fr) 26px;
+    background: var(--cc-window);
+  }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-titlebar.spatial-topbar {
+    min-height: 56px;
+    height: 56px;
+    padding-inline: 18px;
+    background: linear-gradient(180deg, #ffffff0c, transparent 85%), var(--cc-bar);
+  }
+}
+
+/* Confident titlebar identity, calmer typography, restrained primary action. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-brand-area { gap: 10px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-app-mark {
+  width: 32px; height: 32px; min-width: 32px;
+  border: 1px solid #c5baff87; border-radius: 50%; color: transparent; font-size: 0;
+  background: radial-gradient(circle at 48% 50%, #111629 0 27%, transparent 30%),
+              conic-gradient(from 28deg, #80bdf8, #a18efd, #7e69cc, #c6b0f7, #80bdf8);
+  box-shadow: inset 0 0 0 4px #1b2236, 0 0 0 3px #777cf714;
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-app-mark:hover {
+  transform: scale(1.05); box-shadow: inset 0 0 0 4px #1b2236, 0 0 0 5px var(--cc-glow);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-product-name {
+  font-weight: 670; font-size: 14px; letter-spacing: -.025em;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title { flex: 1 1 auto; text-align: center; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title strong { font-size: 12px; font-weight: 620; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title span { font-size: 10px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-share-actions { gap: 7px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export {
+  height: 35px; padding-inline: 17px; border: 1px solid #afbcff6b;
+  border-radius: 10px; color: #0e1837; background: linear-gradient(140deg, #c1c9ff, #91abff 72%);
+  box-shadow: 0 3px 12px #7694ed27; font-size: 12px; font-weight: 700;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export:hover:not(:disabled) { filter: brightness(1.08); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.studio-icon-button,.studio-header-button,.studio-app-menu summary) {
+  border-radius: 9px; min-width: 32px; height: 32px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button { border-color: var(--ui-border); padding-inline: 10px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-zoom-readout { color: var(--ui-text); }
+
+/* Actual workspace selector; every item dispatches to the current Studio engine. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation {
+  position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 3px;
+  border: 1px solid var(--ui-border); background: var(--ui-field);
+  padding: 3px; border-radius: 12px; margin-left: 16px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher { display: flex; align-items: center; gap: 2px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button {
+  border: 0; background: transparent; color: var(--ui-muted); min-height: 30px; min-width: 61px;
+  border-radius: 8px; padding: 0 11px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
+  transition: background .16s ease, color .16s ease;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button:hover { background: var(--ui-raised); color: var(--ui-text); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button.active {
+  color: var(--ui-text); background: linear-gradient(150deg, #abb9ff36, #7e87eb19), var(--ui-raised);
+  box-shadow: inset 0 0 0 1px #b2bffa38, 0 2px 8px #0002;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu { position: relative; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary {
+  list-style: none; display: grid; place-items: center; width: 28px; height: 30px;
+  border-radius: 8px; color: var(--ui-muted); cursor: pointer;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary::-webkit-details-marker { display: none; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary:hover { color: var(--ui-text); background: var(--ui-raised); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content {
+  position: absolute; top: calc(100% + 12px); left: -100px; z-index: 999;
+  min-width: 220px; padding: 6px; border-radius: 13px; border: 1px solid var(--ui-border);
+  background: var(--ui-panel); box-shadow: 0 18px 40px #0009, inset 0 1px #ffffff0d;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading { display: grid; gap: 3px; padding: 11px; border-bottom: 1px solid var(--ui-border); margin-bottom: 5px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading strong { font-size: 12px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading small { font-size: 11px; color: var(--ui-muted); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content > button {
+  width: 100%; min-height: 34px; border: 0; border-radius: 8px; text-align: left; padding: 0 10px;
+  background: transparent; color: var(--ui-text); font-size: 12px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content > button:hover { background: var(--ui-selected); }
+
+/* Studio chrome. Keep viewport rendering independent of decoration. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-workspace { background: var(--ui-bg); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-toolbar {
+  background: var(--ui-panel); padding: 12px 7px; border-color: var(--ui-border);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories { gap: 5px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button {
+  border-radius: 10px; min-height: 39px; height: 39px; width: 41px; flex-basis: 39px;
+  color: var(--ui-muted);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button:hover { background: var(--ui-raised); color: var(--ui-text); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button.active {
+  background: linear-gradient(135deg, #b1c0ff36, #6d88ed1a), var(--ui-selected);
+  border-color: #acbaff5b; color: #d0dbff; box-shadow: inset 0 1px #ffffff19;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-contextbar {
+  background: var(--ui-panel); border-color: var(--ui-border); padding-inline: 16px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs {
+  background: var(--ui-field); border-color: var(--ui-border); gap: 4px; padding: 0 6px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs > div {
+  border: 0; border-radius: 7px 7px 0 0; padding-left: 12px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs > div.active {
+  background: var(--ui-panel); box-shadow: inset 0 2px var(--ui-accent);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-canvas-stage {
+  background: radial-gradient(ellipse at 50% 0%, #62728b15, transparent 80%), var(--cc-canvas);
+  padding: clamp(12px, 2vw, 28px);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-stack,.dock-group,.dock-floating-panel,.spatial-inspector) {
+  background: var(--ui-panel); border-color: var(--ui-border);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabbar {
+  background: var(--ui-panel); min-height: 41px; height: 41px; flex-basis: 41px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabs button[role="tab"] {
+  min-height: 39px; padding-inline: 12px; color: var(--ui-muted);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabs > div.active {
+  border: 0; background: var(--ui-panel); box-shadow: inset 0 2px var(--ui-accent);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-floating-panel,.studio-app-menu > div,.studio-export-popover) {
+  border-radius: 12px; box-shadow: 0 16px 42px #0006;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(input:not([type="range"]),select,textarea) {
+  accent-color: var(--ui-accent);
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(button,select,input,textarea,summary):focus-visible {
+  outline: 2px solid var(--ui-accent); outline-offset: 2px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-stack,.spatial-toolbar,.creatingco-space-menu-content) { scrollbar-color: #7783a488 transparent; }
+
+/* Light appearance: explicit overrides for the historical dark hard-coded surfaces. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] :is(.spatial-canvas-stage,.spatial-document-tabs,.spatial-toolbar,.studio-contextbar,.dock-tabbar,.studio-titlebar.spatial-topbar) { color: var(--ui-text); }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .spatial-export {
+  background: linear-gradient(140deg, #436bdc, #6784e9); border-color: #3359c9; color: white;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .primary-tool-categories > button.active { color: #2b4caa; border-color: #a9bdf5; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .studio-product-name { color: var(--ui-text); }
+
+/* Restrained layout for narrower desktop and landscape tablet. */
+@media (max-width: 1350px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button span { display: none; }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button { min-width: 32px; padding-inline: 8px; }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation { margin-left: 6px; }
+}
+@media (max-width: 1080px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button { min-width: 46px; padding-inline: 9px; }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title { min-width: 70px; flex: 1 1 70px; }
+}
+@media (max-width: 760px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation { display: none; }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-appearance-toggle { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.studio-app-mark,.creatingco-space-switcher > button) { transition: none; }
+}
+@media (forced-colors: active) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button.active { outline: 1px solid Highlight; }
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export { border: 1px solid ButtonText; }
+}
+
+/* Compact editorial byline, intentionally secondary to the project title. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup { display: grid; gap: 1px; min-width: 98px; }
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup small { color: var(--ui-muted); font-size: 9px; letter-spacing: .015em; white-space: nowrap; }
+@media (max-width: 1250px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup small { display: none; }
+}
+
+/* Keep the real document name and save state available on smaller laptops. */
+@media (max-width: 1080px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup { display: none; }
+}
+/* The existing titlebar uses a three-column grid. These four regions share one
+   flex row so application actions cannot wrap over the tool options. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-titlebar.spatial-topbar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title strong {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Legacy typography tabs hard-code pale text even in light appearance. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .type-studio-tabs button:is(.active,:hover) {
+  color: var(--ui-text);
+  border-bottom-color: var(--ui-accent);
+}

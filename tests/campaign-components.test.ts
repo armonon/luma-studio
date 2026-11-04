@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { GlobalFonts } from "@napi-rs/canvas";
 import { testCanvas, solidCanvas, pixelAt } from "./canvas-harness";
 import { Studio } from "../app/engine/studio";
@@ -11,7 +12,7 @@ import { decodeLumaProject } from "../app/engine/project";
 import { renderClean, renderViewport } from "../app/engine/renderer";
 import { mapComponentMasks } from "../app/engine/campaign-components";
 
-for(const family of ["Noto Sans Arabic","Noto Sans Hebrew","Lato"])GlobalFonts.registerFromPath(new URL(`../public/fonts/${bundledFontFace(family).file}`,import.meta.url).pathname,family);
+for(const family of ["Noto Sans Arabic","Noto Sans Hebrew","Lato"])GlobalFonts.registerFromPath(fileURLToPath(new URL(`../public/fonts/${bundledFontFace(family).file}`,import.meta.url)),family);
 
 test("nested masked/clipped components synchronize membership, ordering, editable content and identity with undo/reopen",async()=>{
  const s=new Studio(1080,1080,testCanvas(32,32)),r=new Studio(2,2,testCanvas(2,2));try{

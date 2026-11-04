@@ -213,6 +213,7 @@ import {
   dynamicCursorPresentation,
 } from "./dynamic-cursor";
 import { createCommandRegistry } from "./command-registry";
+import { creativeSpaceForWorkspace, spaceDestination, actionDestination, type CreativeSpace } from "./creatingco-spaces";
 import { commandForShortcut } from "../desktop/command-shortcuts";
 import { createMenuStatePublisher, publishNativeMenuState } from "../desktop/native-menu";
 import {
@@ -401,6 +402,18 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [loadedPhotoshopReport, setLoadedPhotoshopReport] = useState<PhotoshopCompatibilityReport | null>(null);
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPresentation.workspace);
+  const [creativeSpace, setCreativeSpace] = useState<CreativeSpace>(() => creativeSpaceForWorkspace(initialPresentation.workspace));
+  const creativeSpaceState = useRef<Partial<Record<CreativeSpace, {
+    tool: Tool;
+    workspace: WorkspaceMode;
+    dockLayout: DockLayout;
+    inspectorTab: "layers" | "properties" | "ai";
+    panelOverride: ContextualPanelId | null;
+  }>>>({});
+  const [uiAppearance, setUiAppearance] = useState<"dark" | "light">("dark");
+  useEffect(() => {
+    try { if (window.localStorage.getItem("luma-creatingco-appearance") === "light") setUiAppearance("light"); } catch { /* blocked storage */ }
+  }, []);
   const [activeTool, setActiveTool] = useState<Tool>(initialPresentation.tool);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
   const [dockLayout, setDockLayout] = useState<DockLayout>(() => defaultDockLayout());
@@ -4493,7 +4506,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   });
 
   return (
-    <AppShell tablet={tablet} phone={phone} focus={phone && phoneFocus}>
+    <AppShell tablet={tablet} phone={phone} focus={phone && phoneFocus} appearance={uiAppearance}>
       {phone && phoneFocus && <button className="phone-focus-exit" onClick={() => setPhoneFocus(false)}>Show controls</button>}
       <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
@@ -4504,6 +4517,35 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         <ShellErrorBoundary title="Application controls" onSave={() => { void saveProject(); }}>
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
+            creativeSpace={creativeSpace}
+            onCreativeSpaceChange={(space) => {
+              if (space === creativeSpace) return;
+              // Keep each space's tools and panels without changing document or view state.
+              creativeSpaceState.current[creativeSpace] = { tool: activeTool, workspace, dockLayout, inspectorTab, panelOverride: nativePanelOverride };
+              const remembered = creativeSpaceState.current[space];
+              const next = remembered ?? spaceDestination(space);
+              setCreativeSpace(space);
+              setNativePanelOverride(remembered?.panelOverride ?? null);
+              if (next.tool && next.workspace) activateTool(next.tool, next.workspace);
+              if (remembered) {
+                setDockLayout(remembered.dockLayout);
+                setInspectorTab(remembered.inspectorTab);
+              } else {
+                const panel = spaceDestination(space).panel;
+                if (panel) openStudioPanel(panel);
+              }
+            }}
+            onCreativeAction={(action) => {
+              const next = actionDestination(action);
+              setNativePanelOverride(null);
+              if (next.tool && next.workspace) activateTool(next.tool, next.workspace);
+              if (next.panel) openStudioPanel(next.panel);
+            }}
+            appearance={uiAppearance}
+            onAppearanceChange={next => {
+              setUiAppearance(next);
+              try { window.localStorage.setItem("luma-creatingco-appearance", next); } catch { /* blocked storage */ }
+            }}
             desktop={desktop}
             phone={phone}
             onFocusCanvas={() => { setPhoneFocus(true); setTabletPanel(null); }}

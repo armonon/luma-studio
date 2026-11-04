@@ -1,8 +1,10 @@
 "use client";
 import { saveStatusLabel } from "./save-status";
+import { CreativeSpaceSwitcher, CreativeAppearanceToggle } from "./creatingco-space-switcher";
+import type { CreativeSpace, SpaceAction } from "./creatingco-spaces";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft, Users } from "lucide-react";
+import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft, Users, History } from "lucide-react";
 import type { StudioCommand } from "../desktop/menu-model";
 
 export default function StudioTitlebar({
@@ -26,6 +28,11 @@ export default function StudioTitlebar({
   suiteMenu = false,
   onFocusCanvas,
   recoveryUnavailable = false,
+  creativeSpace = "create",
+  onCreativeSpaceChange,
+  onCreativeAction,
+  appearance = "dark",
+  onAppearanceChange,
 }: {
   desktop: boolean;
   phone?: boolean;
@@ -48,6 +55,11 @@ export default function StudioTitlebar({
   suiteMenu?: boolean;
   onFocusCanvas?: () => void;
   recoveryUnavailable?: boolean;
+  creativeSpace?: CreativeSpace;
+  onCreativeSpaceChange?: (space: CreativeSpace) => void;
+  onCreativeAction?: (action: SpaceAction) => void;
+  appearance?: "dark" | "light";
+  onAppearanceChange?: (appearance: "dark" | "light") => void;
 }) {
   const menuRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
@@ -70,9 +82,12 @@ export default function StudioTitlebar({
       <div className="studio-brand-area">
         {suiteMenu && !suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         <button className="studio-app-mark" onClick={onBack} aria-label="Back to Luma home">L</button>
-        <strong className="studio-product-name">Luma</strong>
+        <span className="creatingco-brand-lockup"><strong className="studio-product-name">Luma Studio</strong><small>by The Creating Co.</small></span>
       </div>
 
+      {!phone && !tabletControls && onCreativeSpaceChange && onCreativeAction && (
+        <CreativeSpaceSwitcher value={creativeSpace} onChange={onCreativeSpaceChange} onAction={onCreativeAction} />
+      )}
       <div className="studio-project-title">
         <strong>{projectName}</strong>
         <span aria-live="polite">{saveStatusLabel(saveState, dirty, projectSaving)}</span>
@@ -84,6 +99,7 @@ export default function StudioTitlebar({
         {onReview && !phone && <button className="studio-icon-button" onClick={onReview} title="Shared layer editing (alpha)" aria-label="Start shared editing"><Users size={16} /></button>}
         {tabletControls && <div className="tablet-title-controls">{tabletControls}</div>}
         {phone && <button className="studio-icon-button studio-phone-save" onClick={() => onCommand("save")} aria-label="Save project" aria-describedby="phone-save-status" title={`Save project · ${saveStatusLabel(saveState, dirty, projectSaving)}`} aria-busy={projectSaving} data-save-state={saveState === "error" ? "error" : dirty ? "dirty" : "clean"} disabled={projectSaving || !commandEnabled("save")}><Save /><i aria-hidden="true" /></button>}
+        {!phone && !tabletControls && <button className="studio-icon-button creatingco-history-button" onClick={() => onCommand("history")} title="Version history" aria-label="Open version history" disabled={!commandEnabled("history")}><History size={16} /></button>}
         <button className="studio-header-button studio-workspace-button" onClick={() => onCommand("workspace-settings")} title="Workspaces & shortcuts" aria-label="Workspaces & shortcuts" disabled={!commandEnabled("workspace-settings")}><PanelsTopLeft size={15} /><span>Workspace</span></button>
         <span className="studio-action-divider" />
         <button className="studio-icon-button" onClick={() => onCommand("undo")} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo || !commandEnabled("undo")}><Undo2 /></button>
@@ -126,6 +142,7 @@ export default function StudioTitlebar({
             {onInstall && <><hr /><button onClick={() => run(onInstall)}><span>Install Luma app</span><kbd>offline</kbd></button></>}
           </div>
         </details>
+        {!phone && !tabletControls && onAppearanceChange && <CreativeAppearanceToggle value={appearance} onChange={onAppearanceChange} />}
         <button className={`spatial-export ${exportOpen ? "active" : ""}`} onClick={() => onCommand("export")} aria-haspopup="dialog" aria-expanded={exportOpen} disabled={!commandEnabled("export")}>
           Export <ChevronDown />
         </button>
