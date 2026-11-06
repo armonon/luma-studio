@@ -7,10 +7,12 @@ const registeredPanels = [
   "layers-panel.tsx",
   "operational-panels.tsx",
   "properties-panel.tsx",
+  "history-panel.tsx",
   "project-panels.tsx",
   "document-panel.tsx",
 ].map((file) => readFileSync(new URL(`../app/studio/panels/${file}`, import.meta.url), "utf8")).join("\n");
-const commandSurfaces = `${page}\n${registeredPanels}`;
+const titlebar = readFileSync(new URL("../app/studio/studio-titlebar.tsx", import.meta.url), "utf8");
+const commandSurfaces = `${page}\n${titlebar}\n${registeredPanels}`;
 const focusPanel = readFileSync(new URL("../app/studio/layer-focus-panel.tsx", import.meta.url), "utf8");
 const layerEditors = readFileSync(new URL("../app/studio/layer-editors.tsx", import.meta.url), "utf8");
 const layerStack = readFileSync(new URL("../app/studio/virtual-layer-stack.tsx", import.meta.url), "utf8");
@@ -43,7 +45,8 @@ test("layer rows expose keyboard selection and real visibility/delete buttons", 
   assert.match(layerStack, /role="option"/);
   assert.match(layerStack, /onKeyDown=/);
   assert.match(layerStack, /className="spatial-layer-visibility"/);
-  assert.match(layerStack, /aria-label=\{`\$\{layer\.visible \? "Hide" : "Show"\}/);
+  assert.match(layerStack, /aria-label=\{`\$\{layer\.name\} visible`\}/);
+  assert.match(layerStack, /aria-pressed=\{layer\.visible\}/);
   assert.match(layerStack, /className="spatial-layer-delete"/);
   assert.doesNotMatch(layerStack, /<i[^>]+spatial-layer-delete/);
 });

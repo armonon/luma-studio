@@ -100,8 +100,8 @@ export default function PropertiesPanel({
       <LayerThumbnail layer={activeLayer} />
       <span className="inspector-focus-name"><strong>{activeLayer?.name ?? "Canvas"}</strong><small>{activeLayer ? activeLayer.kind.replaceAll("-", " ") : `${documentWidth} × ${documentHeight}`}</small></span>
       {activeLayer && <div className="inspector-focus-actions">
-        <button type="button" aria-label={activeLayer.visible ? "Hide selected layer" : "Show selected layer"} aria-pressed={activeLayer.visible} title={activeLayer.visible ? "Hide layer" : "Show layer"} onClick={() => onSetLayerVisible(activeLayer.id, !activeLayer.visible)}>{activeLayer.visible ? <Eye size={16} /> : <EyeOff size={16} />}</button>
-        <button type="button" aria-label={activeLayer.locked ? "Unlock selected layer" : "Lock selected layer"} aria-pressed={Boolean(activeLayer.locked)} title={activeLayer.locked ? "Unlock layer" : "Lock layer"} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>{activeLayer.locked ? <LockKeyhole size={16} /> : <UnlockKeyhole size={16} />}</button>
+        <button type="button" aria-label="Selected layer visible" aria-pressed={activeLayer.visible} title={activeLayer.visible ? "Hide layer" : "Show layer"} onClick={() => onSetLayerVisible(activeLayer.id, !activeLayer.visible)}>{activeLayer.visible ? <Eye size={16} /> : <EyeOff size={16} />}</button>
+        <button type="button" aria-label="Selected layer locked" aria-pressed={Boolean(activeLayer.locked)} title={activeLayer.locked ? "Unlock layer" : "Lock layer"} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>{activeLayer.locked ? <LockKeyhole size={16} /> : <UnlockKeyhole size={16} />}</button>
         <button type="button" aria-label="Focus selected layer" title="Focus layer" onClick={() => onFocusLayer(activeLayer.id)}><Focus size={16} /></button>
       </div>}
     </div>

@@ -56,6 +56,18 @@
 .spatial-studio .panel-workspace-picker select { width: 100%; min-height: 36px; padding: 6px 10px; border: 1px solid var(--ui-border); border-radius: 7px; color: var(--ui-text); background: var(--ui-field); font-size: 12px; }
 .spatial-studio .panel-workspace-close { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-raised); color: var(--ui-text); cursor: pointer; }
 .spatial-studio .panel-workspace-close:hover { background: var(--ui-hover); }
+.spatial-studio .panel-workspace-compact { flex: 0 0 auto; min-height: 36px; padding: 7px 12px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-field); color: var(--ui-text); cursor: pointer; }
+.spatial-studio .panel-workspace-compact:hover { background: var(--ui-hover); }
+
+.spatial-studio .compact-history { display: flex; flex-direction: column; min-height: 100%; color: var(--ui-text); }
+.spatial-studio .compact-history > header { display: flex; justify-content: space-between; gap: 8px; padding: 16px 14px 10px; font-size: 13px; }
+.spatial-studio .compact-history > header span { color: var(--ui-muted); font-size: 11px; }
+.spatial-studio .compact-history > ol { display: grid; gap: 6px; margin: 0; padding: 0 14px; list-style: none; }
+.spatial-studio .compact-history > ol li { display: flex; justify-content: space-between; gap: 8px; padding: 10px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-field); font-size: 12px; }
+.spatial-studio .compact-history > ol small, .spatial-studio .compact-history > p { color: var(--ui-muted); }
+.spatial-studio .compact-history > p { margin: 0 14px 12px; padding: 12px; border: 1px dashed var(--ui-border); border-radius: 7px; font-size: 12px; }
+.spatial-studio .compact-history-open { align-self: stretch; min-height: 36px; margin: 12px 14px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-raised); color: var(--ui-text); cursor: pointer; }
+.spatial-studio .compact-history .spatial-view-dock { margin-top: auto; }
 
 .spatial-studio .panel-workspace-related { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; min-height: 42px; padding: 5px 24px; overflow-x: auto; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); white-space: nowrap; }
 .spatial-studio .panel-workspace-related span { margin-right: 4px; color: var(--ui-muted); font-size: 11px; }
@@ -100,12 +112,11 @@
 .spatial-studio .panel-workspace[data-panel="layers"] .layer-selection-summary { grid-column: 1; grid-row: 3; }
 
 .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-content.dock-panel-body {
-  display: grid;
-  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr);
-  align-content: start;
+  display: block;
   overflow: auto;
 }
-.spatial-studio .panel-workspace[data-panel="properties"] .inspector-focus { align-self: start; align-content: start; position: sticky; top: 0; min-height: 100%; padding: 26px 20px; border-right: 1px solid var(--ui-border); border-bottom: 0; background: var(--ui-panel); }
+.spatial-studio .panel-workspace[data-panel="properties"] .inspector-focus { min-height: 100%; padding: 26px; border: 0; background: var(--ui-panel); }
+.spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview { flex-basis: min(28%, 320px); }
 .spatial-studio .panel-workspace[data-panel="properties"] .inspector-focus-heading { display: grid; justify-content: start; gap: 3px; }
 .spatial-studio .panel-workspace[data-panel="properties"] .inspector-focus-heading strong { font-size: 19px; }
 .spatial-studio .panel-workspace[data-panel="properties"] .inspector-focus-target { grid-template-columns: 48px minmax(0, 1fr); gap: 12px; padding: 12px; }
@@ -165,4 +176,36 @@
   .spatial-studio .panel-workspace-picker span { display: none; }
   .spatial-studio .panel-workspace-picker select { min-height: 40px; }
   .spatial-studio .panel-workspace-close { order: 2; }
+}
+
+/* Phone tool options keep one immediate control and expose the rest in a sheet. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-form-factor="phone"] {
+  & .spatial-share-actions { grid-template-columns: repeat(6, minmax(0, 40px)) minmax(68px, 1fr); }
+  & .spatial-export { min-width: 0; padding-inline: 6px; }
+  & .studio-contextbar { display: flex; align-items: center; overflow: visible; }
+  & .studio-context-identity { flex: 0 0 auto; max-width: 112px; }
+  & .studio-context-identity > div small:not(.phone-options-hint) { display: none; }
+  & .phone-all-settings { order: 3; flex: 0 0 auto; min-height: 40px; margin-left: auto; padding: 0 9px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-raised); color: var(--ui-text); font-size: 12px; white-space: nowrap; }
+  & .phone-primary-control { order: 2; flex: 1 1 auto; min-width: 0; max-width: 140px; min-height: 40px; padding: 0 6px; border: 1px solid var(--ui-border); border-radius: 7px; background: var(--ui-field); color: var(--ui-text); font-size: 12px; }
+  & .phone-primary-number { display: flex; align-items: center; gap: 4px; }
+  & .phone-primary-number input { width: 60px; min-width: 0; color: var(--ui-text); background: var(--ui-field); }
+  & .studio-contextbar:not([data-phone-options-open="true"]) .studio-context-controls { order: 2; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  & .studio-contextbar:not([data-phone-options-open="true"]) .studio-context-controls > * { display: none; }
+  & .studio-contextbar[data-tool-mode="paint"]:not([data-phone-options-open="true"]) .studio-context-controls > [data-option="size"] { display: grid; flex: 1 1 auto; min-width: 100px; grid-template-columns: auto minmax(45px, 1fr) auto !important; }
+  & .studio-contextbar[data-tool-mode="paint"]:not([data-phone-options-open="true"]) .studio-context-controls > [data-option="opacity"] { display: none !important; }
+  & .studio-contextbar[data-tool-mode="paint"]:not([data-phone-options-open="true"]) .studio-context-controls > [data-option="size"] input[type="range"] { width: 100%; min-width: 0; }
+  & .studio-contextbar:not([data-phone-options-open="true"]) .studio-context-actions { display: none; }
+  & .phone-tool-settings-scrim { position: fixed; z-index: 690; inset: 0; border: 0; background: var(--ui-overlay); }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-all-settings { position: fixed; z-index: 702; right: 20px; bottom: calc(env(safe-area-inset-bottom) + min(72dvh, 540px) - 48px); }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-controls { position: fixed; z-index: 700; left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; align-items: stretch; gap: 14px; width: auto; height: min(72dvh, 540px); box-sizing: border-box; padding: 58px 18px 20px; overflow-x: hidden; overflow-y: auto; border: 1px solid var(--ui-border); border-radius: 14px; background: var(--ui-panel); box-shadow: 0 18px 48px #0008; }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-controls > * { flex: 0 0 auto; }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-controls > .context-range { display: grid; grid-template-columns: 78px minmax(0, 1fr) 48px !important; gap: 10px !important; min-height: 44px; }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-controls > .context-range input[type="range"] { width: 100%; min-width: 0; }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-controls > .context-color { width: 52px; }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-extra-settings { display: grid; gap: 14px; padding-top: 14px; border-top: 1px solid var(--ui-border); }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-extra-settings > header { font-size: 14px; }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-extra-settings .context-range { display: grid; grid-template-columns: 78px minmax(0, 1fr) 48px !important; gap: 10px !important; min-height: 44px; }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-extra-settings .context-range input[type="range"] { width: 100%; min-width: 0; }
+  & .studio-contextbar[data-phone-options-open="true"] .phone-extra-settings .context-select { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 10px; }
+  & .studio-contextbar[data-phone-options-open="true"] .studio-context-actions { display: none; }
 }

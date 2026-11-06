@@ -9,7 +9,7 @@ type WorkspaceDefinition = Readonly<{
 /** Expanded views use the same editor panels; this describes how they connect. */
 export const PANEL_WORKSPACES = {
   layers: { description: "Organize, blend, and refine the document stack.", related: ["properties", "mask", "structure"], preview: true },
-  properties: { description: "Inspect the selection and tune its current tool.", related: ["layers", "transform", "paint"], preview: true },
+  properties: { description: "Inspect the selection and refine its appearance.", related: ["layers", "transform", "paint"], preview: true },
   neural: { description: "Set a target, compare results, and refine an AI edit.", related: ["selection", "mask", "history"], preview: true },
   document: { description: "Manage document size, color, proofing, and output intent.", related: ["channels", "campaign", "measure"], preview: true },
   channels: { description: "Inspect channels and build reusable alpha selections.", related: ["selection", "mask", "document"], preview: true },

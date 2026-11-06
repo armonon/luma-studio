@@ -198,7 +198,7 @@ export default function VirtualLayerStack({
                   <button
                     type="button"
                     className="spatial-layer-visibility"
-                    aria-label={`${layer.visible ? "Hide" : "Show"} ${layer.name}`}
+                    aria-label={`${layer.name} visible`}
                     aria-pressed={layer.visible}
                     title={layer.visible ? "Hide layer" : "Show layer"}
                     onClick={(event) => { event.stopPropagation(); onToggleVisible(layer); }}

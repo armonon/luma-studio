@@ -4555,8 +4555,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             recoveryUnavailable={Boolean(recoveryReadFailure())}
             tabletControls={tablet ? <>
               <button className="tablet-touch-mode" aria-pressed={drawWithTouch} onClick={toggleFingerDrawing} title={drawWithTouch ? "Finger edits with the active tool. Turn off to pan and pinch." : "Fingers pan and pinch. Pencil edits with the active tool."}>{drawWithTouch ? "Touch: draw" : "Touch: navigate"}</button>
-              <button aria-label="Toggle layers panel" aria-pressed={tabletPanel === "layers"} onClick={() => setTabletPanel(current => current === "layers" ? null : "layers")}>Layers</button>
-              <button aria-label="Toggle properties panel" aria-pressed={tabletPanel === "properties"} onClick={() => setTabletPanel(current => current === "properties" ? null : "properties")}>Properties</button>
+              <button aria-label="Open Layers workspace" onClick={() => window.dispatchEvent(new CustomEvent("luma:open-workspace", { detail: "layers" }))}>Layers</button>
+              <button aria-label="Open Properties workspace" onClick={() => window.dispatchEvent(new CustomEvent("luma:open-workspace", { detail: "properties" }))}>Properties</button>
             </> : undefined}
             projectName={projectName}
             saveState={saveState}
@@ -4620,6 +4620,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             <ShellErrorBoundary title="Tool options" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<div className="studio-contextbar" />}>
               <ContextToolbar
+                key={activeTool}
+                phone={phone}
                 onOpenBrushes={() => executeStudioCommand("panel-paint")}
                 tool={activeTool}
                 label={activeToolMeta?.[2] ?? "Tool"}

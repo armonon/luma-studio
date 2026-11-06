@@ -1,6 +1,6 @@
 "use client";
 
-import { useId } from "react";
+import { useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { ToolIcon } from "./studio-icons";
 import { AlignCenter, AlignLeft, AlignRight } from "lucide-react";
 import type { TransformMode } from "./canvas-geometry";
@@ -31,6 +31,7 @@ type ContextValues = {
 };
 
 export default function ContextToolbar({
+  phone = false,
   tool,
   label,
   description,
@@ -51,6 +52,7 @@ export default function ContextToolbar({
   penControls,
   onOpenBrushes,
 }: {
+  phone?: boolean;
   tool: string;
   label: string;
   description: string;
@@ -78,6 +80,28 @@ export default function ContextToolbar({
 }) {
   const settingsId = useId();
   const viewId = useId();
+  const [phoneSettingsOpen, setPhoneSettingsOpen] = useState(false);
+  const phoneSettingsButton = useRef<HTMLButtonElement>(null);
+  const handleToolbarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!phoneSettingsOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      setPhoneSettingsOpen(false);
+      phoneSettingsButton.current?.focus();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const sheet = event.currentTarget.querySelector<HTMLElement>(".studio-context-controls");
+    const controls = [phoneSettingsButton.current, ...Array.from(sheet?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled)') ?? [])]
+      .filter((element): element is HTMLElement => Boolean(element && element.getClientRects().length));
+    if (!controls.length) return;
+    const current = controls.indexOf(document.activeElement as HTMLElement);
+    if (current < 0 || (event.shiftKey && current === 0) || (!event.shiftKey && current === controls.length - 1)) {
+      event.preventDefault();
+      (event.shiftKey ? controls.at(-1) : controls[0])?.focus();
+    }
+  };
   const range = (label: string, key: keyof ContextValues, min: number, max: number, suffix = "", step = 1) => (
     <label className="context-range" data-option={key}>
       <span>{label}</span>
@@ -87,11 +111,16 @@ export default function ContextToolbar({
   );
 
   return (
-    <div className="studio-contextbar" data-tool-mode={mode} aria-label={`${tool} options`}>
+    <div className="studio-contextbar" data-tool-mode={mode} data-phone-options-open={phoneSettingsOpen ? "true" : undefined} role={phoneSettingsOpen ? "dialog" : undefined} aria-modal={phoneSettingsOpen || undefined} aria-label={`${tool} options`} onKeyDown={handleToolbarKeyDown}>
+      {phone && phoneSettingsOpen && <button className="phone-tool-settings-scrim" type="button" tabIndex={-1} aria-label="Close all tool settings" onClick={() => setPhoneSettingsOpen(false)} />}
       <div className="studio-context-identity">
         <span><ToolIcon id={tool} size={17} /></span>
-        <div><strong>{label}</strong><small>{description}</small><small className="phone-options-hint">Swipe options →</small></div>
+        <div><strong>{label}</strong><small>{description}</small></div>
       </div>
+      {phone && mode === "selection" && <select className="phone-primary-control" aria-label="Selection operation" value={selectionMode} onChange={event => onSelectionMode(event.target.value as SelectionCombineMode)}>{(["replace", "add", "subtract", "intersect"] as const).map(operation => <option key={operation} value={operation}>{operation === "replace" ? "New selection" : operation[0].toUpperCase() + operation.slice(1)}</option>)}</select>}
+      {phone && mode === "type" && <label className="phone-primary-control phone-primary-number">Size <input type="number" min="8" max="400" value={values.textSize} onChange={event => onValue("textSize", Number(event.target.value))} aria-label="Text size in pixels" /></label>}
+      {phone && mode === "transform" && transformControls && <select className="phone-primary-control" aria-label="Transform mode" value={transformControls.mode} onChange={event => transformControls.onMode(event.target.value as TransformMode)} disabled={!transformControls.enabled || transformControls.draft}><option value="scale">Transform</option><option value="skew">Skew</option><option value="distort" disabled={!!transformControls.distortionReason}>Distort</option></select>}
+      {phone && ["paint", "selection", "type", "transform"].includes(mode) && <button ref={phoneSettingsButton} className="phone-all-settings" type="button" aria-expanded={phoneSettingsOpen} onClick={() => setPhoneSettingsOpen(open => !open)}>{phoneSettingsOpen ? "Done" : "All settings"}</button>}
 
       {mode === "paint" && (
         <div className="studio-context-controls">
@@ -99,9 +128,9 @@ export default function ContextToolbar({
           <label className="context-color" title="Foreground color"><input type="color" value={values.color} onChange={(event) => onValue("color", event.target.value)} aria-label="Foreground color" /></label>
           {range("Size", "size", 1, tool === "capture-brush" ? 1200 : 400, "px")}
           {range("Opacity", "opacity", 0, 100, "%")}
-          <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>
-          <div key={tool} id={settingsId} popover="auto" className="context-more-panel" aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
-            <header><strong>{label} settings</strong><button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button></header>
+          {!phone && <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>}
+          <div key={tool} id={settingsId} popover={phone ? undefined : "auto"} className={phone ? "phone-extra-settings" : "context-more-panel"} aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
+            <header><strong>{label} settings</strong>{!phone && <button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button>}</header>
             {range("Hardness", "hardness", 0, 100, "%")}
             {range("Flow", "flow", 1, 100, "%")}
             {range("Smoothing", "smoothing", 0, 95, "%")}
@@ -128,9 +157,9 @@ export default function ContextToolbar({
           <label className="context-color" title="Type color"><input type="color" value={values.color} onChange={(event) => onValue("color", event.target.value)} aria-label="Type color" /></label>
           <label className="context-select context-font-family"><span>Font</span><select title={values.fontFamily} value={values.fontFamily} onChange={(event) => onValue("fontFamily", event.target.value)}>{!FONT_CHOICES.some(font => font.value === values.fontFamily) && <option value={values.fontFamily}>{values.fontFamily.split(",")[0]} · current</option>}{FONT_CHOICES.map(font => <option key={font.value} value={font.value}>{font.label}</option>)}</select></label>
           {range("Size", "textSize", 8, 400, "px")}
-          <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>
-          <div key={tool} id={settingsId} popover="auto" className="context-more-panel" aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
-          <header><strong>{label} settings</strong><button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button></header>
+          {!phone && <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>}
+          <div key={tool} id={settingsId} popover={phone ? undefined : "auto"} className={phone ? "phone-extra-settings" : "context-more-panel"} aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
+          <header><strong>{label} settings</strong>{!phone && <button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button>}</header>
           <label className="context-select"><span>Weight</span><select value={values.fontWeight} onChange={(event) => onValue("fontWeight", Number(event.target.value))}>{[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => <option key={weight} value={weight}>{weight}</option>)}</select></label>
           <div className="context-segmented" aria-label="Text alignment">
             {(["left", "center", "right"] as const).map((align) => <button key={align} className={values.textAlign === align ? "active" : ""} aria-pressed={values.textAlign === align} onClick={() => onValue("textAlign", align)} aria-label={`Align ${align}`}>{align === "left" ? <AlignLeft size={15} /> : align === "center" ? <AlignCenter size={15} /> : <AlignRight size={15} />}</button>)}

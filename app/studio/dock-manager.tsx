@@ -18,6 +18,7 @@ import {
   moveDockPanel,
   moveDockPanelToGroup,
   moveFloatingPanel,
+  openDockPanel,
   reorderDockPanel,
   resizeDockGroup,
   resizeDockSplit,
@@ -94,6 +95,18 @@ export default function DockManager({
     returnFocusRef.current = trigger;
     setExpandedPanel(panelId);
   };
+  useEffect(() => {
+    const handleRequest = (event: Event) => {
+      const panelId = (event as CustomEvent<PanelId>).detail;
+      const trigger = document.activeElement;
+      if (trigger instanceof HTMLElement) {
+        returnFocusRef.current = trigger;
+      }
+      setExpandedPanel(panelId);
+    };
+    window.addEventListener("luma:open-workspace", handleRequest);
+    return () => window.removeEventListener("luma:open-workspace", handleRequest);
+  }, []);
   const switchWorkspace = (panelId: PanelId) => {
     setExpandedPanel(panelId);
     onActivePanelChange(panelId);
@@ -111,12 +124,10 @@ export default function DockManager({
   const panelContent = (panelId: PanelId) => {
     const definition = STUDIO_PANEL_REGISTRY.require(panelId);
     const Component = definition.component;
-    const candidates = panelId === "properties"
-      ? [...(content.get("properties") ?? []), ...(content.get(contextualPanel) ?? [])]
-      : content.get(panelId) ?? [];
+    const candidates = content.get(panelId) ?? [];
     const nodes = Children.toArray(candidates);
     return (
-      <PanelErrorBoundary key={`${panelId}:${panelId === "properties" ? contextualPanel : panelId}`} title={definition.title}>
+      <PanelErrorBoundary key={panelId} title={definition.title}>
       <ExpandedWorkspaceContext.Provider value={expandedPanel === panelId}>
       <Component>
         {nodes.length ? nodes : (
@@ -217,7 +228,7 @@ export default function DockManager({
                     setDragging(null);
                   }}
                 >
-                  <button role="tab" id={`dock-tab-${group.id}-${panelId}`} aria-controls={`dock-body-${group.id}`} tabIndex={activePanelId === panelId ? 0 : -1} aria-selected={activePanelId === panelId} onClick={() => activate(group, panelId)} onDoubleClick={(event) => openWorkspace(panelId, event.currentTarget)} title={panel.title}
+                  <button role="tab" id={`dock-tab-${group.id}-${panelId}`} aria-controls={`dock-body-${group.id}`} tabIndex={activePanelId === panelId ? 0 : -1} aria-selected={activePanelId === panelId} onClick={(event) => { activate(group, panelId); openWorkspace(panelId, event.currentTarget); }} title={`Open ${panel.title} workspace`}
                     onKeyDown={(event) => {
                       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                       event.preventDefault();
@@ -329,6 +340,7 @@ export default function DockManager({
             {STUDIO_PANEL_REGISTRY.list().filter((definition) => definition.mobileGroup === group).map((definition) => <option key={definition.id} value={definition.id}>{definition.title}</option>)}
           </optgroup>)}
         </select></label>
+        <button type="button" className="panel-workspace-compact" onClick={() => { if (tablet) tablet.select(expandedPanel); else onLayoutChange(openDockPanel(layout, expandedPanel, STUDIO_PANEL_REGISTRY)); setExpandedPanel(null); }}>{tablet ? "Use panel" : "Keep in sidebar"}</button>
         <button type="button" className="panel-workspace-close" onClick={() => setExpandedPanel(null)} aria-label="Close expanded workspace"><X size={19} /><span>Close</span></button>
       </header>
       <nav className="panel-workspace-related" aria-label="Related workspaces"><span>Related</span>{PANEL_WORKSPACES[expandedPanel].related.map((panelId) => <button key={panelId} type="button" onClick={() => switchWorkspace(panelId)}>{STUDIO_PANEL_REGISTRY.require(panelId).title}</button>)}</nav>

@@ -91,7 +91,7 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="c
 @media (min-width: 901px) {
   .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-layout {
     display: grid;
-    grid-template-columns: clamp(175px, 16vw, 220px) minmax(0, 1fr) clamp(300px, 25vw, 370px);
+    grid-template-columns: clamp(160px, 14vw, 190px) minmax(0, 1fr) minmax(220px, 26%);
   }
   .spatial-studio .panel-workspace[data-panel="properties"] .concept-inspector-nav {
     display: flex;
@@ -118,13 +118,13 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="c
   .spatial-studio .concept-inspector-nav button:hover { background: var(--ui-hover); color: var(--ui-text); }
   .spatial-studio .concept-inspector-nav button.active { background: color-mix(in srgb, var(--ui-accent), transparent 56%); color: var(--ui-text); }
   .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview {
-    grid-column: 2;
+    grid-column: 3;
     grid-row: 1;
-    border-right: 1px solid var(--ui-border);
+    border-left: 1px solid var(--ui-border);
   }
   .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-content.dock-panel-body {
     display: block;
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 1;
     overflow: auto;
     border: 0;
@@ -183,6 +183,7 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="c
     border-radius: 12px;
     box-shadow: 0 10px 32px #0003;
   }
+  .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview-frame { flex: 0 0 auto; aspect-ratio: 3 / 2; }
   .spatial-studio .panel-workspace[data-panel="layers"] .panel-workspace-preview-actions,
   .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview-actions { display: flex; justify-content: center; }
   .spatial-studio .panel-workspace[data-panel="layers"] .panel-workspace-preview-actions button,
@@ -209,4 +210,14 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="c
 @media (max-width: 760px) {
   .spatial-studio .panel-workspace[data-panel="layers"] .panel-workspace-preview-frame,
   .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview-frame { height: 160px; }
+}
+
+@media (max-width: 470px) {
+  .spatial-studio .panel-workspace-header { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 8px; min-height: 0; padding: 12px 14px; }
+  .spatial-studio .panel-workspace-title { grid-column: 1; }
+  .spatial-studio .panel-workspace-close { grid-column: 2; grid-row: 1; }
+  .spatial-studio .panel-workspace-picker { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  .spatial-studio .panel-workspace-compact { display: none; }
+  .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview-frame { height: 100px; }
+  .spatial-studio .panel-workspace[data-panel="properties"] .panel-workspace-preview { padding-block: 8px; }
 }
