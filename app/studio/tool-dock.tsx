@@ -5,7 +5,7 @@ import ToolPalette, { type ToolPaletteGroup } from "./tool-palette";
 import { CategoryIcon, ToolIcon } from "./studio-icons";
 import type { StudioCommand } from "../desktop/menu-model";
 import { DESKTOP_TOOL_RAIL } from "./desktop-presentation";
-import { ArrowLeftRight, X } from "lucide-react";
+import { ArrowLeftRight, Search, X } from "lucide-react";
 import { allowToolHold } from "./pointer-intent";
 
 const RAIL_FAMILIES: Record<string, readonly string[]> = {
@@ -75,8 +75,10 @@ export default function ToolDock({
 }) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [flyout, setFlyout] = useState<CategoryId | null>(null);
+  const [railFamily, setRailFamily] = useState<string | null>(null);
   const [recent, setRecent] = useState<Record<string, string>>({});
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heldOpen = useRef(false);
   const familyRef = useRef<HTMLElement>(null);
   const tools = useMemo(() => groups.flatMap((group) => group.tools.map((tool) => ({ ...tool, workspace: group.id }))), [groups]);
   const activeCategory = categoryForTool(activeTool);
@@ -109,7 +111,14 @@ export default function ToolDock({
     .tools.map((id) => tools.find((tool) => tool.id === id))
     .filter((tool): tool is (typeof tools)[number] => Boolean(tool));
 
+  const familyTools = flyout ? railFamily
+    ? (RAIL_FAMILIES[railFamily] ?? []).map(id => tools.find(tool => tool.id === id)).filter((tool): tool is (typeof tools)[number] => Boolean(tool))
+    : related(flyout) : [];
+  const familyLabel = railFamily ? RAIL_LABELS[railFamily] ?? tools.find(tool => tool.id === railFamily)?.label
+    : categories.find(category => category.id === flyout)?.label;
+
   const chooseTool = (tool: string, workspace: string) => {
+    heldOpen.current = false;
     const category = categoryForTool(tool);
     if (category) setRecent(value => ({ ...value, [category]: tool }));
     onSelect(tool, workspace);
@@ -140,14 +149,14 @@ export default function ToolDock({
             const tool = tools.find((candidate) => candidate.id === visibleToolId);
             if (!tool) return null;
             const category = categoryForTool(tool.id);
-            const openFamily = () => { if (category && family.length > 1) setFlyout(category); };
+            const openFamily = () => { if (category && family.length > 1) { setRailFamily(toolId); setFlyout(category); } };
             return (
               <button
                 key={toolId}
                 className={activeTool === tool.id ? "active" : ""}
-                onClick={() => chooseTool(tool.id, tool.workspace)}
+                onClick={() => { if (heldOpen.current) { heldOpen.current = false; return; } chooseTool(tool.id, tool.workspace); }}
                 onContextMenu={(event) => { event.preventDefault(); if (!touchWorkspace) openFamily(); }}
-                onPointerDown={(event) => { stopHold(); if (allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(openFamily, 480); }}
+                onPointerDown={(event) => { stopHold(); heldOpen.current = false; if (family.length > 1 && allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(() => { heldOpen.current = true; openFamily(); }, 480); }}
                 onPointerUp={stopHold}
                 onPointerLeave={stopHold}
                 onPointerCancel={stopHold}
@@ -155,8 +164,10 @@ export default function ToolDock({
                 data-family-start={index === 4 || index === 9 || index === 13 ? "true" : undefined}
                 aria-label={tool.label}
                 aria-pressed={activeTool === tool.id}
-                aria-haspopup={family.length > 1 ? "menu" : undefined}
-                title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}${family.length > 1 ? " · Right-click for related tools" : ""}`}
+                aria-haspopup={family.length > 1 ? "dialog" : undefined}
+                aria-expanded={family.length > 1 ? Boolean(flyout && railFamily === toolId) : undefined}
+                aria-controls={flyout && railFamily === toolId ? "tool-family-dialog" : undefined}
+                title={`${tool.label}${tool.shortcut ? ` (${tool.shortcut})` : ""}${family.length > 1 ? " · Right-click or press → for related tools" : ""}`}
               >
                 <ToolIcon id={tool.id} />
                 <span className="tool-rail-label">{RAIL_LABELS[tool.id] ?? tool.label}</span>
@@ -167,16 +178,18 @@ export default function ToolDock({
             <button
               key={category.id}
               className={activeCategory === category.id || (category.id === "ai" && flyout === "ai") ? "active" : ""}
-              onClick={() => chooseCategory(category.id)}
-              onContextMenu={(event) => { event.preventDefault(); if (!touchWorkspace) setFlyout(category.id); }}
-              onPointerDown={(event) => { stopHold(); if (allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(() => setFlyout(category.id), 480); }}
+              onClick={() => { if (heldOpen.current) { heldOpen.current = false; return; } chooseCategory(category.id); }}
+              onContextMenu={(event) => { event.preventDefault(); if (!touchWorkspace) { setRailFamily(null); setFlyout(category.id); } }}
+              onPointerDown={(event) => { stopHold(); heldOpen.current = false; if (allowToolHold(event.button, event.pointerType, touchWorkspace)) holdTimer.current = setTimeout(() => { heldOpen.current = true; setRailFamily(null); setFlyout(category.id); }, 480); }}
               onPointerUp={stopHold}
               onPointerCancel={stopHold}
               onPointerLeave={stopHold}
-              onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); setFlyout(category.id); } }}
+              onKeyDown={(event) => { if (event.key === "ArrowRight") { event.preventDefault(); setRailFamily(null); setFlyout(category.id); } }}
               aria-label={`${category.label} tools`}
               aria-pressed={activeCategory === category.id}
-              aria-haspopup={touchWorkspace ? undefined : "menu"}
+              aria-haspopup={touchWorkspace ? undefined : "dialog"}
+              aria-expanded={touchWorkspace ? undefined : Boolean(flyout === category.id && !railFamily)}
+              aria-controls={flyout === category.id && !railFamily ? "tool-family-dialog" : undefined}
               title={`${category.label} · ${touchWorkspace ? "Tap to select · More for all tools" : "Right-click for related tools"}`}
             >
               <CategoryIcon id={category.id} />
@@ -188,10 +201,11 @@ export default function ToolDock({
             onClick={() => { setLibraryOpen(true); setFlyout(null); }}
             aria-label="More tools and command search"
             aria-expanded={libraryOpen}
-            title="More Tools (⌘K)"
+            aria-haspopup="dialog"
+            title="Search tools and commands (⌘K)"
           >
-            <CategoryIcon id="more" />
-            <span>More</span>
+            <Search size={18} aria-hidden="true" />
+            <span>Tools</span>
           </button>
         </div>
         {foreground && onForegroundChange && <div className="tool-rail-colors">
@@ -202,7 +216,7 @@ export default function ToolDock({
 
       {flyout && (
         <div className="tool-family-scrim" onPointerDown={() => setFlyout(null)}>
-          <section ref={familyRef} tabIndex={-1} className="tool-family-menu" role="dialog" aria-modal="true" aria-label={`${flyout} tools`} onPointerDown={(event) => event.stopPropagation()} onKeyDown={event => {
+          <section id="tool-family-dialog" ref={familyRef} tabIndex={-1} className="tool-family-menu" role="dialog" aria-modal="true" aria-label={`${familyLabel} tools`} onPointerDown={(event) => event.stopPropagation()} onKeyDown={event => {
             event.stopPropagation();
             if (event.key === "Escape") { event.preventDefault(); setFlyout(null); return; }
             const buttons = [...(familyRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
@@ -223,11 +237,11 @@ export default function ToolDock({
           }}>
             <header>
               <CategoryIcon id={flyout} size={18} />
-              <div><strong>{categories.find((category) => category.id === flyout)?.label}</strong><span>Related tools</span></div>
+              <div><strong>{familyLabel}</strong><span>Related tools</span></div>
               <button className="tool-family-close" onClick={() => setFlyout(null)} aria-label="Close related tools"><X size={18} /></button>
             </header>
-            <div role="menu" aria-label={`${flyout} tools`}>
-              {related(flyout).map((tool) => (
+            <div role="menu" aria-label={`${familyLabel} tools`}>
+              {familyTools.map((tool) => (
                 <button
                   key={tool.id}
                   className={activeTool === tool.id ? "active" : ""}

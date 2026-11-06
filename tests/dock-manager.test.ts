@@ -4,6 +4,7 @@ import {
   closeDockPanel,
   collapseDockGroup,
   defaultDockLayout,
+  isLegacyDefaultDockLayout,
   moveDockPanel,
   moveDockPanelToGroup,
   openDockPanel,
@@ -30,27 +31,41 @@ test("every shipped studio panel has complete, valid central metadata", () => {
 
 test("dock layout supports tabs, ordering, collapse, resize, close, reopen, dock and float", () => {
   let layout = defaultDockLayout("Essentials");
+  assert.deepEqual(layout.groups.map(group => group.panelIds), [["properties", "layers", "history"]]);
   const groupId = layout.groups.find(group => group.panelIds.includes("properties"))!.id;
   layout = selectDockPanel(layout, groupId, "properties");
   assert.equal(layout.groups.find(group => group.id === groupId)!.activePanelId, "properties");
-  layout = reorderDockPanel(layout, groupId, "neural", 0);
-  assert.equal(layout.groups.find(group => group.id === groupId)!.panelIds[0], "neural");
+  layout = reorderDockPanel(layout, groupId, "history", 0);
+  assert.equal(layout.groups.find(group => group.id === groupId)!.panelIds[0], "history");
   layout = collapseDockGroup(layout, groupId, true);
   assert.equal(layout.groups.find(group => group.id === groupId)!.collapsed, true);
   layout = resizeDockGroup(layout, groupId, 420);
   assert.equal(layout.groups.find(group => group.id === groupId)!.size, 420);
   layout = resizeDockSplit(layout, groupId, 1.8);
   assert.equal(layout.groups.find(group => group.id === groupId)!.weight, 1.8);
-  layout = splitDockPanel(layout, "neural", "bottom", STUDIO_PANEL_REGISTRY);
-  assert.equal(layout.groups.find((group) => group.panelIds.includes("neural"))?.dock, "bottom");
-  layout = moveDockPanelToGroup(layout, "neural", groupId, 0);
-  assert.equal(layout.groups.find((group) => group.id === groupId)?.panelIds[0], "neural");
+  layout = splitDockPanel(layout, "history", "bottom", STUDIO_PANEL_REGISTRY);
+  assert.equal(layout.groups.find((group) => group.panelIds.includes("history"))?.dock, "bottom");
+  layout = moveDockPanelToGroup(layout, "history", groupId, 0);
+  assert.equal(layout.groups.find((group) => group.id === groupId)?.panelIds[0], "history");
   layout = closeDockPanel(layout, "properties");
   assert.ok(layout.closed.includes("properties"));
   layout = openDockPanel(layout, "properties", STUDIO_PANEL_REGISTRY);
   assert.ok(layout.groups.some((group) => group.panelIds.includes("properties")));
-  layout = moveDockPanel(layout, "neural", "floating", STUDIO_PANEL_REGISTRY);
-  assert.ok(layout.floating.some((panel) => panel.panelId === "neural"));
+  layout = moveDockPanel(layout, "history", "floating", STUDIO_PANEL_REGISTRY);
+  assert.ok(layout.floating.some((panel) => panel.panelId === "history"));
+});
+
+test("only the former two-stack default is eligible for the canvas layout upgrade", () => {
+  const legacy = sanitizeDockLayout({
+    ...defaultDockLayout(),
+    groups: [
+      { id: "right-layers", dock: "right", panelIds: ["layers"], activePanelId: "layers", size: 300, weight: 0.7, collapsed: false },
+      { id: "right-properties", dock: "right", panelIds: ["properties", "neural"], activePanelId: "properties", size: 300, weight: 1, collapsed: false },
+    ],
+  }, STUDIO_PANEL_REGISTRY);
+  assert.equal(isLegacyDefaultDockLayout(legacy), true);
+  assert.equal(isLegacyDefaultDockLayout({ ...legacy, groups: [legacy.groups[1], legacy.groups[0]] }), false);
+  assert.equal(isLegacyDefaultDockLayout(defaultDockLayout()), false);
 });
 
 test("persisted layouts are repaired, bounded, and stripped of unknown panels", () => {

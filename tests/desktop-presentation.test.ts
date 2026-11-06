@@ -25,7 +25,7 @@ test("web keeps the familiar general-purpose starting state", () => {
   assert.deepEqual(initialStudioPresentation(false), {
     workspace: "edit",
     tool: "brush",
-    assetsOpen: true,
+    assetsOpen: false,
     zoom: 1,
     showRadialOverlay: false,
   });

@@ -96,7 +96,7 @@ const seeds: readonly Seed[] = [
   ["polygon", "vector", "⬡", "Polygon", "G"], ["line", "vector", "╱", "Line", "L"],
   ["custom-shape", "vector", "★", "Custom shape", "C"], ["frame", "vector", "▣", "Frame", "F"],
   ["pen", "vector", "✎", "Pen", "P"], ["path-select", "vector", "↖", "Path selection", "S"],
-  ["direct-select", "vector", "△", "Direct selection", "D"],
+  ["direct-select", "vector", "△", "Edit Points", "D"],
   ["crop", "transform", "⌗", "Crop", "C"], ["perspective-crop", "transform", "▱", "Perspective crop", "K"],
   ["straighten", "transform", "／", "Straighten", "S"], ["content-move", "transform", "⇥", "Content-aware move", "M"],
   ["perspective-warp", "transform", "◇", "Perspective warp", "W"], ["radial-warp", "transform", "⌘", "Radial warp", "P"],

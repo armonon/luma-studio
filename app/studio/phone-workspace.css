@@ -54,14 +54,19 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-form-fact
   & .spatial-canvas-column:has(.spatial-document-tabs[data-single="true"]) { grid-template-rows: 52px 0 minmax(0, 1fr); }
   & .spatial-document-tabs[data-single="true"] { visibility: hidden; min-height: 0; height: 0; overflow: hidden; }
   & .spatial-document-tabs > div { min-width: 100px; max-width: 220px; }
-  & .tablet-panel { left: 4px; right: 4px; top: auto; bottom: 64px; width: auto; height: 52%; max-height: calc(100% - 68px); max-width: none; border-radius: 12px; }
-  & .tablet-panel[data-size="compact"] { height: 32%; min-height: 170px; }
+  & .tablet-panel { left: 4px; right: 4px; top: auto; bottom: 64px; width: auto; height: 58%; max-height: calc(100% - 68px); max-width: none; border-radius: 14px; }
+  & .tablet-panel[data-size="compact"] { height: 34%; min-height: 180px; }
   & .tablet-panel[data-size="full"] { height: calc(100% - 68px); }
-  & .phone-panel-sizing { display: flex; align-items: center; justify-content: center; flex-shrink: 0; gap: 4px; padding: 2px 8px; border-bottom: 1px solid var(--ui-border); }
-  & .phone-panel-sizing button { min-height: 44px; font-size: 12px; padding: 0 8px; }
-  & .phone-sheet-grip { min-width: 44px; height: 44px; touch-action: none; display: grid; place-items: center; }
-  & .phone-sheet-grip::after { content: ""; width: 28px; height: 4px; border-radius: 4px; background: var(--ui-muted); }
+  & .tablet-panel > header { padding: 8px; gap: 6px; }
+  & .tablet-panel > header > select { font-size: 16px; font-weight: 600; }
+  & .phone-panel-sizing { display: flex; flex: 0 0 104px; min-width: 0; }
+  & .phone-panel-sizing select { width: 100%; font-size: 16px; }
   & .tablet-panel .dock-panel-body { padding: 8px; }
+  & .tablet-panel .layers-card .layer-stack { flex: 0 0 auto; min-height: 0; max-height: 164px; }
+  & .tablet-panel .layers-card .layer-controls { order: 1; padding: 10px; }
+  & .tablet-panel .layers-card .layer-stack-footer { order: 2; }
+  & .tablet-panel .layer-opacity-control { padding: 8px 10px 6px; }
+  & .tablet-panel .layer-opacity-control > input[type="range"] { min-height: 32px; }
   & .tablet-panel .type-studio-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   & .tool-family-scrim, & .tool-palette-scrim { position: fixed; inset: 0; padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); display: flex; align-items: flex-end; justify-content: center; }
   & .tool-family-menu { position: relative; left: auto; right: auto; top: auto; bottom: auto; width: 100%; max-width: 440px; max-height: calc(var(--phone-viewport-height, 100dvh) - 32px); overflow-y: auto; margin: 0 0 env(safe-area-inset-bottom); }
@@ -83,20 +88,22 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-form-fact
   & :is(button, summary, input, select):focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
   & .studio-app-menu > div { position: fixed; top: calc(var(--phone-viewport-top, 0px) + env(safe-area-inset-top) + 50px); left: max(8px, env(safe-area-inset-left)); right: max(8px, env(safe-area-inset-right)); width: auto; max-height: calc(var(--phone-viewport-height, 100dvh) - 110px); overflow: auto; }
   & .studio-app-menu kbd { display: none; }
-  & .studio-export-popover { position: fixed; inset: auto 8px 8px; margin: auto; width: calc(100% - 16px); max-height: calc(var(--phone-viewport-height, 100dvh) - 16px); overflow: auto; }
-  & .studio-export-popover article { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  & .studio-export-popover article > .export-format-mark { display: none; }
-  & .studio-export-popover article > :is(div, p, label) { grid-column: 1 / -1; }
-  & .studio-export-popover article:first-child > button { grid-column: 1 / -1; }
-  & .studio-export-popover :is(button, select) { min-height: 44px; min-width: 0; font-size: 14px; }
-  & .studio-export-popover select { width: 100%; font-size: 16px; }
-  & .studio-export-popover :is(p, small, footer span) { font-size: 12px; }
+  & .studio-export-popover:not(.luma-export-dialog) { position: fixed; inset: auto 8px max(8px, env(safe-area-inset-bottom)); margin: auto; width: calc(100% - 16px); max-height: calc(var(--phone-viewport-height, 100dvh) - 16px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow: auto; }
+  & .studio-export-popover:not(.luma-export-dialog) :is(button, select) { min-height: 44px; min-width: 0; font-size: 14px; }
+  & .studio-export-popover:not(.luma-export-dialog) select { width: 100%; font-size: 16px; }
+  & .studio-export-popover:not(.luma-export-dialog) :is(p, small, footer span) { font-size: 12px; }
   & .spatial-modal { padding: 8px; max-height: var(--phone-viewport-height, 100dvh); overflow: auto; }
   & .spatial-toast { position: fixed; top: auto; bottom: calc(env(safe-area-inset-bottom) + 72px); left: 12px; right: 12px; width: auto; max-width: none; transform: none; background: var(--ui-raised); color: var(--ui-text); border: 1px solid var(--ui-border); font-size: 13px; line-height: 1.4; }
   & :is(.unsaved-document-dialog, .new-document-dialog) { box-sizing: border-box; max-width: 100%; max-height: calc(var(--phone-viewport-height, 100dvh) - 16px); overflow: auto; }
   & :is(.unsaved-document-dialog, .new-document-dialog) button { min-height: 44px; }
   & .desktop-canvas-hud { max-width: calc(100% - 16px); }
-  & .brush-toolbox-navigation { position: sticky; top: 0; z-index: 2; background: var(--ui-panel); padding-bottom: 8px; border-bottom: 1px solid var(--ui-border); }
+  & .brush-toolbox-navigation { position: static; background: var(--ui-panel); padding-bottom: 0; border: 0; }
+  & .brush-toolbox-navigation > .brush-toolbox-heading { display: none; }
+  & .tablet-panel [data-contextual-panel="paint"] > header { display: none; }
+  & .tablet-panel .brush-toolbox { padding: 8px; gap: 8px; }
+  & .tablet-panel .brush-toolbox-navigation, & .tablet-panel .brush-library-content { gap: 8px; }
+  & .tablet-panel .brush-categories { padding-bottom: 0; }
+  & .tablet-panel .brush-preset-grid { gap: 8px; }
   & .tablet-panel > header { flex: 0 0 auto; }
   & .tablet-panel .dock-panel-body { scrollbar-gutter: stable; scroll-padding-block: 12px; }
   & .brush-tool-settings .tone-controls label { grid-template-columns: 64px minmax(0, 1fr) 48px; gap: 8px; min-height: 48px; }

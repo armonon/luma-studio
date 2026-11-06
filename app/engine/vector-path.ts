@@ -32,12 +32,18 @@ export function validateContours(contours: PathContour[], maxAnchors: number = V
     if (count > maxAnchors) throw new Error(`Vector operation supports at most ${maxAnchors} anchors`);
     for (const a of contour.anchors) {
       if (!a || !a.hIn || !a.hOut || ![a.x, a.y, a.hIn.dx, a.hIn.dy, a.hOut.dx, a.hOut.dy].every(v => Number.isFinite(v) && Math.abs(v) <= VECTOR_LIMITS.coordinate)) throw new Error("Invalid or out-of-range vector coordinate");
+      if (a.mode !== undefined && !["corner", "smooth", "symmetric"].includes(a.mode)) throw new Error("Invalid anchor mode");
+      if (a.id !== undefined) {
+        if (typeof a.id !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(a.id)) throw new Error("Invalid anchor identity");
+      }
     }
   }
 }
 
 export function validateVectorPath(path: PathStyle) {
   validateContours(pathContours(path));
+  const identities = pathContours(path).flatMap(part => part.anchors.flatMap(a => a.id ? [a.id] : []));
+  if (new Set(identities).size !== identities.length) throw new Error("Duplicate anchor identity");
   if (path.symbolId !== undefined && (typeof path.symbolId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(path.symbolId))) throw new Error("Invalid symbol identity");
   if (path.offsetSource) {
     validateContours(path.offsetSource.contours, VECTOR_LIMITS.booleanAnchors);

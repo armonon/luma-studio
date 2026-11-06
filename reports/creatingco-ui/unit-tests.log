@@ -1,0 +1,11 @@
+Command: node_modules/.bin/tsx --test --test-concurrency=4 tests/*.test.ts
+
+1..1467
+# tests 1472
+# suites 0
+# pass 1472
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 91651.014375

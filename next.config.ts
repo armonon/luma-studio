@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 // Node-only optional imports that never execute in this app (see the stub).
@@ -14,6 +15,16 @@ const nextConfig: NextConfig = {
       "jsdom/lib/jsdom/living/generated/utils": false,
       ...(!isServer ? { module: false } : {}),
     };
+    if (!isServer) {
+      config.module.rules.push({
+        test: /(?:pdfjs-dist|onnxruntime-web|@huggingface[\\/]transformers)[\\/].*\.m?js$/,
+        use: [{ loader: path.resolve("build/browser-vendor-url-loader.cjs") }],
+      });
+      config.module.rules.push({
+        test: /harfbuzzjs[\\/]dist[\\/]harfbuzz\.js$/,
+        use: [{ loader: path.resolve("build/browser-harfbuzz-loader.cjs") }],
+      });
+    }
     return config;
   },
   // Keep Next/Turbopack scoped to this project when the parent folder also

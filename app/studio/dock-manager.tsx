@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
   useEffect,
+  useRef,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -17,6 +18,7 @@ import {
   moveDockPanel,
   moveDockPanelToGroup,
   moveFloatingPanel,
+  openDockPanel,
   reorderDockPanel,
   resizeDockGroup,
   resizeDockSplit,
@@ -30,8 +32,11 @@ import {
 import { STUDIO_PANEL_REGISTRY, type PanelId } from "./panel-registry";
 import PanelIcon from "./panel-icon";
 import { PanelErrorBoundary } from "./panel-error-boundary";
-import { ChevronDown, ChevronUp, Ellipsis, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Crop, Ellipsis, Maximize2, Scan, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { TabletPanel } from "./tablet-panel";
+import { ExpandedWorkspaceContext } from "./panel-workspace-context";
+import { PANEL_WORKSPACES } from "./panel-workspace-config";
+import LiveCanvasPreview from "./live-canvas-preview";
 
 export function DockPanelContent({ children }: { panelId: PanelId; children: ReactNode }) {
   return <>{children}</>;
@@ -40,7 +45,7 @@ export function DockPanelContent({ children }: { panelId: PanelId; children: Rea
 function collectPanelContent(node: ReactNode, result = new Map<PanelId, ReactNode[]>()) {
   Children.forEach(node, (child) => {
     if (!isValidElement(child)) return;
-    if (child.type === DockPanelContent) {
+    if (child.type === DockPanelContent || (typeof child.type === "function" && child.type.name === "DockPanelContent")) {
       const props = child.props as { panelId: PanelId; children: ReactNode };
       result.set(props.panelId, [...(result.get(props.panelId) ?? []), props.children]);
       return;
@@ -53,21 +58,60 @@ function collectPanelContent(node: ReactNode, result = new Map<PanelId, ReactNod
 export default function DockManager({
   layout,
   onLayoutChange,
+  onWorkspaceChange,
   onActivePanelChange,
   contextualPanel,
+  documentAspect,
+  onOpenLayerStyle,
   tablet,
   children,
 }: {
   layout: DockLayout;
   onLayoutChange: (layout: DockLayout) => void;
+  onWorkspaceChange?: (panel: PanelId | null) => void;
   onActivePanelChange: (panel: PanelId) => void;
   contextualPanel: PanelId;
+  documentAspect?: number;
+  onOpenLayerStyle?: () => void;
   tablet?: { panel: PanelId | null; select: (panel: PanelId) => void; close: () => void };
   children: ReactNode;
 }) {
   const [dragging, setDragging] = useState<PanelId | null>(null);
   const [menuGroupId, setMenuGroupId] = useState<string | null>(null);
+  const [expandedPanel, setExpandedPanel] = useState<PanelId | null>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const content = useMemo(() => collectPanelContent(children), [children]);
+  useEffect(() => { onWorkspaceChange?.(expandedPanel); }, [expandedPanel, onWorkspaceChange]);
+  useEffect(() => {
+    if (!expandedPanel) return;
+    workspaceRef.current?.focus();
+    return () => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
+    };
+  }, [expandedPanel]);
+
+  const openWorkspace = (panelId: PanelId, trigger: HTMLElement) => {
+    returnFocusRef.current = trigger;
+    setExpandedPanel(panelId);
+  };
+  useEffect(() => {
+    const handleRequest = (event: Event) => {
+      const panelId = (event as CustomEvent<PanelId>).detail;
+      const trigger = document.activeElement;
+      if (trigger instanceof HTMLElement) {
+        returnFocusRef.current = trigger;
+      }
+      setExpandedPanel(panelId);
+    };
+    window.addEventListener("luma:open-workspace", handleRequest);
+    return () => window.removeEventListener("luma:open-workspace", handleRequest);
+  }, []);
+  const switchWorkspace = (panelId: PanelId) => {
+    setExpandedPanel(panelId);
+    onActivePanelChange(panelId);
+    if (tablet) tablet.select(panelId);
+  };
   useEffect(() => {
     if (!menuGroupId) return;
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMenuGroupId(null); };
@@ -80,12 +124,11 @@ export default function DockManager({
   const panelContent = (panelId: PanelId) => {
     const definition = STUDIO_PANEL_REGISTRY.require(panelId);
     const Component = definition.component;
-    const candidates = panelId === "properties"
-      ? [...(content.get("properties") ?? []), ...(content.get(contextualPanel) ?? [])]
-      : content.get(panelId) ?? [];
+    const candidates = content.get(panelId) ?? [];
     const nodes = Children.toArray(candidates);
     return (
-      <PanelErrorBoundary key={`${panelId}:${panelId === "properties" ? contextualPanel : panelId}`} title={definition.title}>
+      <PanelErrorBoundary key={panelId} title={definition.title}>
+      <ExpandedWorkspaceContext.Provider value={expandedPanel === panelId}>
       <Component>
         {nodes.length ? nodes : (
           <div className="dock-panel-empty">
@@ -94,6 +137,7 @@ export default function DockManager({
           </div>
         )}
       </Component>
+      </ExpandedWorkspaceContext.Provider>
       </PanelErrorBoundary>
     );
   };
@@ -184,7 +228,7 @@ export default function DockManager({
                     setDragging(null);
                   }}
                 >
-                  <button role="tab" id={`dock-tab-${group.id}-${panelId}`} aria-controls={`dock-body-${group.id}`} tabIndex={activePanelId === panelId ? 0 : -1} aria-selected={activePanelId === panelId} onClick={() => activate(group, panelId)} title={panel.title}
+                  <button role="tab" id={`dock-tab-${group.id}-${panelId}`} aria-controls={`dock-body-${group.id}`} tabIndex={activePanelId === panelId ? 0 : -1} aria-selected={activePanelId === panelId} onClick={(event) => { activate(group, panelId); openWorkspace(panelId, event.currentTarget); }} title={`Open ${panel.title} workspace`}
                     onKeyDown={(event) => {
                       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                       event.preventDefault();
@@ -202,6 +246,7 @@ export default function DockManager({
               );
             })}
           </div>
+          <button className="dock-workspace-expand" type="button" onClick={(event) => openWorkspace(activePanelId, event.currentTarget)} aria-label={`Expand ${STUDIO_PANEL_REGISTRY.require(activePanelId).title} workspace`} title="Open full workspace"><Maximize2 size={15} /></button>
           <button
             className="dock-collapse"
             onClick={() => onLayoutChange(collapseDockGroup(layout, group.id, !group.collapsed))}
@@ -226,7 +271,7 @@ export default function DockManager({
             </div>}
           </div>
         </nav>
-        {!group.collapsed && <div className="dock-panel-body" id={`dock-body-${group.id}`} role="tabpanel" aria-labelledby={`dock-tab-${group.id}-${activePanelId}`}>{panelContent(activePanelId)}</div>}
+        {!group.collapsed && <div className="dock-panel-body" id={`dock-body-${group.id}`} role="tabpanel" aria-labelledby={`dock-tab-${group.id}-${activePanelId}`}>{expandedPanel === activePanelId ? null : panelContent(activePanelId)}</div>}
         {!group.collapsed && <div className={`dock-resizer dock-resizer-${group.dock}`} onPointerDown={(event) => beginDockResize(event, group)} aria-hidden="true" />}
         <div className={`dock-split-resizer dock-split-resizer-${group.dock}`} onPointerDown={(event) => beginSplitResize(event, group)} aria-hidden="true" />
       </aside>
@@ -263,10 +308,11 @@ export default function DockManager({
       <aside key={panel.panelId} className="dock-floating-panel" style={{ left: panel.x, top: panel.y, width: panel.width, height: panel.height }}>
         <header onPointerDown={beginMove}>
           <PanelIcon name={definition.icon} /><strong>{definition.title}</strong>
+          <button type="button" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => openWorkspace(panel.panelId, event.currentTarget)} aria-label={`Expand ${definition.title} workspace`} title="Open full workspace"><Maximize2 size={14} /></button>
           <button onPointerDown={(event) => event.stopPropagation()} onClick={() => onLayoutChange(moveDockPanel(layout, panel.panelId, "right", STUDIO_PANEL_REGISTRY))}>Dock</button>
           <button onPointerDown={(event) => event.stopPropagation()} onClick={() => onLayoutChange(closeDockPanel(layout, panel.panelId))} aria-label={`Close ${definition.title}`}>×</button>
         </header>
-        <div className="dock-panel-body">{panelContent(panel.panelId)}</div>
+        <div className="dock-panel-body">{expandedPanel === panel.panelId ? null : panelContent(panel.panelId)}</div>
         <div className="dock-floating-resizer" onPointerDown={beginResize} aria-hidden="true" />
       </aside>
     );
@@ -275,7 +321,44 @@ export default function DockManager({
   const groupsFor = (dock: DockGroup["dock"]) => layout.groups.filter((group) => group.dock === dock);
   const hasDockedPanels = layout.groups.length > 0;
 
-  if (tablet) return tablet.panel ? <TabletPanel panel={tablet.panel} onSelect={tablet.select} onClose={tablet.close}>{panelContent(tablet.panel)}</TabletPanel> : null;
+  const workspace = expandedPanel && <div className="panel-workspace-backdrop" onPointerDown={(event) => { if (event.target === event.currentTarget) setExpandedPanel(null); }}>
+    <section ref={workspaceRef} tabIndex={-1} className="panel-workspace" role="dialog" aria-modal="true" aria-label={`${STUDIO_PANEL_REGISTRY.require(expandedPanel).title} workspace`} data-panel={expandedPanel} onKeyDown={(event) => {
+      if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); setExpandedPanel(null); }
+      if (event.key !== "Tab") return;
+      const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')).filter((item) => item.getClientRects().length > 0);
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (document.activeElement === event.currentTarget) { event.preventDefault(); (event.shiftKey ? last : first).focus(); return; }
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }}>
+      <header className="panel-workspace-header">
+        <div className="panel-workspace-title"><span>WORKSPACE</span><h2>{STUDIO_PANEL_REGISTRY.require(expandedPanel).title}</h2><p>{PANEL_WORKSPACES[expandedPanel].description}</p></div>
+        <label className="panel-workspace-picker"><span>Choose workspace</span><select aria-label="Choose expanded workspace" value={expandedPanel} onChange={(event) => switchWorkspace(event.target.value as PanelId)}>
+          {(["Essentials", "Adjustments", "Production"] as const).map((group) => <optgroup key={group} label={group}>
+            {STUDIO_PANEL_REGISTRY.list().filter((definition) => definition.mobileGroup === group).map((definition) => <option key={definition.id} value={definition.id}>{definition.title}</option>)}
+          </optgroup>)}
+        </select></label>
+        <button type="button" className="panel-workspace-compact" onClick={() => { if (tablet) tablet.select(expandedPanel); else onLayoutChange(openDockPanel(layout, expandedPanel, STUDIO_PANEL_REGISTRY)); setExpandedPanel(null); }}>{tablet ? "Use panel" : "Keep in sidebar"}</button>
+        <button type="button" className="panel-workspace-close" onClick={() => setExpandedPanel(null)} aria-label="Close expanded workspace"><X size={19} /><span>Close</span></button>
+      </header>
+      <nav className="panel-workspace-related" aria-label="Related workspaces"><span>Related</span>{PANEL_WORKSPACES[expandedPanel].related.map((panelId) => <button key={panelId} type="button" onClick={() => switchWorkspace(panelId)}>{STUDIO_PANEL_REGISTRY.require(panelId).title}</button>)}</nav>
+      <div className="panel-workspace-layout" data-preview={PANEL_WORKSPACES[expandedPanel].preview ? "true" : undefined}>
+        {expandedPanel === "properties" && <nav className="concept-inspector-nav" aria-label="Inspector sections">
+          <button type="button" className="active" aria-current="page"><SlidersHorizontal size={17} />Appearance</button>
+          <button type="button" onClick={() => switchWorkspace("transform")}><Crop size={17} />Transform</button>
+          <button type="button" onClick={onOpenLayerStyle} disabled={!onOpenLayerStyle}><Sparkles size={17} />Effects</button>
+          <button type="button" onClick={() => switchWorkspace("mask")}><Scan size={17} />Mask</button>
+        </nav>}
+        <div className="panel-workspace-content dock-panel-body">{panelContent(expandedPanel)}</div>
+        {PANEL_WORKSPACES[expandedPanel].preview && <LiveCanvasPreview key={expandedPanel} documentAspect={documentAspect} onReturnToCanvas={() => setExpandedPanel(null)} />}
+      </div>
+      <footer className="panel-workspace-footer"><span>Editing the current document</span><span>Esc to return to canvas</span></footer>
+    </section>
+  </div>;
+
+  if (tablet) return <>{tablet.panel && <TabletPanel panel={tablet.panel} onSelect={tablet.select} onClose={tablet.close} onExpand={() => { returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setExpandedPanel(tablet.panel!); }}>{expandedPanel === tablet.panel ? null : panelContent(tablet.panel)}</TabletPanel>}{workspace}</>;
 
   return (
     <div className="dock-system" data-dragging={dragging ? "true" : undefined}>
@@ -320,6 +403,7 @@ export default function DockManager({
           }}>Float panel</button>
         </div>
       )}
+      {workspace}
     </div>
   );
 }

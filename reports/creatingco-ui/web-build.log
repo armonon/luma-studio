@@ -1,0 +1,89 @@
+
+> luma-studio@0.6.0-rc.0 build:netlify
+> next build --webpack && node build/generate-sw.mjs
+
+▲ Next.js 16.3.8 (webpack)
+✓ Running next.config.ts took 39ms
+
+  Creating an optimized production build ...
+⚠ Compiled with warnings in 26.2s
+
+../../Codex/2026-10-29/task/luma-publish/node_modules/harfbuzzjs/dist/index.mjs
+The generated code contains 'async/await' because this module is using "topLevelAwait".
+However, your target environment does not appear to support 'async/await'.
+As a result, the code may not run as expected or may cause runtime errors.
+
+Import trace for requested module:
+../../Codex/2026-10-29/task/luma-publish/node_modules/harfbuzzjs/dist/index.mjs
+./app/engine/text-shaping.ts
+./app/engine/text-shaping.worker.ts
+./app/engine/text-shaping-client.ts
+./app/studio/studio-client.tsx
+
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/canvas.js
+Module not found: Can't resolve 'canvas' in '/Users/lillypad/Documents/Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node'
+Did you mean './canvas'?
+Requests that should resolve in the current directory need to start with './'.
+Requests that start with a name are treated as module requests and resolve within module directories (node_modules).
+If changing the source code is not an option there is also a resolve options called 'preferRelative' which tries to resolve these kind of requests in the current directory too.
+
+Import trace for requested module:
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/canvas.js
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/self.js
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/paper-full.js
+./app/engine/vector-svg-import.ts
+./app/engine/vector-svg-import.worker.ts
+./app/engine/vector-svg-client.ts
+./app/engine/studio.ts
+./app/studio/studio-client.tsx
+
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/extend.js
+require.extensions is not supported by webpack. Use a loader instead.
+
+Import trace for requested module:
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/extend.js
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/paper-full.js
+./app/engine/vector-svg-import.ts
+./app/engine/vector-svg-import.worker.ts
+./app/engine/vector-svg-client.ts
+./app/engine/studio.ts
+./app/studio/studio-client.tsx
+
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/self.js
+Module not found: Can't resolve 'jsdom' in '/Users/lillypad/Documents/Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node'
+
+Import trace for requested module:
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/node/self.js
+../../Codex/2026-10-29/task/luma-publish/node_modules/paper/dist/paper-full.js
+./app/engine/vector-svg-import.ts
+./app/engine/vector-svg-import.worker.ts
+./app/engine/vector-svg-client.ts
+./app/engine/studio.ts
+./app/studio/studio-client.tsx
+
+  Running TypeScript ...
+  Finished TypeScript in 14.2s ...
+  Collecting page data using 9 workers ...
+  Generating static pages using 9 workers (0/7) ...
+  Generating static pages using 9 workers (1/7)
+  Generating static pages using 9 workers (3/7)
+  Generating static pages using 9 workers (5/7)
+✓ Generating static pages using 9 workers (7/7) in 366ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ƒ /api/ai/edit
+├ ƒ /api/diagnostics/crash
+├ ○ /cutout
+├ ○ /ipad
+├ ○ /iphone
+└ ○ /studio
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+public/sw.js MSR39Uj4Sh_y-34d1bedb87: 148 precached URLs, 7.7 MB of /_next/static

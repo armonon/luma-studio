@@ -36,6 +36,7 @@ export default function ToolPalette({
   autoFocusSearch?: boolean;
 }) {
   const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("all");
   const searchRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
 
@@ -49,16 +50,17 @@ export default function ToolPalette({
 
   const visibleGroups = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return groups;
-    return groups
+    const filtered = category === "all" ? groups : groups.filter(group => group.id === category);
+    if (!needle) return filtered;
+    return filtered
       .map((group) => ({
         ...group,
         tools: group.tools.filter((tool) => (
-          `${tool.label} ${tool.shortcut} ${group.label}`.toLocaleLowerCase().includes(needle)
+          `${tool.label} ${tool.shortcut} ${group.label} ${group.description}`.toLocaleLowerCase().includes(needle)
         )),
       }))
       .filter((group) => group.tools.length > 0);
-  }, [groups, query]);
+  }, [groups, query, category]);
 
   const featuredCommands: { id: StudioCommand; icon: string; label: string; detail: string; shortcut: string }[] = [
     { id: "define-custom-shape", icon: "custom-shape", label: "Define Custom Shape", detail: "Save selected vector outline", shortcut: "" },
@@ -76,8 +78,12 @@ export default function ToolPalette({
     icon: featuredCommands.find(command => command.id === definition.id)?.icon ?? "frame",
     detail: featuredCommands.find(command => command.id === definition.id)?.detail ?? "Application command",
   }));
-  const commands = (query.trim() ? allCommands : allCommands.filter(command => featuredCommands.some(featured => featured.id === command.id))).filter((command) => !query.trim()
-    || `${command.label} ${command.detail}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const commands = category !== "all" && category !== "commands" ? []
+    : (query.trim() || category === "commands" ? allCommands : allCommands.filter(command => featuredCommands.some(featured => featured.id === command.id))).filter((command) => !query.trim()
+      || `${command.label} ${command.detail} ${command.shortcut}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const resultCount = visibleGroups.reduce((sum, group) => sum + group.tools.length, 0) + commands.length;
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const resetResultsScroll = () => { resultsRef.current?.scrollTo({ top: 0 }); };
 
   return (
     <div className="tool-palette-scrim" onPointerDown={onClose}>
@@ -87,16 +93,26 @@ export default function ToolPalette({
         className="tool-palette"
         role="dialog"
         aria-modal="true"
-        aria-label="All tools"
+        aria-label="Tools and commands"
         onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           // Keep tool-search navigation and button activation out of the canvas
           // shortcut listener (Enter there enters layer focus).
           event.stopPropagation();
-          if (event.key === "Escape") { event.stopPropagation(); onClose(); return; }
-          if (event.key === "ArrowDown" && event.target === searchRef.current) {
+          if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+          const resultButtons = [...(resultsRef.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? [])];
+          if (event.target === searchRef.current) {
+            if (event.key === "ArrowDown") { event.preventDefault(); resultButtons[0]?.focus(); }
+            if (event.key === "Enter" && query.trim()) { event.preventDefault(); resultButtons[0]?.click(); }
+          } else if (resultsRef.current?.contains(event.target as Node) && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
             event.preventDefault();
-            dialogRef.current?.querySelector<HTMLButtonElement>(".tool-palette-groups button:not(:disabled)")?.focus();
+            const current = resultButtons.indexOf(document.activeElement as HTMLButtonElement);
+            if (event.key === "ArrowUp" && current === 0) searchRef.current?.focus();
+            else {
+              const next = event.key === "Home" ? 0 : event.key === "End" ? resultButtons.length - 1
+                : (current + (event.key === "ArrowDown" ? 1 : -1) + resultButtons.length) % resultButtons.length;
+              resultButtons[next]?.focus();
+            }
           }
           if (event.key === "Tab") {
             const targets = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input, [tabindex="0"]') ?? [])];
@@ -108,8 +124,8 @@ export default function ToolPalette({
       >
         <header>
           <div>
-            <span>Tool library</span>
-            <strong>All tools</strong>
+            <strong>Tools & commands</strong>
+            <span>Browse tools or search for an action</span>
           </div>
           <button onClick={onClose} aria-label="Close tool library"><X size={18} /></button>
         </header>
@@ -119,30 +135,22 @@ export default function ToolPalette({
             ref={searchRef}
             type="search"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Find a tool or shortcut"
+            onChange={(event) => { setQuery(event.target.value); resetResultsScroll(); }}
+            placeholder="Search tools, actions, or shortcuts…"
             aria-label="Find a tool or shortcut"
           />
-          {query && <button onClick={() => setQuery("")} aria-label="Clear tool search"><X size={14} /></button>}
+          {query && <button type="button" onClick={() => { setQuery(""); resetResultsScroll(); searchRef.current?.focus(); }} aria-label="Clear tool search"><X size={14} /></button>}
         </label>
-        <div className="tool-palette-groups">
-          {commands.length > 0 && (
-            <section className="tool-palette-group tool-command-group">
-              <header>
-                <div><strong>Commands</strong><span>Actions and adjustments</span></div>
-                <small>{commands.length}</small>
-              </header>
-              <div>
-                {commands.map((command) => (
-                  <button key={command.id} disabled={!commandEnabled(command.id)} onClick={() => onCommand(command.id)}>
-                    <span className="tool-glyph"><ToolIcon id={command.icon} size={16} /></span>
-                    <span><strong>{command.label}</strong><small>{command.detail}</small></span>
-                    {command.shortcut && <kbd>{command.shortcut}</kbd>}
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
+        <div className="tool-palette-browse">
+          <div className="tool-palette-filters" role="group" aria-label="Filter tools and commands">
+            {[{ id: "all", label: "All" }, ...groups, { id: "commands", label: "Commands" }].map(filter => <button
+              key={filter.id} type="button" aria-pressed={category === filter.id} className={category === filter.id ? "active" : ""}
+              onClick={() => { setCategory(filter.id); resetResultsScroll(); }}
+            >{filter.label}</button>)}
+          </div>
+          <p className="tool-palette-results-status" role="status" aria-live="polite">{query.trim() ? `${resultCount} results for “${query.trim()}”` : category === "all" ? "Browse the complete toolkit" : `${resultCount} ${category === "commands" ? "commands" : "tools"}`}</p>
+        </div>
+        <div ref={resultsRef} className="tool-palette-groups">
           {visibleGroups.map((group) => (
             <section key={group.id} className="tool-palette-group">
               <header>
@@ -163,19 +171,36 @@ export default function ToolPalette({
                     <span className="tool-glyph" aria-hidden="true"><ToolIcon id={tool.id} size={16} /></span>
                     <span>
                       <strong>{tool.label}</strong>
-                      <small>{group.label}</small>
+                      <small>{activeTool === tool.id ? "Selected tool" : group.label}</small>
                     </span>
-                    <kbd>{tool.shortcut}</kbd>
+                    {tool.shortcut && <kbd>{tool.shortcut}</kbd>}
                   </button>
                 ))}
               </div>
             </section>
           ))}
+          {commands.length > 0 && (
+            <section className="tool-palette-group tool-command-group">
+              <header>
+                <div><strong>Commands</strong><span>Actions and adjustments</span></div>
+                <small>{commands.length}</small>
+              </header>
+              <div>
+                {commands.map((command) => (
+                  <button key={command.id} disabled={!commandEnabled(command.id)} onClick={() => onCommand(command.id)}>
+                    <span className="tool-glyph" aria-hidden="true"><ToolIcon id={command.icon} size={16} /></span>
+                    <span><strong>{command.label}</strong><small>{command.detail}</small></span>
+                    {command.shortcut && <kbd>{command.shortcut}</kbd>}
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {visibleGroups.length === 0 && commands.length === 0 && (
             <div className="tool-palette-empty">
               <span>⌕</span>
               <strong>No tools found</strong>
-              <small>Try a tool name, workspace, or shortcut.</small>
+              <small>Try another name or choose a different category.</small>
             </div>
           )}
         </div>

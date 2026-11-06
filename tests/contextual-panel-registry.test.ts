@@ -21,6 +21,13 @@ test("manual panels and mask focus outrank generic workspace routing", () => {
   assert.equal(resolveContextualPanel({ ...base, override: null, inspector: "ai" }), "neural");
 });
 
+test("Photo offers adjustments for a raster while preserving specific layer editors", () => {
+  const base = { override: null, inspector: "properties" as const, workspace: "develop", hasSelection: false, maskFocused: false };
+  assert.equal(resolveContextualPanel({ ...base, layer: { kind: "raster" } as Layer }), "tone");
+  assert.equal(resolveContextualPanel({ ...base, layer: { kind: "adjustment-curves" } as Layer }), "curves");
+  assert.equal(resolveContextualPanel({ ...base, layer: { kind: "raster", raw: {} } as Layer }), "raw");
+});
+
 test("a docked Selection panel stays available independently of workspace and contextual routing", () => {
   const page = readFileSync(new URL("../app/studio/studio-client.tsx", import.meta.url), "utf8");
   const panel = page.split('<DockPanelContent panelId="selection">')[1]?.split("</DockPanelContent>")[0];

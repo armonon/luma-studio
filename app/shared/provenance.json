@@ -1,0 +1,20 @@
+{
+  "schema": "luma-form-drawing-tools@1",
+  "strategy": "Identical vendored pure modules in isolated Form and Luma branches; verify explicitly, no automatic cross-repository writes",
+  "origin": {
+    "repository": "armonon/luma-studio",
+    "commit": "af6f0893b6b0fe28fff2be99d7f3cb39ab6aba54",
+    "files": {
+      "app/engine/document.ts": "cdf8b297ea4d5b50f8f95033f5087c33b89e69762abd5fdce462ed9efa25349a",
+      "app/studio/dynamic-cursor.ts": "0bb01b9e07a78ed6b4d113356b79c6dfa477245fcccf1b0a5d5f3a08149ae477"
+    }
+  },
+  "shared": {
+    "creative-cursor.ts": "404b4a72d62f09afa1c2ab72282c7bd0d18bbdd59145306160a7e9206ed09532",
+    "luma-affine.ts": "0d180e408e59ac71cffd8046ec7abc08e61900f68695fee79db16b1fb5c47595",
+    "drawing-input.ts": "f88dfff5bfc7651b303bb4a4d0e2dab1c0db8dabdcf3a2de8d6e05eb58ce46f2",
+    "frame-coalescer.ts": "632a969aa0e4e32c5302459225aad8090121be7eee9c4664a70d7f290559a637",
+    "drawing-diagnostics.ts": "187ba4d4d07261f8db8c5d24984e7a065cc5517ef57a60ae122eaed4259ef82b",
+    "path-editing.ts": "c42452235122743f834f63f8e46c973171912cd772ca9d4f3d47872328c10282"
+  }
+}

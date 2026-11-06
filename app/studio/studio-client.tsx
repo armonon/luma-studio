@@ -1,12 +1,17 @@
 "use client";
+import {mountDrawingDiagnostics, beginDrawingPhase} from "../shared/drawing-diagnostics";
 import { openCollaboration, previewImage } from "@momentium/live-review";
 import { lumaSharedFields, applyLumaSharedFields } from "./collaboration";
 import { useTabletWorkspace } from "./use-tablet-workspace";
 import { useTabletCanvas } from "./use-tablet-canvas";
+import { PathPointEditor, type PathPointEditorHandle } from "./path-point-editor";
 import { PwaToast, useInstallPrompt, usePwaUpdate } from "./pwa";
 import { isFontFile, saveToLocker, useLockerAvailable, useLockerOpen, useSuiteKit, type LockerFile } from "./suite";
 import DownloadConfirmation from "./download-confirmation";
+import VersionHistoryDialog from "./version-history-dialog";
+import { useAppearance } from "./use-appearance";
 import { canvasPointerIntent } from "./pointer-intent";
+import { pointerSamples,wheelZoomFactor } from "../shared/drawing-input";
 import { TABLET_VIEWPORT_LIMITS } from "./tablet-input";
 import { PHONE_VIEWPORT_LIMITS } from "./phone-workspace";
 import BrushToolbox, { type PaintSection } from "./brush-toolbox";
@@ -29,6 +34,7 @@ import {
   lazy,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -47,7 +53,6 @@ import {
   NEUTRAL_LEVELS,
   NEUTRAL_TONE,
   PathAnchor,
-  PathStyle,
   type SmartFilterKind,
   ToneParams,
   Transform,
@@ -59,6 +64,7 @@ import {
 import { SMART_FILTER_SPECS } from "@/app/engine/filters";
 import type { VectorDeliveryReport } from "@/app/engine/vector-delivery-plan";
 import {
+  PRO_ADJUSTMENT_KINDS,
   PRO_ADJUSTMENT_LABELS,
   defaultProAdjustment,
   type ProAdjustmentKind,
@@ -210,6 +216,7 @@ import {
   dynamicCursorPresentation,
 } from "./dynamic-cursor";
 import { createCommandRegistry } from "./command-registry";
+import { creativeSpaceForWorkspace, spaceDestination, actionDestination, type CreativeSpace } from "./creatingco-spaces";
 import { commandForShortcut } from "../desktop/command-shortcuts";
 import { createMenuStatePublisher, publishNativeMenuState } from "../desktop/native-menu";
 import {
@@ -226,6 +233,7 @@ import {
 import DockManager, { DockPanelContent } from "./dock-manager";
 import LayersPanel from "./panels/layers-panel";
 import PropertiesPanel from "./panels/properties-panel";
+import HistoryPanel from "./panels/history-panel";
 import { ActionsPanel, ChannelsPanel, MeasurePanel, EMPTY_ALPHA_DRAFT, type AlphaChannelDraft } from "./panels/operational-panels";
 import { AssetsPanel, StructurePanel } from "./panels/project-panels";
 import DocumentPanel from "./panels/document-panel";
@@ -234,6 +242,7 @@ import {
   BUILT_IN_WORKSPACES,
   DOCK_LAYOUT_STORAGE_KEY,
   defaultDockLayout,
+  isLegacyDefaultDockLayout,
   openDockPanel,
   sanitizeDockLayout,
   type DockLayout,
@@ -334,6 +343,9 @@ function formatBytes(bytes: number) {
 export default function SpatialStudio({ desktop = false, tabletMode = false, phoneMode = false }: { desktop?: boolean; tabletMode?: boolean; phoneMode?: boolean }) {
   const { tablet: detectedTablet, phone, drawWithTouch, toggleFingerDrawing } = useTabletWorkspace(phoneMode);
   const tablet = tabletMode || detectedTablet;
+  const finishWorkspaceRender = beginDrawingPhase("workspace-render-to-layout");
+  useLayoutEffect(() => { finishWorkspaceRender(); });
+  useEffect(()=>{if(window.location.hostname!=="127.0.0.1"||!new URLSearchParams(window.location.search).has("drawingDiagnostics"))return;return mountDrawingDiagnostics(document,'canvas');},[]);
   const [tabletPanel, setTabletPanel] = useState<PanelId | null>(null);
   const [phoneFocus, setPhoneFocus] = useState(false);
   const [downloadConfirmation, setDownloadConfirmation] = useState<{ name: string; resolve: (saved: boolean) => void } | null>(null);
@@ -395,6 +407,15 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [loadedPhotoshopReport, setLoadedPhotoshopReport] = useState<PhotoshopCompatibilityReport | null>(null);
 
   const [workspace, setWorkspace] = useState<WorkspaceMode>(initialPresentation.workspace);
+  const [creativeSpace, setCreativeSpace] = useState<CreativeSpace>(() => creativeSpaceForWorkspace(initialPresentation.workspace));
+  const creativeSpaceState = useRef<Partial<Record<CreativeSpace, {
+    tool: Tool;
+    workspace: WorkspaceMode;
+    dockLayout: DockLayout;
+    inspectorTab: "layers" | "properties" | "ai";
+    panelOverride: ContextualPanelId | null;
+  }>>>({});
+  const [uiAppearance, setUiAppearance] = useAppearance();
   const [activeTool, setActiveTool] = useState<Tool>(initialPresentation.tool);
   const [inspectorTab, setInspectorTab] = useState<"layers" | "properties" | "ai">("layers");
   const [dockLayout, setDockLayout] = useState<DockLayout>(() => defaultDockLayout());
@@ -507,6 +528,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const [recordingName, setRecordingName] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [expandedWorkspace, setExpandedWorkspace] = useState<PanelId | null>(null);
   const [branchMixOpacity, setBranchMixOpacity] = useState(0.5);
   const [branchMixBlend, setBranchMixBlend] = useState<BlendMode>("source-over");
   const [blurRadius, setBlurRadius] = useState(8);
@@ -672,7 +694,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     try { localStorage.setItem(PEN_SNAP_KEY, JSON.stringify(next)); } catch { /* Session controls still work with unavailable storage. */ }
   };
   const [pointDraft, setPointDraft] = useState<Point[]>([]);
-  const directAnchorRef = useRef<{ layerId: string; index: number; contour: number; original: PathStyle; next: PathStyle } | null>(null);
+  const pathPointEditorRef = useRef<PathPointEditorHandle | null>(null);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -724,7 +746,10 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     const hydration = window.setTimeout(() => {
       try {
         const stored = window.localStorage.getItem(DOCK_LAYOUT_STORAGE_KEY);
-        const next = sanitizeDockLayout(stored ? JSON.parse(stored) : null, STUDIO_PANEL_REGISTRY);
+        const savedLayout = sanitizeDockLayout(stored ? JSON.parse(stored) : null, STUDIO_PANEL_REGISTRY);
+        const next = isLegacyDefaultDockLayout(savedLayout)
+          ? { ...defaultDockLayout(), groups: [{ ...defaultDockLayout().groups[0], size: Math.max(340, ...savedLayout.groups.map((group) => group.size)) }] }
+          : savedLayout;
         setDockLayout(next);
         const active = next.groups[0]?.activePanelId;
         if (active === "layers" || active === "properties" || active === "neural") {
@@ -1264,6 +1289,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
   const cursorDocumentSize = activeTool === "capture-brush" && captureSampling ? captureRadius * 2 : brushSize;
   const cursorBasePresentation = dynamicCursorPresentation(activeTool, {
     selectionMode,
+    cue: activeTool === "pen" && penPreview?.label ? "snap" : undefined,
     captureSampling: activeTool === "capture-brush" && captureSampling,
     unavailableReason: cursorUnavailableReason,
     needsSourceSample: cursorNeedsSourceSample,
@@ -1297,6 +1323,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     const rect = canvas.getBoundingClientRect();
     const presentation = dynamicCursorPresentation(activeTool, {
       selectionMode,
+      cue: activeTool === "pen" && penPreview?.label ? "snap" : undefined,
       shiftKey: pointer.shiftKey,
       altKey: pointer.altKey,
       captureSampling: activeTool === "capture-brush" && captureSampling,
@@ -1657,18 +1684,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (!activeLayer?.path) { notify("Select a path layer"); return; }
       if (activeLayer.locked) { notify("Unlock this layer before editing its anchors"); return; }
       if (activeLayer.path.booleanSource || activeLayer.path.offsetSource) { notify("Expand the generated shape to editable contours first"); return; }
-      const local = documentPointToLayer(activeLayer.transform, p.x, p.y);
-      if (!local) return;
-      let index = 0;
-      let contour = 0;
-      let distance = Infinity;
-      [activeLayer.path, ...(activeLayer.path.contours ?? [])].forEach((part, partIndex) => part.anchors.forEach((anchor, candidate) => {
-        const d = Math.hypot(anchor.x - local.x, anchor.y - local.y);
-        if (d < distance) { distance = d; index = candidate; contour = partIndex; }
-      }));
-      if (!Number.isFinite(distance)) return;
-      const original = structuredClone(activeLayer.path);
-      directAnchorRef.current = { layerId: activeLayer.id, index, contour, original, next: structuredClone(original) };
+      pathPointEditorRef.current?.down({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey });
       return;
     }
     if (moveTool && doc) {
@@ -1713,8 +1729,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       if (gesture.documentId !== studio.activeDocumentState().id) { studio.cancelStroke(); brushGestureRef.current = null; return; }
       if (e.buttons === 0) return;
       const source = e.nativeEvent;
-      const coalesced = typeof source.getCoalescedEvents === "function" ? source.getCoalescedEvents() : [];
-      const points = coalesced.length ? coalesced : [source];
+      const points = pointerSamples(source);
       const rect = canvasRef.current?.getBoundingClientRect();
       try {
         for (const point of points) studio.paintTo(gesture.layerId, gesture.params, eventToDoc({
@@ -1748,19 +1763,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       penFrameRef.current?.push({ result, index, documentId: studio.activeDocumentState().id });
       return;
     }
-    if (activeTool === "direct-select" && directAnchorRef.current && e.buttons !== 0) {
+    if (activeTool === "direct-select" && pathPointEditorRef.current?.active) {
       const p = eventToDoc(e);
-      const edit = directAnchorRef.current;
-      const pathLayer = studio.doc.layers.find((layer) => layer.id === edit.layerId);
-      if (!pathLayer) return;
-      const local = documentPointToLayer(pathLayer.transform, p.x, p.y);
-      if (!local) return;
-      const next = structuredClone(edit.next);
-      const part = edit.contour === 0 ? next : next.contours?.[edit.contour - 1];
-      if (!part?.anchors[edit.index]) return;
-      part.anchors[edit.index] = { ...part.anchors[edit.index], x: local.x, y: local.y };
-      edit.next = next;
-      studio.liveUpdatePath(edit.layerId, next);
+      pathPointEditorRef.current.move({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey });
       return;
     }
     if (quickSelectionRef.current && e.buttons !== 0) {
@@ -1777,12 +1782,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     }
     const d = dragRef.current;
     if (retouchTool && retouchActive.current && e.buttons !== 0 && activeLayer) {
-      type WithCoalesced = { getCoalescedEvents?: () => Array<{
-        clientX: number; clientY: number; pressure?: number; tiltX?: number; tiltY?: number; azimuthAngle?: number;
-      }> };
-      const src = e.nativeEvent as WithCoalesced;
-      const events = src.getCoalescedEvents ? src.getCoalescedEvents() : [];
-      for (const event of events.length ? events : [e.nativeEvent]) studio.retouchTo(activeLayer.id, eventToDoc(event));
+      const rect=canvasRef.current?.getBoundingClientRect();
+      for (const event of pointerSamples(e.nativeEvent)) studio.retouchTo(activeLayer.id, eventToDoc(event,rect));
       return;
     }
     if (!d) return;
@@ -1844,12 +1845,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
       setPenDragging(null);
       return;
     }
-    if (activeTool === "direct-select" && directAnchorRef.current) {
-      const edit = directAnchorRef.current;
-      studio.liveUpdatePath(edit.layerId, edit.original);
-      studio.updatePath(edit.layerId, edit.next);
-      directAnchorRef.current = null;
-      notify("Anchor moved");
+    if (activeTool === "direct-select" && pathPointEditorRef.current?.active) {
+      const p = eventToDoc(e);
+      pathPointEditorRef.current.end({ ...p, pointerId: e.pointerId, pointerType: e.pointerType, shiftKey: e.shiftKey, altKey: e.altKey }, e.type === "pointercancel");
       return;
     }
     if (retouchTool && retouchActive.current) {
@@ -1985,7 +1983,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
 
   const switchWorkspace = (next: WorkspaceMode) => {
     setPointDraft([]);
-    directAnchorRef.current = null;
+    pathPointEditorRef.current?.cancel();
     setWorkspace(next);
     selectInspectorTab("properties");
     const firstVisible = modeTools[next].find(([tool]) => !workflowPreferences.hiddenTools.includes(tool));
@@ -1994,7 +1992,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
 
   const activateTool = (tool: Tool, nextWorkspace: WorkspaceMode = workspace) => {
     setPointDraft([]);
-    directAnchorRef.current = null;
+    pathPointEditorRef.current?.cancel();
     if (resolvedFocusState.scope?.target === "mask" && tool !== "mask-add" && tool !== "mask-remove") {
       setFocusState({
         ...resolvedFocusState,
@@ -4224,7 +4222,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     exportOpen: showExportMenu,
     historyOpen: showHistory,
   });
-  const historyState = uiWork.historyTree ? studio?.historyState() : undefined;
+  const historyState = uiWork.historyTree || expandedWorkspace === "history" ? studio?.historyState() : undefined;
   const engineState = uiWork.engineDiagnostics ? studio?.engineState() : undefined;
   useEffect(() => {
     let cancelled = false;
@@ -4509,12 +4507,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
     down: onPointerDown, move: onPointerMove, up: onPointerUp,
     // Only interrupt transactions with a proven rollback path. Never undo an
     // unrelated operation or cancel an already-committed one-shot tool.
-    canCancelTouch: () => Boolean(brushGestureRef.current || quickSelectionRef.current || dragRef.current?.shapeGesture || dragRef.current?.kind === "move-layer"),
+    canCancelTouch: () => Boolean(pathPointEditorRef.current?.active || brushGestureRef.current || quickSelectionRef.current || dragRef.current?.shapeGesture || dragRef.current?.kind === "move-layer"),
     cancel: event => { if (dragRef.current?.kind === "move-layer") cancelTransformGesture(); else onPointerUp(event); },
   });
 
   return (
-    <AppShell tablet={tablet} phone={phone} focus={phone && phoneFocus}>
+    <AppShell tablet={tablet} phone={phone} focus={phone && phoneFocus} appearance={uiAppearance}>
       {phone && phoneFocus && <button className="phone-focus-exit" onClick={() => setPhoneFocus(false)}>Show controls</button>}
       <a className="studio-skip-link" href="#studio-canvas">Skip to canvas</a>
       <div className="spatial-aura aura-blue" />
@@ -4525,14 +4523,40 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         <ShellErrorBoundary title="Application controls" onSave={() => { void saveProject(); }}>
         <Suspense fallback={<header className="spatial-topbar studio-titlebar" />}>
           <StudioTitlebar
+            creativeSpace={creativeSpace}
+            onCreativeSpaceChange={(space) => {
+              if (space === creativeSpace) return;
+              // Keep each space's tools and panels without changing document or view state.
+              creativeSpaceState.current[creativeSpace] = { tool: activeTool, workspace, dockLayout, inspectorTab, panelOverride: nativePanelOverride };
+              const remembered = creativeSpaceState.current[space];
+              const next = remembered ?? spaceDestination(space);
+              setCreativeSpace(space);
+              setNativePanelOverride(remembered?.panelOverride ?? null);
+              if (next.tool && next.workspace) activateTool(next.tool, next.workspace);
+              if (remembered) {
+                setDockLayout(remembered.dockLayout);
+                setInspectorTab(remembered.inspectorTab);
+              } else {
+                const panel = spaceDestination(space).panel;
+                if (panel) openStudioPanel(panel);
+              }
+            }}
+            onCreativeAction={(action) => {
+              const next = actionDestination(action);
+              setNativePanelOverride(null);
+              if (next.tool && next.workspace) activateTool(next.tool, next.workspace);
+              if (next.panel) openStudioPanel(next.panel);
+            }}
+            appearance={uiAppearance}
+            onAppearanceChange={setUiAppearance}
             desktop={desktop}
             phone={phone}
             onFocusCanvas={() => { setPhoneFocus(true); setTabletPanel(null); }}
             recoveryUnavailable={Boolean(recoveryReadFailure())}
             tabletControls={tablet ? <>
               <button className="tablet-touch-mode" aria-pressed={drawWithTouch} onClick={toggleFingerDrawing} title={drawWithTouch ? "Finger edits with the active tool. Turn off to pan and pinch." : "Fingers pan and pinch. Pencil edits with the active tool."}>{drawWithTouch ? "Touch: draw" : "Touch: navigate"}</button>
-              <button aria-label="Toggle layers panel" aria-pressed={tabletPanel === "layers"} onClick={() => setTabletPanel(current => current === "layers" ? null : "layers")}>Layers</button>
-              <button aria-label="Toggle properties panel" aria-pressed={tabletPanel === "properties"} onClick={() => setTabletPanel(current => current === "properties" ? null : "properties")}>Properties</button>
+              <button aria-label="Open Layers workspace" onClick={() => window.dispatchEvent(new CustomEvent("luma:open-workspace", { detail: "layers" }))}>Layers</button>
+              <button aria-label="Open Properties workspace" onClick={() => window.dispatchEvent(new CustomEvent("luma:open-workspace", { detail: "properties" }))}>Properties</button>
             </> : undefined}
             projectName={projectName}
             saveState={saveState}
@@ -4596,6 +4620,8 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             <ShellErrorBoundary title="Tool options" onSave={() => { void saveProject(); }}>
             <Suspense fallback={<div className="studio-contextbar" />}>
               <ContextToolbar
+                key={activeTool}
+                phone={phone}
                 onOpenBrushes={() => executeStudioCommand("panel-paint")}
                 tool={activeTool}
                 label={activeToolMeta?.[2] ?? "Tool"}
@@ -4705,9 +4731,9 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
               role="application"
               aria-label={`${projectName} image canvas. Active tool: ${activeTool}.`}
               onWheel={(e) => {
-                if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey) return;
+                if (!e.ctrlKey && !e.metaKey && Math.abs(e.deltaY) < 50 && !e.altKey && e.deltaMode===0) return;
                 e.preventDefault();
-                const factor = Math.exp(-e.deltaY * 0.002);
+                const factor = wheelZoomFactor(e.deltaY,e.deltaMode,e.currentTarget.getBoundingClientRect().height);
                 // Read everything off the synthetic event synchronously, before
                 // it reaches the setView updater. React's setState updater can
                 // run outside the event's own dispatch (batched, or on a later
@@ -4774,6 +4800,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   onLostPointerCapture={(event) => {
                     const wasEditor = tabletCanvas.onLostPointerCapture(event);
                     if (tablet && !wasEditor) return;
+                    pathPointEditorRef.current?.cancel();
                     if (brushGestureRef.current) { studio?.cancelStroke(); brushGestureRef.current = null; }
                     if (quickSelectionRef.current) { studio?.cancelSelectionGesture(); quickSelectionRef.current = null; }
                   }}
@@ -4792,6 +4819,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                     display: "block",
                   }}
                 />
+                {studio && doc && displayViewport && activeTool === "direct-select" && activeLayer?.path && !activeLayer.locked && !activeLayer.path.booleanSource && !activeLayer.path.offsetSource && <PathPointEditor key={`${activeDocumentId}:${activeLayer.id}`} ref={pathPointEditorRef} studio={studio} layer={activeLayer} documentId={activeDocumentId!} viewport={displayViewport} phone={phone} notify={notify} />}
                 <div
                   ref={dynamicCursorRef}
                   className="dynamic-canvas-cursor"
@@ -4965,12 +4993,15 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             tablet={tablet ? { panel: tabletPanel, select: setTabletPanel, close: () => setTabletPanel(null) } : undefined}
             layout={dockLayout}
             onLayoutChange={setDockLayout}
+            onWorkspaceChange={setExpandedWorkspace}
             onActivePanelChange={(panel) => {
               if (panel === "layers" || panel === "properties" || panel === "neural") {
                 setInspectorTab(panel === "neural" ? "ai" : panel);
               }
             }}
             contextualPanel={contextualPanel}
+            documentAspect={doc?.width && doc?.height ? doc.width / doc.height : undefined}
+            onOpenLayerStyle={activeLayer ? () => setStyleLayerId(activeLayer.id) : undefined}
           >
             <DockPanelContent panelId="layers">
               <LayersPanel
@@ -5007,13 +5038,14 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
               />
             </DockPanelContent>
 
-            {(desktop || tablet) && (
-              <DockPanelContent panelId="properties">
+            <DockPanelContent panelId="properties">
                 {selectedLayerIds.length > 1 ? <section className="layer-selection-summary" aria-label="Multiple layer properties">
                   <strong>{selectedLayerIds.length} layers selected</strong>
                   <span>Group to keep layers editable, or merge compatible layers into one raster. Select one layer for its properties.</span>
                   {(["group-layer", "ungroup-layers", "merge-layers", "duplicate-layer", "toggle-layer-lock", "toggle-layer-visibility"] as const).map(id => <button key={id} disabled={!commandRegistry.enabled(id)} onClick={() => executeStudioCommand(id)}>{commandRegistry.get(id).label}</button>)}
                 </section> : <PropertiesPanel
+                  compact={phone}
+                  contextualContent={expandedWorkspace === "properties" || !desktop}
                   showPanelPicker={NATIVE_DESKTOP_BUILD}
                   toolLabel={activeToolMeta?.[2] ?? "Properties"}
                   hasSelection={Boolean(doc?.selection)}
@@ -5046,12 +5078,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   onPreviewOpacity={previewLayerOpacity}
                   onCommitOpacity={setLayerOpacity}
                   onSetLayerVisible={setLayerVisible}
+                  onOpenLayerStyle={setStyleLayerId}
                   onOpenSpaceDeck={() => openSpaceDeck(true)}
                   onAddBlank={addBlank}
                   onSendToForm={() => { if (activeLayer) void sendLayerToForm(activeLayer); }}
                 />}
-              </DockPanelContent>
-            )}
+            </DockPanelContent>
 
             <DockPanelContent panelId="campaign">
               {studio && <Suspense fallback={<p>Loading Campaign…</p>}><CampaignPanel key={studio.activeDocumentState().id} studio={studio} selectedIds={selectedLayerIds} onChange={forceUpdate} onNotify={notify} onSave={downloadOrSave} onOpenType={()=>openStudioPanel("vector")} onRecolor={()=>executeStudioCommand("recolor")} onPrint={isNativeFilesystemAvailable()?()=>executeStudioCommand("export-print"):undefined} /></Suspense>}
@@ -5203,6 +5235,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             </DockPanelContent>
 
             <DockPanelContent panelId="raw">
+            {!activeLayer?.raw && (
+              <section className="photo-adjustments" aria-label="Open RAW source">
+                <header><strong>RAW Develop</strong><p>Open a supported RAW image to adjust sensor color and exposure before refining the result.</p></header>
+                <div className="photo-adjustment-grid"><button onClick={() => fileInput.current?.click()}><strong>Open RAW image</strong><small>The RAW controls appear here when its layer is selected.</small></button></div>
+              </section>
+            )}
             {activeLayer?.raw && rawDevelop && (
               <section className="glass-card tone-card" data-contextual-panel="raw">
                 <header>
@@ -5282,6 +5320,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             </DockPanelContent>
 
             <DockPanelContent panelId="curves">
+            {doc && activeLayer?.kind !== "adjustment-curves" && (
+              <section className="photo-adjustments" aria-label="Start curves adjustment">
+                <header><strong>Curves</strong><p>Add an editable curves layer, then shape the composite or individual color channels.</p></header>
+                <div className="photo-adjustment-grid"><button disabled={!commandRegistry.enabled("curves")} onClick={() => executeStudioCommand("curves")}><strong>＋ Add Curves adjustment</strong><small>Your source image stays intact.</small></button></div>
+              </section>
+            )}
             {activeLayer?.kind === "adjustment-curves" && activeLayer.curves && (
               <div className="contextual-panel-host" data-contextual-panel="curves"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading curves" />}>
                 <CurvesEditor curves={activeLayer.curves} onLive={(c) => studio?.liveUpdateCurves(activeLayer.id, c)} onCommit={(c) => studio?.updateCurves(activeLayer.id, c)} onReset={() => studio?.updateCurves(activeLayer.id, cloneCurves(NEUTRAL_CURVES))} />
@@ -5289,6 +5333,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             )}
             </DockPanelContent>
             <DockPanelContent panelId="levels">
+            {doc && activeLayer?.kind !== "adjustment-levels" && (
+              <section className="photo-adjustments" aria-label="Start levels adjustment">
+                <header><strong>Levels</strong><p>Add an editable levels layer to set black, white, and midtone points.</p></header>
+                <div className="photo-adjustment-grid"><button disabled={!commandRegistry.enabled("levels")} onClick={() => executeStudioCommand("levels")}><strong>＋ Add Levels adjustment</strong><small>Refine the result here after adding it.</small></button></div>
+              </section>
+            )}
             {activeLayer?.kind === "adjustment-levels" && activeLayer.levels && (
               <div className="contextual-panel-host" data-contextual-panel="levels"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading levels" />}>
                 <LevelsEditor levels={activeLayer.levels} onLive={(l) => studio?.liveUpdateLevels(activeLayer.id, l)} onCommit={(l) => studio?.updateLevels(activeLayer.id, l)} onReset={() => studio?.updateLevels(activeLayer.id, { ...NEUTRAL_LEVELS })} />
@@ -5296,6 +5346,12 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             )}
             </DockPanelContent>
             <DockPanelContent panelId="hsl">
+            {doc && activeLayer?.kind !== "adjustment-hsl" && (
+              <section className="photo-adjustments" aria-label="Start hue and saturation adjustment">
+                <header><strong>Hue / Saturation</strong><p>Add an editable color layer to adjust hue, saturation, and lightness.</p></header>
+                <div className="photo-adjustment-grid"><button disabled={!commandRegistry.enabled("hsl")} onClick={() => executeStudioCommand("hsl")}><strong>＋ Add Hue / Saturation adjustment</strong><small>Keep the original pixels untouched.</small></button></div>
+              </section>
+            )}
             {activeLayer?.kind === "adjustment-hsl" && activeLayer.hsl && (
               <div className="contextual-panel-host" data-contextual-panel="hsl"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading HSL" />}>
                 <HslEditor hsl={activeLayer.hsl} onLive={(h) => studio?.liveUpdateHsl(activeLayer.id, h)} onCommit={(h) => studio?.updateHsl(activeLayer.id, h)} onReset={() => studio?.updateHsl(activeLayer.id, { ...NEUTRAL_HSL })} />
@@ -5303,6 +5359,14 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             )}
             </DockPanelContent>
             <DockPanelContent panelId="pro-adjustment">
+            {doc && activeLayer?.kind !== "adjustment-pro" && (
+              <section className="photo-adjustments" aria-label="Start professional adjustment">
+                <header><strong>Professional adjustments</strong><p>Choose a color or tonal treatment. Each creates an editable layer.</p></header>
+                <div className="photo-adjustment-grid">
+                  {PRO_ADJUSTMENT_KINDS.map((kind) => <button key={kind} onClick={() => addProfessionalAdjustment(kind)}><strong>＋ {PRO_ADJUSTMENT_LABELS[kind]}</strong><small>Open its controls in this workspace.</small></button>)}
+                </div>
+              </section>
+            )}
             {activeLayer?.kind === "adjustment-pro" && activeLayer.proAdjustment && (
               <div className="contextual-panel-host" data-contextual-panel="pro-adjustment"><Suspense fallback={<section className="glass-card tone-card" aria-label="Loading adjustment" />}>
                 <ProAdjustmentEditor
@@ -5316,10 +5380,22 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             )}
             </DockPanelContent>
             <DockPanelContent panelId="tone">
+            {doc && activeLayer?.kind !== "adjustment-tone" && (
+              <section className="photo-adjustments" aria-label="Photo adjustments">
+                <header><strong>Light & color</strong><p>Add an editable adjustment to your image.</p></header>
+                <div className="photo-adjustment-grid">
+                  <button onClick={() => { addAdjust(); focusInspector("properties"); }}><strong>Exposure & tone</strong><small>Light, contrast and white balance</small></button>
+                  <button disabled={!commandRegistry.enabled("curves")} onClick={() => executeStudioCommand("curves")}><strong>Curves</strong><small>Shape light and individual colors</small></button>
+                  <button disabled={!commandRegistry.enabled("levels")} onClick={() => executeStudioCommand("levels")}><strong>Levels</strong><small>Balance shadows and highlights</small></button>
+                  <button disabled={!commandRegistry.enabled("hsl")} onClick={() => executeStudioCommand("hsl")}><strong>Hue & saturation</strong><small>Refine the colors in your image</small></button>
+                </div>
+                <p>Your original stays intact. Select an adjustment in Layers to refine it.</p>
+              </section>
+            )}
             {activeLayer?.kind === "adjustment-tone" && (
               <section className="glass-card tone-card" data-contextual-panel="tone">
                 <header>
-                  <strong>{activeIsAdjustment ? "Develop stack" : "Add Tone"}</strong>
+                  <strong>Exposure & tone</strong>
                   <button onClick={resetTone} aria-label="Reset tone">↺</button>
                 </header>
                 {!activeIsAdjustment && (
@@ -5547,6 +5623,7 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
                   <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} aria-label="Fill color" style={{ width: 28, height: 22, border: "none", background: "transparent" }} />
                 </header>
                 <div style={{ padding: "0 12px 8px" }}>
+                  {activeLayer?.path && <button disabled={activeLayer.locked || Boolean(activeLayer.path.booleanSource || activeLayer.path.offsetSource)} onClick={() => activateTool("direct-select", "vector")} title={activeLayer.path.booleanSource || activeLayer.path.offsetSource ? "Expand the generated shape to editable contours first" : "Edit vector anchors and Bézier handles (D)"}>Edit Points</button>}
                   {studio && activeLayer && (activeLayer.path || activeLayer.shape) && <Suspense fallback={<span>Loading vector controls…</span>}>
                     <VectorConstructionPanel key={`${studio.activeDocumentState().id}:${activeLayer.id}`} studio={studio} layer={activeLayer} onSelect={setActiveLayerId} onNotify={notify} onSave={downloadOrSave} />
                   </Suspense>}
@@ -5739,19 +5816,27 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
             </DockPanelContent>
 
             <DockPanelContent panelId="history">
-            <div className="spatial-view-dock">
-              <button onClick={() => studio?.undo()} title="Undo" aria-label="Undo" disabled={!studio?.canUndo()}>↶</button>
-              <button onClick={() => studio?.redo()} title="Redo" aria-label="Redo" disabled={!studio?.canRedo()}>↷</button>
-              <button onClick={() => studio?.selectAll()} title="Select all" aria-label="Select all">▭</button>
-              <span />
-              <button
-                onClick={() => setShowHistory(true)}
-                title={`${historyState?.operations ?? 0} operations · ${historyState?.branchPoints ?? 0} branch points`}
-                aria-label="Open version history"
-              >
-                ◴{historyState?.branchPoints ? <sup>{historyState.branchPoints + 1}</sup> : null}
-              </button>
-            </div>
+              <HistoryPanel
+                studio={studio}
+                history={historyState}
+                opacity={branchMixOpacity}
+                blend={branchMixBlend}
+                hasSelection={Boolean(doc?.selection)}
+                onOpacity={setBranchMixOpacity}
+                onBlend={setBranchMixBlend}
+                onOpen={() => setShowHistory(true)}
+                onRestore={(id, label) => {
+                  if (!studio) return;
+                  studio.checkoutHistory(id);
+                  notify(`Restored ${label}`);
+                }}
+                onMix={(id, label) => {
+                  if (!studio) return;
+                  const result = studio.mixHistoryBranch(id, branchMixOpacity, branchMixBlend);
+                  if (result.error) { notify(result.error); return; }
+                  if (result.layer) { setActiveLayerId(result.layer.id); notify(`${label} mixed as a new layer`); }
+                }}
+              />
             </DockPanelContent>
             </>}
           </DockManager>
@@ -6069,84 +6154,29 @@ export default function SpatialStudio({ desktop = false, tabletMode = false, pho
         </ShellErrorBoundary>
       )}
 
-      {showHistory && (
-        <div className="spatial-modal" onMouseDown={() => setShowHistory(false)}>
-          <section
-            className="spatial-command"
-            onMouseDown={(event) => event.stopPropagation()}
-            aria-label="Version history"
-            style={{ width: "min(560px, calc(100vw - 32px))" }}
-          >
-            <div>
-              <span>⑂</span>
-              <strong style={{ padding: "0 8px", flex: 1 }}>Version history</strong>
-              <small style={{ opacity: 0.6 }}>
-                {historyState?.operations ?? 0} operations · {historyState?.branchPoints ?? 0} branch points
-              </small>
-              <button onClick={() => setShowHistory(false)} aria-label="Close version history">×</button>
-            </div>
-            <p>Restore a version, or mix an alternate branch into the current image as a new editable layer.</p>
-            <div style={{ display: "grid", gridTemplateColumns: "68px minmax(0,1fr) 46px 112px", gap: 7, alignItems: "center", padding: "4px 12px 9px", fontSize: 10 }}>
-              <span>Mix strength</span>
-              <input type="range" min="1" max="100" value={Math.round(branchMixOpacity * 100)} onChange={(event) => setBranchMixOpacity(Number(event.target.value) / 100)} />
-              <output>{Math.round(branchMixOpacity * 100)}%</output>
-              <select value={branchMixBlend} onChange={(event) => setBranchMixBlend(event.target.value as BlendMode)} aria-label="Branch mix blend mode">
-                <option value="source-over">Normal</option><option value="soft-light">Soft Light</option><option value="overlay">Overlay</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="color">Color</option><option value="luminosity">Luminosity</option>
-              </select>
-            </div>
-            <div role="tree" style={{ maxHeight: "min(56vh, 520px)", overflowY: "auto", padding: "2px 0" }}>
-              {historyState?.nodes.map((node) => (
-                <div
-                  key={node.id}
-                  role="treeitem"
-                  aria-current={node.isCurrent ? "step" : undefined}
-                  aria-selected={node.isCurrent}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "minmax(0,1fr) 54px",
-                    alignItems: "center",
-                    width: "100%",
-                    gap: 5,
-                    paddingLeft: 6 + node.depth * 16,
-                    background: node.isCurrent
-                      ? "linear-gradient(90deg,rgba(124,92,231,.3),rgba(35,133,244,.16))"
-                      : node.isOnCurrentPath ? "rgba(255,255,255,.055)" : "rgba(255,255,255,.025)",
-                    borderColor: node.isCurrent ? "rgba(154,126,255,.55)" : "rgba(255,255,255,.08)",
-                    opacity: node.isOnCurrentPath || node.isCurrent ? 1 : 0.72,
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      if (!studio || node.isCurrent) return;
-                      studio.checkoutHistory(node.id);
-                      notify(`Restored ${node.label}`);
-                    }}
-                    style={{ display: "grid", gridTemplateColumns: "20px minmax(0,1fr) auto", alignItems: "center", minWidth: 0, border: 0, background: "transparent", textAlign: "left" }}
-                  >
-                    <i aria-hidden="true">{node.isCurrent ? "●" : node.childCount > 1 ? "⑂" : "○"}</i>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{node.label}</span>
-                    <small style={{ opacity: 0.58 }}>{node.childCount > 1 ? `${node.childCount} branches` : new Date(node.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small>
-                  </button>
-                  <button
-                    disabled={node.isCurrent || !node.parentId}
-                    title={doc?.selection ? "Mix this version inside the active selection" : "Mix this version as a new layer"}
-                    onClick={() => {
-                      if (!studio) return;
-                      const result = studio.mixHistoryBranch(node.id, branchMixOpacity, branchMixBlend);
-                      if (result.error) { notify(result.error); return; }
-                      if (result.layer) {
-                        setActiveLayerId(result.layer.id);
-                        notify(`${node.label} mixed as a new layer`);
-                      }
-                    }}
-                    style={{ padding: "5px 6px", fontSize: 9 }}
-                  >Mix</button>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-      )}
+      {showHistory && <VersionHistoryDialog
+        history={historyState}
+        opacity={branchMixOpacity}
+        blend={branchMixBlend}
+        hasSelection={Boolean(doc?.selection)}
+        onOpacity={setBranchMixOpacity}
+        onBlend={setBranchMixBlend}
+        onClose={() => setShowHistory(false)}
+        onRestore={(id, label) => {
+          if (!studio) return;
+          studio.checkoutHistory(id);
+          notify(`Restored ${label}`);
+        }}
+        onMix={(id, label) => {
+          if (!studio) return;
+          const result = studio.mixHistoryBranch(id, branchMixOpacity, branchMixBlend);
+          if (result.error) { notify(result.error); return; }
+          if (result.layer) {
+            setActiveLayerId(result.layer.id);
+            notify(`${label} mixed as a new layer`);
+          }
+        }}
+      />}
 
       {showFilters && (
         <div className="spatial-modal" onMouseDown={() => setShowFilters(false)}>

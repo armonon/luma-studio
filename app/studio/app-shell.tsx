@@ -6,11 +6,14 @@ import { browserFrameCoalescer } from "./frame-coalescer";
 import "./workspace.css";
 import "./tablet-workspace.css";
 import "./phone-workspace.css";
+import "./creatingco-theme.css";
+import "./panel-workspace.css";
+import "./concept-workspaces.css";
 
 type RegionProps = ComponentPropsWithoutRef<"div"> & { children: ReactNode };
 
 /** Layout-only root. It deliberately knows nothing about documents or tools. */
-export function AppShell({ children, tablet = false, phone = false, focus = false }: { children: ReactNode; tablet?: boolean; phone?: boolean; focus?: boolean }) {
+export function AppShell({ children, tablet = false, phone = false, focus = false, appearance = "dark" }: { children: ReactNode; tablet?: boolean; phone?: boolean; focus?: boolean; appearance?: "dark" | "light" }) {
   const root = useRef<HTMLElement>(null);
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -47,7 +50,7 @@ export function AppShell({ children, tablet = false, phone = false, focus = fals
       element.style.removeProperty("--phone-viewport-height"); element.style.removeProperty("--phone-viewport-top");
     };
   }, [phone]);
-  return <main ref={root} className="spatial-studio" data-app-shell="luma-studio" data-ui="atelier" data-interface={tablet ? "tablet" : "desktop"} data-form-factor={phone ? "phone" : undefined} data-canvas-focus={focus}>{children}</main>;
+  return <main ref={root} className="spatial-studio" data-app-shell="luma-studio" data-ui="atelier" data-design="creatingco" data-appearance={appearance} data-interface={tablet ? "tablet" : "desktop"} data-form-factor={phone ? "phone" : undefined} data-canvas-focus={focus}>{children}</main>;
 }
 
 export function AppWindow({ children, ...props }: RegionProps) {

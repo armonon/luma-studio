@@ -1,9 +1,10 @@
 "use client";
 
-import { Suspense, lazy, useCallback, useState } from "react";
+import { Suspense, lazy, useCallback, useContext, useState } from "react";
 import type { StudioCommand } from "@/app/desktop/menu-model";
 import type { LayerSelectionModifiers } from "@/app/engine/layer-selection";
 import LayerContextMenu from "../layer-context-menu";
+import LayerOpacityControl from "./layer-opacity-control";
 import { ArrowDown, ArrowUp, Folder, Plus, Trash2 } from "lucide-react";
 import { EFFECT_LABELS, type Layer } from "@/app/engine/document";
 import {
@@ -12,6 +13,7 @@ import {
   type ProAdjustmentKind,
 } from "@/app/engine/pro-adjustments";
 import type { Studio } from "@/app/engine/studio";
+import { ExpandedWorkspaceContext } from "../panel-workspace-context";
 
 const VirtualLayerStack = lazy(() => import("../virtual-layer-stack"));
 const BlendStackEditor = lazy(() => import("../blend-stack-editor"));
@@ -67,6 +69,7 @@ export default function LayersPanel({
   onAddProfessionalAdjustment,
   onRenameLayer,
 }: LayersPanelProps) {
+  const expanded = useContext(ExpandedWorkspaceContext);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [selecting, setSelecting] = useState(false);
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
@@ -75,7 +78,7 @@ export default function LayersPanel({
       <header>
         <strong>Layers <small className="layer-count">{layers.length}{selectedLayerIds.length > 1 ? ` · ${selectedLayerIds.length} selected` : ""}</small></strong>
         <div className="layer-add-menu">
-          <button onClick={onAddBlank} title="Add paint layer" aria-label="Add paint layer"><Plus size={16} /></button>
+          <button onClick={onAddBlank} title="Add paint layer" aria-label="Add paint layer"><Plus size={16} />{expanded && <span>New layer</span>}</button>
           <select
             aria-label="Add adjustment layer"
             title="Add adjustment layer"
@@ -152,12 +155,9 @@ export default function LayersPanel({
       {selectedLayerIds.length > 1 && <div className="layer-selection-summary"><span>{touch ? "Tap layers in Select mode to toggle selection" : "Shift-click a range · ⌘/Ctrl-click to toggle"}</span><button disabled={!commandEnabled("merge-layers")} title={studio?.layerBatchReason(selectedLayerIds, "merge") ?? "Rasterize selected layers · ⌘E · undo restores originals"} onClick={() => onCommand("merge-layers")}>Merge selected</button></div>}
       {contextMenu && <LayerContextMenu {...contextMenu} touch={touch} count={selectedLayerIds.length} enabled={commandEnabled} execute={onCommand} close={closeContextMenu} mergeReason={studio?.layerBatchReason(selectedLayerIds, "merge")} />}
       {activeLayer && selectedLayerIds.length <= 1 && (
-        <div className="layer-controls">
-          <label>
-            <span>Opacity</span>
-            <input type="range" min="0" max="100" disabled={studio?.isLayerLocked(activeLayer.id)} value={Math.round(activeLayer.opacity * 100)} onChange={(event) => onPreviewOpacity(activeLayer.id, Number(event.target.value) / 100)} onPointerUp={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} onBlur={(event) => onCommitOpacity(activeLayer.id, Number(event.currentTarget.value) / 100)} />
-            <output>{Math.round(activeLayer.opacity * 100)}%</output>
-          </label>
+        <section className="layer-controls" aria-label="Selected layer appearance">
+          <header className="layer-appearance-heading"><strong>Layer appearance</strong><span>{activeLayer.name}</span></header>
+          <LayerOpacityControl layerId={activeLayer.id} value={activeLayer.opacity} disabled={Boolean(studio?.isLayerLocked(activeLayer.id))} onPreview={onPreviewOpacity} onCommit={onCommitOpacity} />
           {activeLayer.kind === "group"
             ? <div className="blend-group-note">Group opacity · children pass through</div>
             : studio && (
@@ -165,21 +165,21 @@ export default function LayersPanel({
                 <BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} />
               </Suspense>
             )}
-          <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
-            <button onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")} style={{ flex: 1 }}>
+          <div className="layer-appearance-actions">
+            <button type="button" aria-pressed={Boolean(activeLayer.locked)} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, activeLayer.locked ? "Layer unlocked" : "Layer locked")}>
               {activeLayer.locked ? "Locked" : "Lock layer"}
             </button>
             {activeLayer.kind !== "group" && (
-              <button onClick={() => studio?.setLayerProp(activeLayer.id, "clipping", !activeLayer.clipping, "Clipping mask")} style={{ flex: 1 }}>
+              <button type="button" aria-pressed={Boolean(activeLayer.clipping)} onClick={() => studio?.setLayerProp(activeLayer.id, "clipping", !activeLayer.clipping, "Clipping mask")}>
                 {activeLayer.clipping ? "✓ Clipped" : "Clip below"}
               </button>
             )}
           </div>
-          <div style={{ display: "flex", gap: 6, paddingTop: 6 }}>
+          <div className="layer-appearance-actions layer-appearance-secondary">
             {activeLayer.kind === "raster" && (
-              <button onClick={() => studio?.convertToSmartObject(activeLayer.id)} style={{ flex: 1 }}>◇ Smart object</button>
+              <button type="button" onClick={() => studio?.convertToSmartObject(activeLayer.id)}>◇ Smart object</button>
             )}
-            <button onClick={() => onOpenLayerStyle(activeLayer.id)} style={{ flex: 1 }} title="Blending options, Blend If and layer effects">fx Layer style…</button>
+            <button type="button" onClick={() => onOpenLayerStyle(activeLayer.id)} title="Blending options, Blend If and layer effects">fx Layer style…</button>
           </div>
           {!!activeLayer.filters?.length && (
             <div style={{ display: "grid", gap: 4, paddingTop: 6 }}>
@@ -203,7 +203,7 @@ export default function LayersPanel({
               ))}
             </div>
           )}
-        </div>
+        </section>
       )}
     </section>
   );
