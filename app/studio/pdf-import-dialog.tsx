@@ -6,7 +6,7 @@ import { BUNDLED_FONTS } from "../engine/bundled-fonts";
 export default function PdfImportDialog({ name, onChoose }: { name: string; onChoose: (choice: PdfImportChoice | null) => void }) {
   const ref = useRef<HTMLDialogElement>(null);
   const [page, setPage] = useState(1);
-  const [mode, setMode] = useState<PdfImportChoice["mode"]>("editable");
+  const [mode, setMode] = useState<PdfImportChoice["mode"]>("raster");
   const [ppi, setPpi] = useState(150);
   const [fontFamily, setFontFamily] = useState("Lato");
   const [accepted, setAccepted] = useState(false);
@@ -20,7 +20,7 @@ export default function PdfImportDialog({ name, onChoose }: { name: string; onCh
       <header><strong id="pdf-import-title">Import PDF page</strong><button type="button" aria-label="Cancel PDF import" onClick={() => onChoose(null)}>×</button></header>
       <p>{name}</p>
       <label>Page<input autoFocus required type="number" min={1} max={64} step={1} value={page} onChange={event => setPage(event.target.valueAsNumber)} /></label>
-      <label>Import as<select value={mode} onChange={event => setMode(event.target.value as PdfImportChoice["mode"])}><option value="editable">Editable vector paths</option><option value="objects">Editable text, images and paths (font mapping)</option><option value="raster">Rendered page (flattened)</option></select></label>
+      <label>Import as<select value={mode} onChange={event => setMode(event.target.value as PdfImportChoice["mode"])}><option value="raster">Rendered page (recommended)</option><option value="editable">Editable vector paths</option><option value="objects">Editable text, images and paths (font mapping)</option></select></label>
       {mode === "objects" && <>
         <label>Map PDF text to<select value={fontFamily} onChange={event => setFontFamily(event.target.value)}>{BUNDLED_FONTS.map(font => <option key={font.family}>{font.family}</option>)}</select></label>
         <p>Reconstructs simple text, image and solid-path objects at 72 ppi. All text uses the chosen bundled font. Original font weights, glyph spacing and line widths may change; embedded font fidelity is not preserved. Complex clipping, effects, vertical text and annotations stop import.</p>

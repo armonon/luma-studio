@@ -1,0 +1,11 @@
+{
+  "base": "https://luma.thecreatingco.com/studio",
+  "steps": [
+    "Tool click and B/V shortcuts",
+    "Float and resize Layers",
+    "Floating layout survives reload",
+    "Redock Layers"
+  ],
+  "errors": [],
+  "pass": true
+}
