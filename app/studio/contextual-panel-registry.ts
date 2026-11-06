@@ -71,6 +71,7 @@ export function resolveContextualPanel({
   if (workspace === "vector") return "vector";
   if (workspace === "transform") return "transform";
   if (workspace === "measure") return "measure";
+  if (workspace === "develop") return "tone";
   if (workspace === "edit" || workspace === "retouch") return "paint";
   return "document";
 }

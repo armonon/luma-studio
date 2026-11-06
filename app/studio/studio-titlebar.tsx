@@ -1,10 +1,10 @@
 "use client";
 import { saveStatusLabel } from "./save-status";
 import { CreativeSpaceSwitcher, CreativeAppearanceToggle } from "./creatingco-space-switcher";
-import type { CreativeSpace, SpaceAction } from "./creatingco-spaces";
+import { CREATIVE_SPACES, type CreativeSpace, type SpaceAction } from "./creatingco-spaces";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, PanelsTopLeft, Users, History } from "lucide-react";
+import { ChevronDown, Ellipsis, FolderOpen, Redo2, Save, Undo2, Users, History, MoonStar, SunMedium, Check } from "lucide-react";
 import type { StudioCommand } from "../desktop/menu-model";
 
 export default function StudioTitlebar({
@@ -64,7 +64,11 @@ export default function StudioTitlebar({
   const menuRef = useRef<HTMLDetailsElement>(null);
   useEffect(() => {
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) menuRef.current?.removeAttribute("open");
+      const details = menuRef.current;
+      if (details?.open && event.target instanceof Node && !details.contains(event.target)) {
+        if (details.contains(document.activeElement)) details.querySelector("summary")?.focus({ preventScroll: true });
+        details.open = false;
+      }
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
@@ -73,6 +77,9 @@ export default function StudioTitlebar({
   const suiteInActions = phone || Boolean(tabletControls);
   const run = (action: () => void) => {
     menuRef.current?.removeAttribute("open");
+    // Restore the trigger before opening another surface so its own focus
+    // restoration never points into this now-hidden menu.
+    menuRef.current?.querySelector("summary")?.focus({ preventScroll: true });
     action();
   };
 
@@ -89,57 +96,93 @@ export default function StudioTitlebar({
         <CreativeSpaceSwitcher value={creativeSpace} onChange={onCreativeSpaceChange} onAction={onCreativeAction} />
       )}
       <div className="studio-project-title">
-        <strong>{projectName}</strong>
-        <span aria-live="polite">{saveStatusLabel(saveState, dirty, projectSaving)}</span>
+        <strong title={projectName}>{projectName}</strong>
+        <span id={phone ? undefined : "studio-save-status"} aria-live="polite" data-save-state={saveState === "error" ? "error" : dirty ? "dirty" : "clean"}>{saveStatusLabel(saveState, dirty, projectSaving)}</span>
       </div>
 
       <div className="spatial-share-actions">
         {suiteMenu && suiteInActions && <tcc-suite-menu className="studio-suite-menu" />}
         {phone && <span className="studio-phone-brand" role="img" aria-label="Luma Studio" title="Luma Studio"><span className="studio-app-mark" aria-hidden="true">L</span></span>}
-        {onReview && !phone && <button className="studio-icon-button" onClick={onReview} title="Shared layer editing (alpha)" aria-label="Start shared editing"><Users size={16} /></button>}
         {tabletControls && <div className="tablet-title-controls">{tabletControls}</div>}
         {phone && <button className="studio-icon-button studio-phone-save" onClick={() => onCommand("save")} aria-label="Save project" aria-describedby="phone-save-status" title={`Save project · ${saveStatusLabel(saveState, dirty, projectSaving)}`} aria-busy={projectSaving} data-save-state={saveState === "error" ? "error" : dirty ? "dirty" : "clean"} disabled={projectSaving || !commandEnabled("save")}><Save /><i aria-hidden="true" /></button>}
+        {!phone && !tabletControls && <>
+          <button className="studio-header-button studio-open-button" onClick={() => onCommand("open")} aria-label="Open document" title="Open document (⌘O)" disabled={!commandEnabled("open")}><FolderOpen size={16} aria-hidden="true" /><span>Open</span></button>
+          <button className="studio-header-button studio-save-button" onClick={() => onCommand("save")} aria-label="Save project" aria-describedby="studio-save-status" title="Save project (⌘S)" aria-busy={projectSaving} data-save-state={saveState === "error" ? "error" : dirty ? "dirty" : "clean"} disabled={projectSaving || !commandEnabled("save")}><Save size={16} aria-hidden="true" /><span>{projectSaving ? "Saving…" : "Save"}</span></button>
+          <span className="studio-action-divider" aria-hidden="true" />
+        </>}
         {!phone && !tabletControls && <button className="studio-icon-button creatingco-history-button" onClick={() => onCommand("history")} title="Version history" aria-label="Open version history" disabled={!commandEnabled("history")}><History size={16} /></button>}
-        <button className="studio-header-button studio-workspace-button" onClick={() => onCommand("workspace-settings")} title="Workspaces & shortcuts" aria-label="Workspaces & shortcuts" disabled={!commandEnabled("workspace-settings")}><PanelsTopLeft size={15} /><span>Workspace</span></button>
-        <span className="studio-action-divider" />
         <button className="studio-icon-button" onClick={() => onCommand("undo")} title="Undo (⌘Z)" aria-label="Undo" disabled={!canUndo || !commandEnabled("undo")}><Undo2 /></button>
         <button className="studio-icon-button" onClick={() => onCommand("redo")} title="Redo (⇧⌘Z)" aria-label="Redo" disabled={!canRedo || !commandEnabled("redo")}><Redo2 /></button>
-        <span className="studio-action-divider" />
-        <button className="studio-header-button studio-fit-button" onClick={() => onCommand("zoom-fit")} disabled={!commandEnabled("zoom-fit")}>Fit</button>
-        <span className="studio-zoom-readout">{zoom}%</span>
+        <span className="studio-action-divider" aria-hidden="true" />
         <details ref={menuRef} className="studio-app-menu" onKeyDown={event => {
-          if (!menuRef.current?.open) return;
+          const details = menuRef.current;
+          if (!details) return;
+          const summary = details.querySelector("summary");
+          if (event.target === summary) event.stopPropagation();
+          if (event.target === summary && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+            event.preventDefault();
+            event.stopPropagation();
+            details.open = true;
+            const items = [...details.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+            (event.key === "ArrowDown" ? items[0] : items.at(-1))?.focus();
+            return;
+          }
+          if (!details.open) return;
           event.stopPropagation();
           if (event.key === "Escape") {
-            event.preventDefault(); menuRef.current.removeAttribute("open");
-            menuRef.current.querySelector("summary")?.focus();
+            event.preventDefault();
+            details.open = false;
+            summary?.focus();
+            return;
+          }
+          if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+            event.preventDefault();
+            const items = [...details.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
+            const current = items.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+              : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+            items[next]?.focus();
           }
         }} onBlur={event => {
-          // WebKit touch can blur the summary with no next focus target before
-          // delivering the button click. Outside pointerdown handles that case.
-          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.removeAttribute("open");
+          // WebKit touch can blur the summary before delivering a button click.
+          // Outside pointerdown handles events without a next focus target.
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) event.currentTarget.open = false;
         }}>
-          <summary aria-label="More application actions"><Ellipsis /></summary>
-          <div>
+          <summary aria-label="More application actions" aria-haspopup="menu" title="More actions"><Ellipsis aria-hidden="true" /></summary>
+          <div role="menu" aria-label="Application actions">
             {phone && <p className="phone-save-status" role="status">{saveStatusLabel(saveState, dirty, projectSaving)}</p>}
-            <button onClick={() => run(() => onCommand("new-document"))} disabled={!commandEnabled("new-document")}><span>New document…</span><kbd>⌘N</kbd></button>
-            <button onClick={() => run(() => onCommand("open"))} disabled={!commandEnabled("open")}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
-            <button onClick={() => run(() => onCommand("save"))} disabled={!commandEnabled("save")}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
-            {phone && <button onClick={() => run(() => onCommand("zoom-fit"))} disabled={!commandEnabled("zoom-fit")}><span>Fit canvas</span></button>}
-            {phone && <button onClick={() => run(() => onCommand("close-document"))} disabled={!commandEnabled("close-document")}><span>Close document…</span></button>}
-            {phone && onFocusCanvas && <button onClick={() => run(onFocusCanvas)}><span>Focus canvas</span></button>}
-            {phone && onReview && <button onClick={() => run(onReview)}><Users /><span>Shared editing (alpha)</span></button>}
+            <p className="studio-menu-section-label">Document</p>
+            <button role="menuitem" onClick={() => run(() => onCommand("new-document"))} disabled={!commandEnabled("new-document")}><span>New document…</span><kbd>⌘N</kbd></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("open"))} disabled={!commandEnabled("open")}><FolderOpen /><span>Open…</span><kbd>⌘O</kbd></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("save"))} disabled={projectSaving || !commandEnabled("save")}><Save /><span>Save project</span><kbd>⌘S</kbd></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("close-document"))} disabled={!commandEnabled("close-document")}><span>Close document…</span></button>
+            {(phone || tabletControls) && onCreativeSpaceChange && <>
+              <hr />
+              <p className="studio-menu-section-label">Creative workspace</p>
+              {(["photo", "design", "create"] as const).map(space => <button key={space} role="menuitemradio" aria-checked={space === creativeSpace} onClick={() => run(() => onCreativeSpaceChange(space))}>
+                <span>{CREATIVE_SPACES[space].label}</span>{space === creativeSpace && <Check size={16} aria-hidden="true" />}
+              </button>)}
+            </>}
             <hr />
-            <button className={filtersOpen ? "active" : ""} onClick={() => run(() => onCommand("filter-gallery"))} disabled={!commandEnabled("filter-gallery")}><span>Filters</span></button>
-            <button onClick={() => run(() => onCommand("batch"))} disabled={!commandEnabled("batch")}><span>Batch processing</span></button>
-            <button onClick={() => run(() => onCommand("mockups"))} disabled={!commandEnabled("mockups")}><span>Mockups</span><kbd>alpha</kbd></button>
-            <button onClick={() => run(() => onCommand("glyph-font-maker"))} disabled={!commandEnabled("glyph-font-maker")}><span>Glyph font maker</span><kbd>alpha</kbd></button>
-            <button onClick={() => run(() => onCommand("cutout"))} disabled={!commandEnabled("cutout")}><span>Cutout</span><kbd>alpha</kbd></button>
-            <button onClick={() => run(() => onCommand("upscale"))} disabled={!commandEnabled("upscale")}><span>Upscale…</span><kbd>alpha</kbd></button>
-            <button onClick={() => run(() => onCommand("thumb"))} disabled={!commandEnabled("thumb")}><span>Thumb…</span><kbd>alpha</kbd></button>
-            <button onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><span>Version history</span></button>
-            <button onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Workspaces & shortcuts</span></button>
-            {onInstall && <><hr /><button onClick={() => run(onInstall)}><span>Install Luma app</span><kbd>offline</kbd></button></>}
+            <p className="studio-menu-section-label">View & workspace</p>
+            <button role="menuitem" onClick={() => run(() => onCommand("zoom-fit"))} disabled={!commandEnabled("zoom-fit")}><span>Fit canvas</span><kbd>{zoom}%</kbd></button>
+            {phone && onFocusCanvas && <button role="menuitem" onClick={() => run(onFocusCanvas)}><span>Focus canvas</span></button>}
+            <button role="menuitem" onClick={() => run(() => onCommand("history"))} disabled={!commandEnabled("history")}><History /><span>Version history</span></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("workspace-settings"))} disabled={!commandEnabled("workspace-settings")}><span>Panels & shortcuts</span></button>
+            {(phone || tabletControls) && onAppearanceChange && <button role="menuitem" onClick={() => run(() => onAppearanceChange(appearance === "dark" ? "light" : "dark"))}>
+              {appearance === "dark" ? <SunMedium /> : <MoonStar />}<span>{appearance === "dark" ? "Light appearance" : "Dark appearance"}</span>
+            </button>}
+            {onReview && <button role="menuitem" aria-label={phone ? undefined : "Start shared editing"} onClick={() => run(onReview)}><Users /><span>Shared editing (alpha)</span></button>}
+            <hr />
+            <p className="studio-menu-section-label">Creative tools</p>
+            <button role="menuitem" className={filtersOpen ? "active" : ""} onClick={() => run(() => onCommand("filter-gallery"))} disabled={!commandEnabled("filter-gallery")}><span>Filters</span></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("batch"))} disabled={!commandEnabled("batch")}><span>Batch processing</span></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("mockups"))} disabled={!commandEnabled("mockups")}><span>Mockups</span><small>alpha</small></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("glyph-font-maker"))} disabled={!commandEnabled("glyph-font-maker")}><span>Glyph font maker</span><small>alpha</small></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("cutout"))} disabled={!commandEnabled("cutout")}><span>Cutout</span><small>alpha</small></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("upscale"))} disabled={!commandEnabled("upscale")}><span>Upscale…</span><small>alpha</small></button>
+            <button role="menuitem" onClick={() => run(() => onCommand("thumb"))} disabled={!commandEnabled("thumb")}><span>Thumb…</span><small>alpha</small></button>
+            {onInstall && <><hr /><button role="menuitem" onClick={() => run(onInstall)}><span>Install Luma app</span><small>offline</small></button></>}
           </div>
         </details>
         {!phone && !tabletControls && onAppearanceChange && <CreativeAppearanceToggle value={appearance} onChange={onAppearanceChange} />}

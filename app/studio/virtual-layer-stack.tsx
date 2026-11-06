@@ -129,7 +129,7 @@ export default function VirtualLayerStack({
     <div
       ref={hostRef}
       className="layer-stack virtual-layer-stack"
-      style={touch ? { height: Math.min(6, Math.max(2, layers.length)) * ROW_HEIGHT } : undefined}
+      style={touch ? { height: Math.min(6, Math.max(1, layers.length)) * ROW_HEIGHT } : undefined}
       role="listbox"
       aria-label="Document layers"
       aria-multiselectable="true"

@@ -33,17 +33,27 @@ export type BuiltInWorkspace = "Essentials" | "Photography" | "Painting";
 export const BUILT_IN_WORKSPACES: BuiltInWorkspace[] = ["Essentials", "Photography", "Painting"];
 
 export function defaultDockLayout(workspace: BuiltInWorkspace = "Essentials"): DockLayout {
-  const topPanels: PanelId[] = workspace === "Painting" ? ["properties"] : ["properties", "neural"];
-  const properties: DockGroup = { id: "right-properties", dock: "right", panelIds: topPanels, activePanelId: "properties", size: 300, weight: 1, collapsed: false };
-  const layers: DockGroup = { id: "right-layers", dock: "right", panelIds: ["layers"], activePanelId: "layers", size: 300, weight: workspace === "Photography" ? 0.85 : 1.3, collapsed: false };
+  const panelIds: PanelId[] = ["properties", "layers", "history"];
+  const inspector: DockGroup = { id: "right-inspector", dock: "right", panelIds, activePanelId: "properties", size: 340, weight: 1, collapsed: false };
   return {
     version: DOCK_LAYOUT_VERSION,
     workspace,
     // Only defaults change: saved custom arrangements remain untouched.
-    groups: workspace === "Essentials" ? [layers, properties] : [properties, layers],
+    groups: [inspector],
     floating: [],
     closed: [],
   };
+}
+
+/** Upgrade only the exact former default; user-arranged docks retain their layout. */
+export function isLegacyDefaultDockLayout(layout: DockLayout): boolean {
+  if (layout.workspace !== "Essentials" || layout.groups.length !== 2 || layout.floating.length || layout.closed.length) return false;
+  const [layers, properties] = layout.groups;
+  return layers.id === "right-layers" && layers.dock === "right"
+    && layers.panelIds.length === 1 && layers.panelIds[0] === "layers" && !layers.collapsed
+    && properties.id === "right-properties" && properties.dock === "right"
+    && properties.panelIds.length === 2 && properties.panelIds[0] === "properties" && properties.panelIds[1] === "neural"
+    && !properties.collapsed;
 }
 
 function clamp(value: number, min: number, max: number) {

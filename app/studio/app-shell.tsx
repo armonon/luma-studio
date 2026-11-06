@@ -7,6 +7,8 @@ import "./workspace.css";
 import "./tablet-workspace.css";
 import "./phone-workspace.css";
 import "./creatingco-theme.css";
+import "./panel-workspace.css";
+import "./concept-workspaces.css";
 
 type RegionProps = ComponentPropsWithoutRef<"div"> & { children: ReactNode };
 

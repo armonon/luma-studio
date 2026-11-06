@@ -38,10 +38,12 @@ test("phone save reflects command availability, busy and error states", () => {
   assert.match(render({ dirty: false, saveState: "saved" }), /studio-phone-save[^>]*data-save-state="clean"/);
 });
 
-test("desktop titlebar retains its original share entry and no extra save button", () => {
+test("desktop exposes Open and Save and retains shared editing in More", () => {
   const html = render({ phone: false, desktop: true });
   assert.doesNotMatch(html, /studio-phone-save|phone-save-status/);
-  assert.match(html, /aria-label="Start shared editing"/);
+  assert.match(html, /studio-open-button[^>]*aria-label="Open document"/);
+  assert.match(html, /studio-save-button[^>]*aria-label="Save project"/);
+  assert.match(html, /role="menuitem" aria-label="Start shared editing"/);
 });
 
 test("recovery status never claims a portable file has been saved", () => {
@@ -76,7 +78,8 @@ test("mobile panels expose size controls and categorized registry entries", () =
   assert.match(html, /optgroup label="Essentials"/);
   assert.match(html, /optgroup label="Adjustments"/);
   assert.match(html, /optgroup label="Production"/);
-  assert.equal((html.match(/<option /g) ?? []).length, 22);
+  const panelOptions = html.match(/<select aria-label="Workspace panel"[\s\S]*?<\/select>/)?.[0] ?? "";
+  assert.equal((panelOptions.match(/<option /g) ?? []).length, 22);
 });
 
 test("browser download confirmation defaults to keeping the document unsaved", () => {

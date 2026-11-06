@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { ToolIcon } from "./studio-icons";
 import { AlignCenter, AlignLeft, AlignRight } from "lucide-react";
 import type { TransformMode } from "./canvas-geometry";
@@ -75,6 +76,8 @@ export default function ContextToolbar({
   onToggleGuides: () => void;
   onToggleAssets: () => void;
 }) {
+  const settingsId = useId();
+  const viewId = useId();
   const range = (label: string, key: keyof ContextValues, min: number, max: number, suffix = "", step = 1) => (
     <label className="context-range" data-option={key}>
       <span>{label}</span>
@@ -95,11 +98,15 @@ export default function ContextToolbar({
           {onOpenBrushes && <button onClick={onOpenBrushes} aria-label="Open brush library">Brushes</button>}
           <label className="context-color" title="Foreground color"><input type="color" value={values.color} onChange={(event) => onValue("color", event.target.value)} aria-label="Foreground color" /></label>
           {range("Size", "size", 1, tool === "capture-brush" ? 1200 : 400, "px")}
-          {range("Hard", "hardness", 0, 100, "%")}
-          {range("Flow", "flow", 1, 100, "%")}
           {range("Opacity", "opacity", 0, 100, "%")}
-          {range("Smooth", "smoothing", 0, 95, "%")}
-          {["brush", "pencil", "capture-brush", "erase", "mask-add", "mask-remove"].includes(tool) && <label className="context-select"><span>Mirror</span><select value={values.symmetry} onChange={(event) => onValue("symmetry", event.target.value)}>{MIRROR_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label>}
+          <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>
+          <div key={tool} id={settingsId} popover="auto" className="context-more-panel" aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
+            <header><strong>{label} settings</strong><button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button></header>
+            {range("Hardness", "hardness", 0, 100, "%")}
+            {range("Flow", "flow", 1, 100, "%")}
+            {range("Smoothing", "smoothing", 0, 95, "%")}
+            {["brush", "pencil", "capture-brush", "erase", "mask-add", "mask-remove"].includes(tool) && <label className="context-select"><span>Mirror</span><select value={values.symmetry} onChange={(event) => onValue("symmetry", event.target.value)}>{MIRROR_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label>}
+          </div>
         </div>
       )}
 
@@ -120,10 +127,14 @@ export default function ContextToolbar({
         <div className="studio-context-controls">
           <label className="context-color" title="Type color"><input type="color" value={values.color} onChange={(event) => onValue("color", event.target.value)} aria-label="Type color" /></label>
           <label className="context-select context-font-family"><span>Font</span><select title={values.fontFamily} value={values.fontFamily} onChange={(event) => onValue("fontFamily", event.target.value)}>{!FONT_CHOICES.some(font => font.value === values.fontFamily) && <option value={values.fontFamily}>{values.fontFamily.split(",")[0]} · current</option>}{FONT_CHOICES.map(font => <option key={font.value} value={font.value}>{font.label}</option>)}</select></label>
-          <label className="context-select"><span>Weight</span><select value={values.fontWeight} onChange={(event) => onValue("fontWeight", Number(event.target.value))}>{[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => <option key={weight} value={weight}>{weight}</option>)}</select></label>
           {range("Size", "textSize", 8, 400, "px")}
+          <button className="context-more-trigger" popoverTarget={settingsId}>Tool settings</button>
+          <div key={tool} id={settingsId} popover="auto" className="context-more-panel" aria-label={`${label} settings`} onKeyDown={event => event.stopPropagation()}>
+          <header><strong>{label} settings</strong><button popoverTarget={settingsId} popoverTargetAction="hide" aria-label="Close tool settings">×</button></header>
+          <label className="context-select"><span>Weight</span><select value={values.fontWeight} onChange={(event) => onValue("fontWeight", Number(event.target.value))}>{[100, 200, 300, 400, 500, 600, 700, 800, 900].map((weight) => <option key={weight} value={weight}>{weight}</option>)}</select></label>
           <div className="context-segmented" aria-label="Text alignment">
             {(["left", "center", "right"] as const).map((align) => <button key={align} className={values.textAlign === align ? "active" : ""} aria-pressed={values.textAlign === align} onClick={() => onValue("textAlign", align)} aria-label={`Align ${align}`}>{align === "left" ? <AlignLeft size={15} /> : align === "center" ? <AlignCenter size={15} /> : <AlignRight size={15} />}</button>)}
+          </div>
           </div>
         </div>
       )}
@@ -150,9 +161,13 @@ export default function ContextToolbar({
       </div>}
 
       <div className="studio-context-actions">
-        <button onClick={onFit}>Fit</button>
-        <button className={showGuides ? "active" : ""} onClick={onToggleGuides} aria-pressed={showGuides}>Guides</button>
-        <button className={assetsOpen ? "active" : ""} onClick={onToggleAssets} aria-pressed={assetsOpen}>Focus</button>
+        <button popoverTarget={viewId} aria-label="Canvas view options">View</button>
+        <div id={viewId} popover="auto" className="context-more-panel context-view-panel" aria-label="Canvas view options" onKeyDown={event => event.stopPropagation()}>
+          <header><strong>Canvas view</strong><button popoverTarget={viewId} popoverTargetAction="hide" aria-label="Close canvas view options">×</button></header>
+          <button onClick={onFit}>Fit canvas</button>
+          <button className={showGuides ? "active" : ""} onClick={onToggleGuides} aria-pressed={showGuides}>Guides</button>
+          <button className={assetsOpen ? "active" : ""} onClick={onToggleAssets} aria-pressed={assetsOpen} title="Show the Layer Focus strip">Layer strip</button>
+        </div>
       </div>
     </div>
   );

@@ -1,14 +1,21 @@
 "use client";
 
+import { lazy, Suspense, useContext } from "react";
 import type { Layer } from "@/app/engine/document";
 import type { Studio } from "@/app/engine/studio";
 import { CONTEXTUAL_PANEL_CHOICES, type ContextualPanelId } from "../contextual-panel-registry";
 import type { Tool, WorkspaceMode } from "../tool-registry";
 import SpatialLayerPanel from "./spatial-layer-panel";
 import LayerThumbnail from "../layer-thumbnail";
+import LayerOpacityControl from "./layer-opacity-control";
+import { ExpandedWorkspaceContext } from "../panel-workspace-context";
 import { Box, Eye, EyeOff, Focus, LockKeyhole, UnlockKeyhole } from "lucide-react";
 
+const BlendStackEditor = lazy(() => import("../blend-stack-editor"));
+
 export type PropertiesPanelProps = Readonly<{
+  compact?: boolean;
+  contextualContent?: boolean;
   showPanelPicker: boolean;
   toolLabel: string;
   hasSelection: boolean;
@@ -37,12 +44,15 @@ export type PropertiesPanelProps = Readonly<{
   onPreviewOpacity: (layerId: string, opacity: number) => void;
   onCommitOpacity: (layerId: string, opacity: number) => void;
   onSetLayerVisible: (layerId: string, visible: boolean) => void;
+  onOpenLayerStyle: (layerId: string) => void;
   onOpenSpaceDeck: () => void;
   onAddBlank: () => void;
   onSendToForm: () => void;
 }>;
 
 export default function PropertiesPanel({
+  compact = false,
+  contextualContent = false,
   showPanelPicker,
   toolLabel,
   hasSelection,
@@ -71,10 +81,37 @@ export default function PropertiesPanel({
   onPreviewOpacity,
   onCommitOpacity,
   onSetLayerVisible,
+  onOpenLayerStyle,
   onOpenSpaceDeck,
   onAddBlank,
   onSendToForm,
 }: PropertiesPanelProps) {
+  const expanded = useContext(ExpandedWorkspaceContext);
+  // The phone brush sheet puts presets first. Layers and Tool settings already
+  // expose the duplicated controls; retain the target so painting stays clear.
+  if (compact && paintingTool && !expanded) return <div className="desktop-property-target compact-paint-target">
+    <LayerThumbnail layer={activeLayer} />
+    <span><strong>{activeLayer?.name ?? "Canvas"}</strong><small>{activeLayer?.locked ? "Locked layer" : "Painting target"}</small></span>
+    {activeLayer && <button type="button" onClick={() => onFocusLayer(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer"><Focus size={16} /></button>}
+  </div>;
+  if (contextualContent) return <section className="inspector-focus" aria-label="Selected layer properties">
+    <div className="inspector-focus-heading"><span>Editing</span><strong>{toolLabel}</strong></div>
+    <div className="inspector-focus-target">
+      <LayerThumbnail layer={activeLayer} />
+      <span className="inspector-focus-name"><strong>{activeLayer?.name ?? "Canvas"}</strong><small>{activeLayer ? activeLayer.kind.replaceAll("-", " ") : `${documentWidth} × ${documentHeight}`}</small></span>
+      {activeLayer && <div className="inspector-focus-actions">
+        <button type="button" aria-label={activeLayer.visible ? "Hide selected layer" : "Show selected layer"} aria-pressed={activeLayer.visible} title={activeLayer.visible ? "Hide layer" : "Show layer"} onClick={() => onSetLayerVisible(activeLayer.id, !activeLayer.visible)}>{activeLayer.visible ? <Eye size={16} /> : <EyeOff size={16} />}</button>
+        <button type="button" aria-label={activeLayer.locked ? "Unlock selected layer" : "Lock selected layer"} aria-pressed={Boolean(activeLayer.locked)} title={activeLayer.locked ? "Unlock layer" : "Lock layer"} onClick={() => studio?.setLayerProp(activeLayer.id, "locked", !activeLayer.locked, "Layer lock")}>{activeLayer.locked ? <LockKeyhole size={16} /> : <UnlockKeyhole size={16} />}</button>
+        <button type="button" aria-label="Focus selected layer" title="Focus layer" onClick={() => onFocusLayer(activeLayer.id)}><Focus size={16} /></button>
+      </div>}
+    </div>
+    {(expanded || !compact) && <div className="inspector-focus-details">
+      {expanded && <div><span>Document</span><strong>{documentWidth} × {documentHeight} px</strong></div>}
+      {activeLayer && <LayerOpacityControl layerId={activeLayer.id} value={activeLayer.opacity} disabled={Boolean(studio?.isLayerLocked(activeLayer.id))} onPreview={onPreviewOpacity} onCommit={onCommitOpacity} />}
+      {activeLayer && studio && activeLayer.kind !== "group" && <Suspense fallback={<div aria-label="Loading blending controls" />}><BlendStackEditor key={activeLayer.id} layer={activeLayer} studio={studio} /></Suspense>}
+      {activeLayer && <button className="concept-layer-style-action" type="button" onClick={() => onOpenLayerStyle(activeLayer.id)}>fx · Layer style and effects</button>}
+    </div>}
+  </section>;
   return (
     <section className="glass-card desktop-properties-card">
       <header>
@@ -103,7 +140,7 @@ export default function PropertiesPanel({
           </span>
           {activeLayer && <button type="button" onClick={() => onFocusLayer(activeLayer.id)} title="Focus this layer" aria-label="Focus this layer"><Focus size={16} /></button>}
         </div>
-        <details className="desktop-quick-controls">
+        {!(compact && paintingTool) && <details className="desktop-quick-controls">
         <summary>Quick controls</summary>
         {activeTool === "radial-warp" ? <>
           <div className="desktop-property-switch">
@@ -152,8 +189,8 @@ export default function PropertiesPanel({
         </> : (
           <button className="desktop-empty-action" type="button" onClick={onAddBlank}>＋ Add your first layer</button>
         )}
-        </details>
-        <button type="button" className="desktop-space-hint" onClick={onOpenSpaceDeck} title="Open tool features (Space)"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></button>
+        </details>}
+        {!compact && <button type="button" className="desktop-space-hint" onClick={onOpenSpaceDeck} title="Open tool features (Space)"><kbd>Space</kbd><span><strong>Tool features</strong><small>Tap to pin · hold and drag to pan</small></span></button>}
         <details className="desktop-spatial-disclosure">
           <summary><Box />Spatial & Form Studio</summary>
           <SpatialLayerPanel layer={activeLayer} tool={activeTool} studio={studio} onSendToForm={onSendToForm} />

@@ -28,13 +28,13 @@ export const CREATIVE_SPACES: Readonly<Record<CreativeSpace, Readonly<{
   design: {
     label: "Design",
     subtitle: "Type, vector and layout",
-    entry: { label: "Type", tool: "text", workspace: "vector", panel: "vector" },
+    entry: { label: "Type", tool: "text", workspace: "vector", panel: "properties" },
     actions: ["type", "artboards", "brand"],
   },
   create: {
     label: "Create",
     subtitle: "Paint, assets and intelligence",
-    entry: { label: "Paint", tool: "brush", workspace: "edit", panel: "assets" },
+    entry: { label: "Paint", tool: "brush", workspace: "edit", panel: "properties" },
     actions: ["paint", "intelligence", "automation"],
   },
 } as const;
@@ -42,11 +42,11 @@ export const CREATIVE_SPACES: Readonly<Record<CreativeSpace, Readonly<{
 export const CREATIVE_ACTIONS: Readonly<Record<SpaceAction, EditorDestination>> = {
   develop: { label: "Develop", tool: "tone", workspace: "develop", panel: "properties" },
   retouch: { label: "Retouch", tool: "heal", workspace: "retouch", panel: "properties" },
-  mask: { label: "Masks", tool: "mask-add", workspace: "mask", panel: "mask" },
-  type: { label: "Typography", tool: "text", workspace: "vector", panel: "vector" },
+  mask: { label: "Masks", tool: "mask-add", workspace: "mask", panel: "properties" },
+  type: { label: "Typography", tool: "text", workspace: "vector", panel: "properties" },
   artboards: { label: "Artboards", panel: "structure" },
   brand: { label: "Brand & campaign", panel: "campaign" },
-  paint: { label: "Paint", tool: "brush", workspace: "edit", panel: "paint" },
+  paint: { label: "Paint", tool: "brush", workspace: "edit", panel: "properties" },
   intelligence: { label: "Intelligence", panel: "neural" },
   automation: { label: "Automations", panel: "actions" },
 } as const;

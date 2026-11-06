@@ -113,7 +113,7 @@ export function initialStudioPresentation(desktop: boolean): StudioPresentation 
   return {
     workspace: "edit",
     tool: "brush",
-    assetsOpen: true,
+    assetsOpen: false,
     zoom: 1,
     showRadialOverlay: false,
   };

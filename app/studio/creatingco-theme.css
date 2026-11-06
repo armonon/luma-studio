@@ -1,263 +1,527 @@
-/*
- * Luma Studio / The Creating Co — editorial workspace refresh.
- * Scoped to the real AppShell, not the marketing site or the engine canvases.
- * Purposefully preserves tablet/phone presentation; those have their own CSS.
- * Add AFTER workspace.css, tablet-workspace.css and phone-workspace.css.
- */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
-  --ui-bg: #10141d;
-  --ui-panel: #1b202b;
-  --ui-raised: #252c39;
-  --ui-field: #161b25;
-  --ui-border: #303746;
-  --ui-text: #eef1f8;
-  --ui-muted: #a0aabc;
-  --ui-accent: #98aefb;
-  --ui-selected: #303e63;
-  --studio-line: #303746;
-  --studio-line-strong: #4a5366;
-  --studio-text: #eef1f8;
-  --studio-text-muted: #a0aabc;
-  --cc-window: #191d27;
-  --cc-bar: #222735;
-  --cc-canvas: #0b0e15;
-  --cc-depth: #080b11;
-  --cc-on-accent: #0d1732;
-  --cc-glow: #91a8fc1f;
+/* Luma workspace design system. Imported after the structural workspace sheets.
+   Shared tokens cover every form factor; desktop sizing stays in its own block. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"] {
+  --ui-bg: #17181b;
+  --ui-panel: #222327;
+  --ui-raised: #2d2e34;
+  --ui-field: #1b1c20;
+  --ui-border: #393a42;
+  --ui-text: #f0f0f3;
+  --ui-muted: #b1b2bd;
+  --ui-accent: #a7afff;
+  --ui-selected: #373b57;
+  --ui-selected-text: #e0e3ff;
+  --ui-hover: #303137;
+  --ui-control: var(--ui-raised);
+  --ui-danger: #ffada5;
+  --ui-success: #9ed8b4;
+  --ui-warning: #e7c48e;
+  --ui-overlay: #101114a8;
+  --ui-shadow: 0 18px 58px #0005, 0 2px 8px #0003;
+  --ui-radius: 7px;
+  --ui-radius-panel: 12px;
+  --cc-window: #1d1e22;
+  --cc-bar: #24252a;
+  --cc-canvas: #141518;
+  --cc-depth: #101114;
+  --cc-on-accent: #202344;
+  --studio-line: var(--ui-border);
+  --studio-line-strong: #535560;
+  --studio-text: var(--ui-text);
+  --studio-text-muted: var(--ui-muted);
+  --studio-surface: var(--ui-panel);
+  --studio-surface-raised: var(--ui-raised);
+  --studio-accent: var(--ui-accent);
+  --studio-accent-bright: var(--ui-accent);
+  --studio-accent-soft: var(--ui-selected);
+  --text: var(--ui-text);
+  --text-secondary: var(--ui-muted);
+  --muted: var(--ui-muted);
+  --border: var(--ui-border);
+  --accent: var(--ui-accent);
   color-scheme: dark;
-  background: var(--cc-depth);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] {
-  --ui-bg: #eef0f5;
-  --ui-panel: #f8f9fc;
-  --ui-raised: #e8ecf4;
-  --ui-field: #f1f3f8;
-  --ui-border: #d5dbe7;
-  --ui-text: #252b37;
-  --ui-muted: #647085;
-  --ui-accent: #4569d9;
-  --ui-selected: #dbe5fe;
-  --studio-line: #d5dbe7;
-  --studio-line-strong: #a7b2c6;
-  --studio-text: #252b37;
-  --studio-text-muted: #647085;
-  --cc-window: #f4f6fa;
-  --cc-bar: #ffffff;
-  --cc-canvas: #dce2ec;
-  --cc-depth: #cfd6e4;
-  --cc-on-accent: #fff;
-  --cc-glow: #6d8bf12c;
-  color-scheme: light;
-}
-
-/* A contained desktop window instead of a wall of tightly packed controls. */
-@media (min-width: 900px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
-    padding: 6px;
-    background: radial-gradient(ellipse at 19% 0%, #5360a725, transparent 47%),
-                radial-gradient(ellipse at 86% 100%, #7b5c9221, transparent 39%), var(--cc-depth);
-  }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) > .spatial-window {
-    border: 1px solid var(--ui-border);
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 24px 65px #0006, inset 0 1px #ffffff12;
-    grid-template-rows: 56px minmax(0, 1fr) 26px;
-    background: var(--cc-window);
-  }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-titlebar.spatial-topbar {
-    min-height: 56px;
-    height: 56px;
-    padding-inline: 18px;
-    background: linear-gradient(180deg, #ffffff0c, transparent 85%), var(--cc-bar);
-  }
-}
-
-/* Confident titlebar identity, calmer typography, restrained primary action. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-brand-area { gap: 10px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-app-mark {
-  width: 32px; height: 32px; min-width: 32px;
-  border: 1px solid #c5baff87; border-radius: 50%; color: transparent; font-size: 0;
-  background: radial-gradient(circle at 48% 50%, #111629 0 27%, transparent 30%),
-              conic-gradient(from 28deg, #80bdf8, #a18efd, #7e69cc, #c6b0f7, #80bdf8);
-  box-shadow: inset 0 0 0 4px #1b2236, 0 0 0 3px #777cf714;
-  transition: transform .16s ease, box-shadow .16s ease;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-app-mark:hover {
-  transform: scale(1.05); box-shadow: inset 0 0 0 4px #1b2236, 0 0 0 5px var(--cc-glow);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-product-name {
-  font-weight: 670; font-size: 14px; letter-spacing: -.025em;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title { flex: 1 1 auto; text-align: center; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title strong { font-size: 12px; font-weight: 620; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title span { font-size: 10px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-share-actions { gap: 7px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export {
-  height: 35px; padding-inline: 17px; border: 1px solid #afbcff6b;
-  border-radius: 10px; color: #0e1837; background: linear-gradient(140deg, #c1c9ff, #91abff 72%);
-  box-shadow: 0 3px 12px #7694ed27; font-size: 12px; font-weight: 700;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export:hover:not(:disabled) { filter: brightness(1.08); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.studio-icon-button,.studio-header-button,.studio-app-menu summary) {
-  border-radius: 9px; min-width: 32px; height: 32px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button { border-color: var(--ui-border); padding-inline: 10px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-zoom-readout { color: var(--ui-text); }
-
-/* Actual workspace selector; every item dispatches to the current Studio engine. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation {
-  position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 3px;
-  border: 1px solid var(--ui-border); background: var(--ui-field);
-  padding: 3px; border-radius: 12px; margin-left: 16px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher { display: flex; align-items: center; gap: 2px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button {
-  border: 0; background: transparent; color: var(--ui-muted); min-height: 30px; min-width: 61px;
-  border-radius: 8px; padding: 0 11px; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
-  transition: background .16s ease, color .16s ease;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button:hover { background: var(--ui-raised); color: var(--ui-text); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button.active {
-  color: var(--ui-text); background: linear-gradient(150deg, #abb9ff36, #7e87eb19), var(--ui-raised);
-  box-shadow: inset 0 0 0 1px #b2bffa38, 0 2px 8px #0002;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu { position: relative; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary {
-  list-style: none; display: grid; place-items: center; width: 28px; height: 30px;
-  border-radius: 8px; color: var(--ui-muted); cursor: pointer;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary::-webkit-details-marker { display: none; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu summary:hover { color: var(--ui-text); background: var(--ui-raised); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content {
-  position: absolute; top: calc(100% + 12px); left: -100px; z-index: 999;
-  min-width: 220px; padding: 6px; border-radius: 13px; border: 1px solid var(--ui-border);
-  background: var(--ui-panel); box-shadow: 0 18px 40px #0009, inset 0 1px #ffffff0d;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading { display: grid; gap: 3px; padding: 11px; border-bottom: 1px solid var(--ui-border); margin-bottom: 5px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading strong { font-size: 12px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-menu-heading small { font-size: 11px; color: var(--ui-muted); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content > button {
-  width: 100%; min-height: 34px; border: 0; border-radius: 8px; text-align: left; padding: 0 10px;
-  background: transparent; color: var(--ui-text); font-size: 12px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-menu-content > button:hover { background: var(--ui-selected); }
-
-/* Studio chrome. Keep viewport rendering independent of decoration. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-workspace { background: var(--ui-bg); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-toolbar {
-  background: var(--ui-panel); padding: 12px 7px; border-color: var(--ui-border);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories { gap: 5px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button {
-  border-radius: 10px; min-height: 39px; height: 39px; width: 41px; flex-basis: 39px;
-  color: var(--ui-muted);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button:hover { background: var(--ui-raised); color: var(--ui-text); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .primary-tool-categories > button.active {
-  background: linear-gradient(135deg, #b1c0ff36, #6d88ed1a), var(--ui-selected);
-  border-color: #acbaff5b; color: #d0dbff; box-shadow: inset 0 1px #ffffff19;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-contextbar {
-  background: var(--ui-panel); border-color: var(--ui-border); padding-inline: 16px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs {
-  background: var(--ui-field); border-color: var(--ui-border); gap: 4px; padding: 0 6px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs > div {
-  border: 0; border-radius: 7px 7px 0 0; padding-left: 12px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-document-tabs > div.active {
-  background: var(--ui-panel); box-shadow: inset 0 2px var(--ui-accent);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-canvas-stage {
-  background: radial-gradient(ellipse at 50% 0%, #62728b15, transparent 80%), var(--cc-canvas);
-  padding: clamp(12px, 2vw, 28px);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-stack,.dock-group,.dock-floating-panel,.spatial-inspector) {
-  background: var(--ui-panel); border-color: var(--ui-border);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabbar {
-  background: var(--ui-panel); min-height: 41px; height: 41px; flex-basis: 41px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabs button[role="tab"] {
-  min-height: 39px; padding-inline: 12px; color: var(--ui-muted);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .dock-tabs > div.active {
-  border: 0; background: var(--ui-panel); box-shadow: inset 0 2px var(--ui-accent);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-floating-panel,.studio-app-menu > div,.studio-export-popover) {
-  border-radius: 12px; box-shadow: 0 16px 42px #0006;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(input:not([type="range"]),select,textarea) {
-  accent-color: var(--ui-accent);
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(button,select,input,textarea,summary):focus-visible {
-  outline: 2px solid var(--ui-accent); outline-offset: 2px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.dock-stack,.spatial-toolbar,.creatingco-space-menu-content) { scrollbar-color: #7783a488 transparent; }
-
-/* Light appearance: explicit overrides for the historical dark hard-coded surfaces. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] :is(.spatial-canvas-stage,.spatial-document-tabs,.spatial-toolbar,.studio-contextbar,.dock-tabbar,.studio-titlebar.spatial-topbar) { color: var(--ui-text); }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .spatial-export {
-  background: linear-gradient(140deg, #436bdc, #6784e9); border-color: #3359c9; color: white;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .primary-tool-categories > button.active { color: #2b4caa; border-color: #a9bdf5; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .studio-product-name { color: var(--ui-text); }
-
-/* Restrained layout for narrower desktop and landscape tablet. */
-@media (max-width: 1350px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button span { display: none; }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-workspace-button { min-width: 32px; padding-inline: 8px; }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation { margin-left: 6px; }
-}
-@media (max-width: 1080px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button { min-width: 46px; padding-inline: 9px; }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title { min-width: 70px; flex: 1 1 70px; }
-}
-@media (max-width: 760px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-navigation { display: none; }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-appearance-toggle { display: none; }
-}
-@media (prefers-reduced-motion: reduce) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) :is(.studio-app-mark,.creatingco-space-switcher > button) { transition: none; }
-}
-@media (forced-colors: active) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-space-switcher > button.active { outline: 1px solid Highlight; }
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .spatial-export { border: 1px solid ButtonText; }
-}
-
-/* Compact editorial byline, intentionally secondary to the project title. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup { display: grid; gap: 1px; min-width: 98px; }
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup small { color: var(--ui-muted); font-size: 9px; letter-spacing: .015em; white-space: nowrap; }
-@media (max-width: 1250px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup small { display: none; }
-}
-
-/* Keep the real document name and save state available on smaller laptops. */
-@media (max-width: 1080px) {
-  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .creatingco-brand-lockup { display: none; }
-}
-/* The existing titlebar uses a three-column grid. These four regions share one
-   flex row so application actions cannot wrap over the tool options. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-titlebar.spatial-topbar {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 12px;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title {
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) .studio-project-title strong {
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/* Legacy typography tabs hard-code pale text even in light appearance. */
-html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"])[data-appearance="light"] .type-studio-tabs button:is(.active,:hover) {
   color: var(--ui-text);
-  border-bottom-color: var(--ui-accent);
+  background: var(--cc-depth);
+  font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+
+  &[data-appearance="light"] {
+    --ui-bg: #e9e8e5;
+    --ui-panel: #f6f5f2;
+    --ui-raised: #eeede9;
+    --ui-field: #fffefa;
+    --ui-border: #d3d2cf;
+    --ui-text: #28292e;
+    --ui-muted: #62636d;
+    --ui-accent: #545ec5;
+    --ui-selected: #e1e3f6;
+    --ui-selected-text: #373f91;
+    --ui-hover: #e8e7e3;
+    --ui-danger: #ad352c;
+    --ui-success: #287247;
+    --ui-warning: #825f23;
+    --ui-overlay: #25252b61;
+    --ui-shadow: 0 18px 58px #29272f24, 0 2px 8px #29272f14;
+    --cc-window: #f0efec;
+    --cc-bar: #fbfaf7;
+    --cc-canvas: #d6d5d2;
+    --cc-depth: #c6c5c2;
+    --cc-on-accent: #ffffff;
+    --studio-line-strong: #a8a8b0;
+    color-scheme: light;
+  }
+
+  /* Control semantics are consistent in every panel and appearance. */
+  & :is(button, input, select, textarea, summary) { font-family: inherit; }
+  & :is(button, select, input, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--ui-accent);
+    outline-offset: 2px;
+  }
+  & :is(button, select):disabled { opacity: .42; cursor: not-allowed; }
+  & button:not(:disabled):active { filter: none; }
+  & input[type="range"] { accent-color: var(--ui-accent); }
+  & input[type="checkbox"] { accent-color: var(--ui-accent); }
+  & :is(input, textarea)::placeholder { color: var(--ui-muted); opacity: .8; }
+  & :is(select, textarea, input[type="text"], input[type="number"], input[type="search"]) {
+    color: var(--ui-text);
+    background-color: var(--ui-field);
+    border-color: var(--ui-border);
+    border-radius: var(--ui-radius);
+    color-scheme: inherit;
+  }
+  & :is(select, textarea, input[type="text"], input[type="number"], input[type="search"]):hover:not(:disabled) {
+    border-color: var(--studio-line-strong);
+  }
+  & :is(.dock-panel-body, .tool-palette-groups, .studio-app-menu > div, .studio-export-popover, .spatial-toolbar) {
+    scrollbar-width: thin;
+    scrollbar-color: var(--studio-line-strong) transparent;
+    overscroll-behavior: contain;
+  }
+  & :is(.studio-contextbar, .spatial-document-tabs, .spatial-toolbar, .dock-tabbar, .studio-titlebar.spatial-topbar) {
+    color: var(--ui-text);
+    border-color: var(--ui-border);
+    background: var(--ui-panel);
+  }
+  & :is(.dock-stack, .dock-group, .dock-floating-panel, .spatial-inspector, .tablet-panel) {
+    color: var(--ui-text);
+    background: var(--ui-panel);
+    border-color: var(--ui-border);
+  }
+  & :is(.dock-floating-panel, .tablet-panel, .studio-app-menu > div, .studio-export-popover) {
+    border-radius: var(--ui-radius-panel);
+    box-shadow: var(--ui-shadow);
+  }
+  & :is(.studio-app-menu > div, .dock-group-menu [role="menu"]) { background: var(--ui-panel); border-color: var(--ui-border); }
+  & .studio-app-menu > div { max-height: calc(100dvh - 92px); overflow-y: auto; padding: 7px; }
+  & .studio-menu-section-label { margin: 8px 9px 4px; font-size: 11px; font-weight: 600; color: var(--ui-muted); }
+  & .studio-app-menu button > small { padding: 2px 5px; border-radius: 4px; background: var(--ui-raised); color: var(--ui-muted); font-size: 10px; }
+  & .studio-app-menu button { color: var(--ui-text); border-radius: 6px; }
+  & .studio-app-menu button:hover:not(:disabled) { background: var(--ui-selected); color: var(--ui-selected-text); }
+  & .studio-app-menu hr { border-color: var(--ui-border); margin-block: 6px; }
+  & :is(.studio-icon-button, .studio-header-button, .studio-app-menu summary) { color: var(--ui-muted); border-radius: var(--ui-radius); }
+  & :is(.studio-icon-button, .studio-header-button, .studio-app-menu summary):hover:not(:disabled) {
+    color: var(--ui-text); background: var(--ui-hover); border-color: transparent;
+  }
+  & .studio-header-button > span { color: inherit; }
+  & .studio-action-divider { background: var(--ui-border); height: 20px; margin-inline: 3px; }
+  & .spatial-export {
+    background: var(--ui-accent); color: var(--cc-on-accent); border: 1px solid transparent;
+    border-radius: var(--ui-radius); font-weight: 650; box-shadow: none;
+  }
+  & .spatial-export:hover:not(:disabled) { background: var(--ui-accent); filter: brightness(1.06); }
+  & .spatial-export.active { box-shadow: 0 0 0 3px var(--ui-selected); }
+  & .primary-tool-categories > button { color: var(--ui-muted); }
+  & .primary-tool-categories > button:hover { color: var(--ui-text); background: var(--ui-hover); }
+  & .primary-tool-categories > button.active {
+    color: var(--ui-selected-text); background: var(--ui-selected); border-color: transparent; box-shadow: none;
+  }
+  & .context-segmented { background: var(--ui-field); border: 1px solid var(--ui-border); border-radius: 7px; }
+  & :is(.context-segmented, .studio-context-actions) button { color: var(--ui-muted); box-shadow: none; }
+  & :is(.context-segmented, .studio-context-actions) button:hover:not(:disabled) { background: var(--ui-hover); color: var(--ui-text); box-shadow: none; }
+  & :is(.transform-context-controls, .studio-context-actions, .context-segmented, .type-button-row, .pen-tool-controls, .shape-tool-controls) button:is(.active, [aria-pressed="true"]) {
+    color: var(--ui-selected-text); background: var(--ui-selected); border-color: var(--ui-accent);
+  }
+  & .type-studio-tabs button { color: var(--ui-muted); }
+  & .type-studio-tabs button:is(.active, :hover) { color: var(--ui-selected-text); border-bottom-color: var(--ui-accent); }
+  & .spatial-document-tabs { background: var(--ui-bg); }
+  & .spatial-document-tabs > div.active { background: var(--ui-panel); box-shadow: inset 0 -2px var(--ui-accent); }
+  & .spatial-document-tabs > div.active button { color: var(--ui-text); }
+  & .spatial-canvas-stage { background: var(--cc-canvas); }
+  & .spatial-canvas { border-color: var(--ui-border); }
+  & .dock-tabbar { background: var(--ui-panel); }
+  & .dock-tabs > div.active { background: transparent; box-shadow: inset 0 -2px var(--ui-accent); }
+  & .dock-tabs button[role="tab"] { color: var(--ui-muted); }
+  & .dock-tabs .active button[role="tab"] { color: var(--ui-text); }
+  & .dock-icon-rail > button:is(:hover, :active) { background: var(--ui-selected); color: var(--ui-selected-text); }
+  & .dock-floating-panel > header { background: var(--ui-raised); border-color: var(--ui-border); }
+  & :is(.desktop-statusbar, .layer-stack-footer) { background: var(--ui-panel); color: var(--ui-muted); border-color: var(--ui-border); }
+
+  /* Inspector surfaces use a quiet hierarchy, with color reserved for selection. */
+  & :is(.glass-card, .desktop-properties-panel, .blend-pass, .advanced-blending, .document-diagnostics, .type-studio, .desktop-quick-controls, .layer-focus-panel) {
+    background: var(--ui-panel); color: var(--ui-text); border-color: var(--ui-border); box-shadow: none;
+  }
+  & :is(.glass-card > header, .desktop-property-target, .desktop-spatial-disclosure, .desktop-space-hint, .focus-status) {
+    background: transparent; border-color: var(--ui-border);
+  }
+  & :is(.glass-card > header strong, .desktop-property-target strong, .desktop-spatial-panel header strong, .focus-status strong) { color: var(--ui-text); }
+  & :is(.desktop-property-target small, .desktop-space-hint small, .desktop-spatial-panel header small, .type-studio-note, .type-studio-empty, .type-form-actions span, .param-note) {
+    color: var(--ui-muted); font-size: 12px; line-height: 1.5;
+  }
+  & :is(.desktop-property-row button, .type-font-picker button, .type-appearance-stack button, .desktop-spatial-presets button, .mask-segmented, .spatial-view-dock) {
+    background: var(--ui-raised); color: var(--ui-text); border-color: var(--ui-border); border-radius: var(--ui-radius);
+  }
+  & :is(.desktop-property-row button, .type-font-picker button, .type-appearance-stack button, .desktop-spatial-presets button):hover:not(:disabled) { background: var(--ui-hover); }
+  & .spatial-layer { border-color: var(--ui-border); background: transparent; }
+  & .spatial-layer:hover { background: var(--ui-hover); }
+  & .spatial-layer.active { background: var(--ui-selected); box-shadow: inset 2px 0 var(--ui-accent); }
+  & .spatial-layer .layer-name strong { color: var(--ui-text); }
+  & .spatial-layer .layer-name small { color: var(--ui-muted); font-size: 12px; }
+  & .spatial-layer-thumb { color: var(--ui-muted); border-color: var(--studio-line-strong); background: var(--ui-field); border-radius: 5px; }
+  & .spatial-layer-actions button { color: var(--ui-muted); border-radius: 4px; }
+  & .spatial-layer-actions button:hover { color: var(--ui-text); background: var(--ui-raised); }
+  & .layer-stack-footer button:hover { color: var(--ui-text); background: var(--ui-hover); border-radius: 4px; }
+  & .layer-stack-footer button.danger:hover { color: var(--ui-danger); }
+  & :is(.layer-controls, .mask-controls, .tone-controls) :is(label, output) { font-size: 12px; color: var(--ui-text); }
+  & :is(.layer-controls, .mask-controls, .tone-controls) label > span { color: var(--ui-muted); }
+  & .mask-segmented button { color: var(--ui-muted); font-size: 12px; }
+  & .mask-segmented button:is(.active, [aria-pressed="true"]) { color: var(--ui-selected-text); background: var(--ui-selected); box-shadow: none; }
+  & .document-diagnostics-body > div { min-height: 30px; color: var(--ui-muted); font-size: 12px; border-color: var(--ui-border); }
+  & .document-diagnostics-body b { color: var(--ui-text); font-size: 12px; }
+  & .blend-stack-heading strong { font-size: 12px; letter-spacing: 0; text-transform: none; }
+  & .blend-stack-disclosure > summary > span { font-size: 12px; }
+  & .type-studio-grid label > span { color: var(--ui-muted); font-size: 12px; }
+  & :is(.type-font-picker small, .type-mesh-editor small, .type-mesh-editor p, .type-appearance-item label) { font-size: 12px; color: var(--ui-muted); }
+  & :is(.shape-picker-dialog, .action-step-editor) { color: var(--ui-text); background: var(--ui-panel); border-color: var(--ui-border); }
+  & .shape-picker-dialog button { color: var(--ui-text); background: var(--ui-raised); border-color: var(--ui-border); }
+  & :is(.shape-picker-dialog small, .shape-draw-hint, .pen-tool-hint, .action-step-editor small) { color: var(--ui-muted); }
+  & .workspace-ruler { background: var(--ui-panel); color: var(--ui-muted); border-color: var(--ui-border); }
+  & .workspace-ruler-origin { background: var(--ui-raised); color: var(--ui-muted); border-color: var(--ui-border); }
+
+  /* Legacy components shipped important surface colors. Keep that exception
+     localized here so native, web, and both appearances use the same tokens. */
+  & :is(.blend-pass, .blend-if-range, .advanced-blending-body, .mask-actions button, .adjustment-chips button, .blend-stack-heading button, .blend-pass-order button, .blend-pass-toggle, .neural-quick-grid button) {
+    background: var(--ui-raised) !important; color: var(--ui-text) !important; border-color: var(--ui-border) !important;
+  }
+  & .mask-actions button:hover:not(:disabled) { background: var(--ui-hover) !important; }
+  & .mask-actions button:active:not(:disabled) { background: var(--ui-selected) !important; }
+  & :is(select, textarea, input:not([type="range"]):not([type="color"]):not([type="checkbox"]):not([type="radio"])) {
+    background-color: var(--ui-field) !important; color: var(--ui-text) !important; border-color: var(--ui-border) !important; color-scheme: inherit;
+  }
+
+  /* Dialogs and menus share the editor's surface hierarchy. */
+  & :is(.spatial-modal, .tool-palette-scrim, .tool-family-scrim, .studio-export-scrim) {
+    background: var(--ui-overlay); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  }
+  & :is(.spatial-modal > section, .tool-palette, .tool-family-menu, .layer-style-dialog, .export-popover, .new-document-dialog, .unsaved-document-dialog) {
+    color: var(--ui-text); background: var(--ui-panel); border-color: var(--studio-line-strong);
+    border-radius: var(--ui-radius-panel); box-shadow: var(--ui-shadow);
+  }
+  & :is(.spatial-modal > section, .tool-family-menu) :is(header, footer) { border-color: var(--ui-border); }
+  & :is(.spatial-modal > section, .tool-family-menu) :is(strong, h2, h3) { color: var(--ui-text); }
+  & :is(.spatial-modal > section, .tool-family-menu) :is(small, p) { color: var(--ui-muted); font-size: 12px; line-height: 1.5; }
+  & .tool-family-menu > header { padding: 14px; background: var(--ui-panel); }
+  & .tool-family-menu > header strong { font-size: 13px; }
+  & .tool-family-menu > header span { font-size: 12px; color: var(--ui-muted); }
+  & .tool-family-menu button { color: var(--ui-text); border-radius: 6px; }
+  & .tool-family-menu button:is(:hover, .active) { background: var(--ui-selected); color: var(--ui-selected-text); }
+  & .tool-family-menu kbd { color: var(--ui-muted); background: var(--ui-field); border-color: var(--ui-border); font-size: 11px; }
+
+  /* Tool library. Intrinsic row heights prevent long groups being compressed
+     into header-only rows when the dialog reaches its viewport limit. */
+  & .tool-palette { display: flex; flex-direction: column; min-height: 0; max-height: min(800px, calc(100dvh - 48px)); }
+  & .tool-palette > header { flex: 0 0 auto; min-height: 70px; padding: 17px 20px 12px; background: var(--ui-panel); }
+  & .tool-palette > header strong { color: var(--ui-text); font-size: 18px; font-weight: 650; }
+  & .tool-palette > header span { color: var(--ui-muted); font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; }
+  & :is(.tool-palette > header > button, .tool-palette-search > button) { color: var(--ui-muted); background: var(--ui-raised); border-color: transparent; border-radius: 7px; }
+  & .tool-palette-search { flex: 0 0 44px; height: 44px; margin: 0 20px 12px; padding-inline: 12px; color: var(--ui-muted); border-color: var(--ui-border); border-radius: 8px; background: var(--ui-field); }
+  & .tool-palette-search:focus-within { border-color: var(--ui-accent); box-shadow: 0 0 0 2px var(--ui-selected); }
+  & .tool-palette-search input { background: transparent !important; font-size: 14px; outline-offset: -3px; }
+  & .tool-palette-browse { flex: 0 0 auto; min-width: 0; }
+  & .tool-palette-filters { display: flex; flex: 0 0 auto; gap: 5px; padding: 0 20px 12px; overflow-x: auto; scrollbar-width: thin; }
+  & .tool-palette-filters button { flex: 0 0 auto; min-height: 32px; padding: 5px 11px; border: 1px solid transparent; border-radius: 6px; color: var(--ui-muted); background: var(--ui-raised); font-size: 12px; }
+  & .tool-palette-filters button:is(.active, [aria-pressed="true"]) { background: var(--ui-selected); color: var(--ui-selected-text); border-color: var(--ui-accent); }
+  & .tool-palette-results-status { flex: 0 0 auto; margin: 0; padding: 0 20px 12px; font-size: 12px; color: var(--ui-muted); }
+  & .tool-palette-groups {
+    display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: max-content; align-content: start; align-items: start; gap: 12px;
+    overflow-y: auto; padding: 0 16px 20px 20px; scrollbar-gutter: stable;
+  }
+  & .tool-palette-group { flex-shrink: 0; min-height: max-content; overflow: visible; border-color: var(--ui-border); border-radius: 9px; background: var(--ui-panel); }
+  & .tool-palette-group > header { min-height: 54px; gap: 12px; padding: 10px 12px; background: var(--ui-raised); border-color: var(--ui-border); border-radius: 8px 8px 0 0; }
+  & .tool-palette-group > header strong { font-size: 13px; font-weight: 650; color: var(--ui-text); }
+  & .tool-palette-group > header :is(span, small) { font-size: 12px; color: var(--ui-muted); }
+  & .tool-palette-group > header small { min-width: 24px; height: 24px; background: var(--ui-panel); }
+  & .tool-palette-group > div { gap: 4px; padding: 6px; }
+  & .tool-palette-group > div > button { min-height: 52px; padding: 8px; gap: 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--ui-muted); }
+  & .tool-palette-group > div > button:is(:hover, .active) { color: var(--ui-selected-text); background: var(--ui-selected); border-color: transparent; }
+  & .tool-palette-group button strong { font-size: 12px; font-weight: 550; color: var(--ui-text); }
+  & .tool-palette-group button small { font-size: 12px; color: var(--ui-muted); line-height: 1.4; }
+  & .tool-palette-group kbd { font-size: 11px; color: var(--ui-muted); background: var(--ui-field); border-color: var(--ui-border); box-shadow: none; }
+  & .tool-palette-empty { color: var(--ui-muted); }
+  & .tool-palette-empty strong { color: var(--ui-text); font-size: 14px; }
+  & .tool-palette-empty small { font-size: 12px; }
+
+  /* Photo adjustments are a clear starting point for nondestructive editing. */
+  & .photo-adjustments { display: grid; gap: 16px; padding: 18px 14px; }
+  & .photo-adjustments header strong { font-size: 14px; font-weight: 600; }
+  & .photo-adjustments p { margin: 5px 0 0; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
+  & .photo-adjustment-grid { display: grid; gap: 8px; }
+  & .photo-adjustment-grid button { display: grid; gap: 3px; min-height: 64px; padding: 12px; text-align: left; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-field); color: var(--ui-text); }
+  & .photo-adjustment-grid button:hover:not(:disabled) { background: var(--ui-selected); border-color: var(--ui-accent); }
+  & .photo-adjustment-grid button strong { font-size: 12px; font-weight: 600; }
+  & .photo-adjustment-grid button small { font-size: 12px; line-height: 1.45; color: var(--ui-muted); }
+
+  /* Native dialogs and popovers retain browser focus/inert behavior. */
+  & .version-history-dialog { position: fixed; inset: 0; width: min(660px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 48px); padding: 0; margin: auto; overflow: hidden; border: 1px solid var(--studio-line-strong); border-radius: 14px; color: var(--ui-text); background: var(--ui-panel); box-shadow: var(--ui-shadow); }
+  & .version-history-dialog::backdrop { background: var(--ui-overlay); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
+  & .history-content { display: flex; flex-direction: column; max-height: calc(100dvh - 50px); }
+  & .history-heading { display: flex; flex: 0 0 auto; align-items: center; gap: 12px; padding: 22px 24px 12px; }
+  & .history-heading > svg { color: var(--ui-accent); }
+  & .history-heading > div { flex: 1; min-width: 0; }
+  & .history-heading h2 { margin: 0; color: var(--ui-text); font-size: 18px; font-weight: 650; letter-spacing: -.02em; }
+  & .history-heading span { color: var(--ui-muted); font-size: 12px; }
+  & .history-heading > button { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: var(--ui-raised); color: var(--ui-muted); }
+  & .history-heading > button:hover { background: var(--ui-hover); color: var(--ui-text); }
+  & .history-intro { flex: 0 0 auto; margin: 0; padding: 0 24px 20px; font-size: 12px; line-height: 1.6; color: var(--ui-muted); }
+  & .history-mix-controls { flex: 0 0 auto; margin: 0 24px 16px; padding: 0 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-field); }
+  & .history-mix-controls summary { padding-block: 11px; font-size: 12px; color: var(--ui-text); }
+  & .history-mix-controls p { margin: 0 0 12px; font-size: 12px; line-height: 1.5; color: var(--ui-muted); }
+  & .history-mix-controls label { display: grid; grid-template-columns: 82px minmax(0, 1fr) 40px; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 12px; color: var(--ui-muted); }
+  & .history-mix-controls label select { grid-column: 2 / -1; min-height: 32px; padding-inline: 8px; }
+  & .history-mix-controls input { width: 100%; min-width: 0; }
+  & .history-mix-controls output { text-align: right; color: var(--ui-text); font-variant-numeric: tabular-nums; }
+  & .history-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0; padding: 4px 12px 16px; list-style: none; border-top: 1px solid var(--ui-border); scrollbar-color: var(--studio-line-strong) transparent; scrollbar-width: thin; }
+  & .history-row { display: flex; align-items: center; gap: 6px; min-height: 48px; margin-top: 4px; padding: 3px 6px 3px calc(6px + var(--history-depth, 0) * 10px); border-radius: 7px; color: var(--ui-text); }
+  & .history-row:hover { background: var(--ui-hover); }
+  & .history-row[data-current="true"] { background: var(--ui-selected); }
+  & .history-row[data-branch="true"] { border-left: 2px solid var(--studio-line-strong); }
+  & .history-restore { display: grid; flex: 1 1 auto; min-width: 0; min-height: 40px; grid-template-columns: 20px minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; font-size: 12px; }
+  & .history-restore i { color: var(--ui-accent); font-style: normal; text-align: center; }
+  & .history-restore span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  & .history-restore small { color: var(--ui-muted); font-size: 12px; white-space: nowrap; }
+  & .history-row[data-current="true"] .history-restore small { color: var(--ui-selected-text); }
+  & .history-mix { min-height: 30px; padding: 4px 9px; border: 1px solid var(--ui-border); border-radius: 6px; color: var(--ui-muted); background: var(--ui-raised); font-size: 12px; }
+  & .history-mix:hover:not(:disabled) { color: var(--ui-text); border-color: var(--studio-line-strong); }
+  & .context-more-trigger { border: 1px solid var(--ui-border); border-radius: 6px; padding: 4px 9px; color: var(--ui-text); background: var(--ui-raised); white-space: nowrap; }
+  & .context-more-trigger:hover { background: var(--ui-hover); }
+  & .context-more-panel { position: fixed; inset: 116px auto auto 76px; width: min(320px, calc(100vw - 32px)); max-height: calc(100dvh - 140px); margin: 0; padding: 16px; overflow-y: auto; color: var(--ui-text); background: var(--ui-panel); border: 1px solid var(--studio-line-strong); border-radius: 10px; box-shadow: var(--ui-shadow); }
+  & .context-more-panel:popover-open { display: grid; gap: 14px; }
+  & .context-more-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  & .context-more-panel > header strong { font-size: 13px; }
+  & .context-more-panel > header button { width: 28px; min-height: 28px; border: 0; border-radius: 5px; color: var(--ui-muted); background: var(--ui-raised); font-size: 20px; }
+  & .context-more-panel .context-range { display: grid; grid-template-columns: 76px minmax(0, 1fr) 38px; gap: 10px; }
+  & .context-more-panel .context-range input[type="range"] { width: 100%; min-width: 0; }
+  & .context-more-panel .context-select { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 10px; }
+  & .context-more-panel .context-select select { width: 100%; max-width: none; }
+  & .context-more-panel.context-view-panel { width: 260px; gap: 6px; }
+  & .context-view-panel > header { margin-bottom: 6px; }
+  & .context-view-panel > button { min-height: 36px; padding: 8px 10px; border: 1px solid transparent; border-radius: 6px; color: var(--ui-text); background: transparent; text-align: left; font-size: 12px; }
+  & .context-view-panel > button:hover { background: var(--ui-hover); }
+  & .context-view-panel > button[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-selected); color: var(--ui-selected-text); }
+
+
+  & .inspector-focus { display: grid; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--ui-border); }
+  & .inspector-focus-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--ui-muted); font-size: 11px; }
+  & .inspector-focus-heading strong { color: var(--ui-text); font-size: 12px; font-weight: 600; }
+  & .inspector-focus-target { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 9px; min-width: 0; padding: 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-field); }
+  & .inspector-focus-target .spatial-layer-thumb { width: 34px; height: 34px; }
+  & .inspector-focus-name { display: grid; gap: 1px; min-width: 0; }
+  & .inspector-focus-name :is(strong, small) { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  & .inspector-focus-name strong { color: var(--ui-text); font-size: 12px; font-weight: 600; }
+  & .inspector-focus-name small { color: var(--ui-muted); font-size: 11px; text-transform: capitalize; }
+  & .inspector-focus-actions { display: flex; gap: 2px; }
+  & .inspector-focus-actions button { display: grid; place-items: center; width: 28px; height: 28px; min-width: 28px; padding: 4px; border: 1px solid transparent; border-radius: 5px; color: var(--ui-muted); background: transparent; }
+  & .inspector-focus-actions button:hover { color: var(--ui-text); background: var(--ui-hover); }
+  & .inspector-focus-actions button[aria-pressed="true"] { color: var(--ui-accent); }
+  & .inspector-focus-actions button[aria-label="Hide selected layer"], & .inspector-focus-actions button[aria-label="Lock selected layer"] { color: var(--ui-text); }
+  & .layers-card .layer-controls { display: grid; gap: 9px; padding: 12px 14px 16px; border-top: 1px solid var(--ui-border); }
+  & .layer-appearance-heading { display: flex; align-items: baseline; justify-content: space-between; min-width: 0; gap: 8px; }
+  & .layer-appearance-heading strong { color: var(--ui-text); font-size: 12px; }
+  & .layer-appearance-heading span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ui-muted); font-size: 11px; }
+  & .layer-opacity-control { display: grid; gap: 6px; padding: 10px 11px 8px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-raised); }
+  & .layer-opacity-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  & .layer-opacity-heading > span { display: grid; gap: 1px; }
+  & .layer-opacity-heading strong { font-size: 12px; font-weight: 600; color: var(--ui-text); }
+  & .layer-opacity-heading small, & .layer-opacity-note { font-size: 11px; color: var(--ui-muted); }
+  & .layer-opacity-number { display: flex; align-items: center; gap: 2px; padding: 0 6px 0 0; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-field); color: var(--ui-muted); }
+  & .layer-opacity-number:focus-within { border-color: var(--ui-accent); }
+  & .layer-opacity-number input[type="number"] { width: 48px; min-width: 0; height: 29px; min-height: 29px; padding: 3px 2px 3px 7px; border: 0 !important; background: transparent !important; color: var(--ui-text); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; appearance: textfield; }
+  & .layer-opacity-number input::-webkit-inner-spin-button, & .layer-opacity-number input::-webkit-outer-spin-button { appearance: none; margin: 0; }
+  & .layer-opacity-control > input[type="range"] { display: block; width: 100%; height: 20px; min-width: 0; margin: 1px 0 0; accent-color: var(--ui-accent); }
+  & .layer-opacity-scale { display: flex; justify-content: space-between; gap: 8px; color: var(--ui-muted); font-size: 10px; }
+  & .layer-appearance-actions { display: flex; gap: 6px; }
+  & .layer-appearance-actions button { flex: 1; min-width: 0; min-height: 30px; padding: 5px 6px; border: 1px solid var(--ui-border); border-radius: 6px; background: var(--ui-field); color: var(--ui-text); font-size: 11px; }
+  & .layer-appearance-actions button:hover { background: var(--ui-hover); }
+  & .layer-appearance-actions button[aria-pressed="true"] { border-color: var(--ui-accent); background: var(--ui-selected); color: var(--ui-selected-text); }
+  & .layer-appearance-secondary { padding-top: 2px; }
+  & .layer-controls .layer-blend-mode { grid-template-columns: 52px minmax(0, 1fr); min-height: 30px; }
+  & .layer-controls .layer-blend-mode span { color: var(--ui-muted); }
+  & .layer-controls .layer-blend-mode select { min-width: 0; }
+  & .layer-controls .blend-stack-disclosure, & .layer-controls .advanced-blending { border-top: 1px solid var(--ui-border); }
+}
+
+/* Desktop geometry: one aligned header, compact chrome, and a spacious canvas. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+  padding: 6px;
+
+  & > .spatial-window { border: 1px solid var(--ui-border); border-radius: 12px; overflow: hidden; grid-template-rows: 58px minmax(0, 1fr) 28px; background: var(--cc-window); }
+  & .studio-titlebar.spatial-topbar { display: flex; align-items: center; flex-wrap: nowrap; gap: 18px; height: 58px; min-height: 58px; padding: 0 16px; background: var(--cc-bar); }
+  & .studio-brand-area { gap: 9px; }
+  & .studio-app-mark { display: grid; place-items: center; width: 30px; min-width: 30px; height: 30px; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-selected); color: var(--ui-selected-text); font-size: 19px; font-weight: 650; line-height: 1; box-shadow: none; }
+  & .studio-app-mark:hover { background: var(--ui-hover); }
+  & .creatingco-brand-lockup { display: grid; gap: 1px; }
+  & .studio-product-name { font-size: 13px; font-weight: 650; letter-spacing: -.025em; color: var(--ui-text); }
+  & .creatingco-brand-lockup small { font-size: 11px; line-height: 1.3; color: var(--ui-muted); }
+  & .studio-project-title { display: flex; flex: 1 1 140px; min-width: 60px; flex-direction: column; align-items: center; gap: 1px; text-align: center; overflow: hidden; }
+  & .studio-project-title strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
+  & .studio-project-title span { font-size: 12px; white-space: nowrap; color: var(--ui-muted); }
+  & .spatial-share-actions { gap: 4px; margin-left: 0; }
+  & :is(.studio-icon-button, .studio-header-button, .studio-app-menu summary) { height: 32px; min-width: 32px; }
+  & :is(.studio-open-button, .studio-save-button) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; font-size: 12px; }
+  & .studio-save-button { color: var(--ui-text); border-color: var(--ui-border); background: var(--ui-raised); }
+  & .studio-save-button[data-save-state="error"] { color: var(--ui-danger); border-color: var(--ui-danger); }
+  & .studio-project-title span[data-save-state="error"] { color: var(--ui-danger); }
+  & .studio-save-button[data-save-state="dirty"] { border-color: var(--studio-line-strong); }
+  & .spatial-export { height: 34px; margin-left: 4px; padding-inline: 14px; font-size: 12px; }
+  & .creatingco-space-navigation { position: relative; display: flex; flex: 0 0 auto; align-items: center; gap: 2px; margin: 0; padding: 3px; border: 1px solid var(--ui-border); border-radius: 9px; background: var(--ui-field); }
+  & .creatingco-space-switcher { display: flex; align-items: center; gap: 2px; }
+  & .creatingco-space-switcher > button { min-height: 30px; min-width: 60px; padding: 0 11px; border: 1px solid transparent; border-radius: 6px; color: var(--ui-muted); background: transparent; font-size: 12px; font-weight: 550; }
+  & .creatingco-space-switcher > button:hover { color: var(--ui-text); background: var(--ui-hover); }
+  & .creatingco-space-switcher > button.active { color: var(--ui-selected-text); background: var(--ui-selected); border-color: transparent; box-shadow: none; }
+  & .creatingco-space-menu { position: relative; }
+  & .creatingco-space-menu summary { display: grid; place-items: center; width: 28px; height: 30px; list-style: none; border-radius: 6px; color: var(--ui-muted); }
+  & .creatingco-space-menu summary::-webkit-details-marker { display: none; }
+  & .creatingco-space-menu summary:hover { color: var(--ui-text); background: var(--ui-hover); }
+  & .creatingco-space-menu-content { position: absolute; top: calc(100% + 10px); left: -160px; z-index: 999; width: 240px; padding: 6px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-panel); box-shadow: var(--ui-shadow); }
+  & .creatingco-menu-heading { display: grid; gap: 3px; padding: 10px; margin-bottom: 4px; border-bottom: 1px solid var(--ui-border); }
+  & .creatingco-menu-heading strong { font-size: 13px; }
+  & .creatingco-menu-heading small { font-size: 12px; color: var(--ui-muted); }
+  & .creatingco-space-menu-content > button { display: block; width: 100%; min-height: 36px; padding: 8px 10px; border: 0; border-radius: 6px; color: var(--ui-text); background: transparent; font-size: 12px; text-align: left; }
+  & .creatingco-space-menu-content > button:hover { color: var(--ui-selected-text); background: var(--ui-selected); }
+  & .spatial-workspace { grid-template-columns: 56px auto minmax(0, 1fr) auto; }
+  & .spatial-toolbar { padding: 10px 6px; }
+  & .primary-tool-categories { align-items: center; width: 100%; gap: 4px; }
+  & .primary-tool-categories > button { height: 38px; min-height: 38px; width: 40px; flex-basis: 38px; border-radius: 7px; justify-content: center; padding: 0; }
+  & .primary-tool-categories > button > span { display: none; }
+  & .primary-tool-categories > button > .tool-family-indicator { display: block; }
+  & .tool-rail-colors { grid-template-columns: 1fr; padding: 10px 0 0; }
+  & .primary-tool-categories > button[data-family-start="true"] { margin-top: 8px; }
+  & .spatial-canvas-column { grid-template-rows: 46px 36px minmax(0, 1fr) auto; }
+  & .spatial-canvas-column[data-assets-open="false"] { grid-template-rows: 46px 36px minmax(0, 1fr); }
+  & .studio-contextbar { min-height: 46px; height: 46px; gap: 12px; padding-inline: 14px; overflow: hidden; }
+  & .studio-contextbar :is(button, select, input:not([type="range"]):not([type="color"])) { min-height: 28px; font-size: 12px; }
+  & .studio-context-identity { position: sticky; left: -14px; z-index: 2; padding-left: 14px; background: var(--ui-panel); }
+  & .studio-context-identity strong { display: block; font-size: 12px; }
+  & .studio-context-identity > span { color: var(--ui-muted); }
+  & .studio-context-controls { flex: 1 1 0; min-width: 0; height: 100%; gap: 12px; padding-block: 4px; box-sizing: border-box; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; scrollbar-color: var(--studio-line-strong) transparent; overscroll-behavior-inline: contain; }
+  & .studio-context-controls > * { flex-shrink: 0; }
+  & .studio-context-controls > .context-select { display: flex; grid-template-columns: none; }
+  & .studio-context-controls > .context-font-family { flex: 0 0 auto; }
+  & .studio-context-controls > .context-font-family select { width: 140px; max-width: 140px; }
+  & .studio-context-actions { flex: 0 0 auto; margin-left: auto; padding-left: 8px; border-left: 1px solid var(--ui-border); }
+  & .studio-context-actions > button { min-height: 30px; padding-inline: 9px; color: var(--ui-text); }
+  & .context-view-panel { inset-inline-start: auto; inset-inline-end: 320px; }
+  & .context-view-panel > button { min-height: 36px; }
+
+  & :is(.context-range, .context-select, .context-range output, .studio-context-summary span) { font-size: 12px; }
+  & .studio-context-controls > .context-range { grid-template-columns: auto 64px 42px !important; gap: 8px !important; }
+  & .context-range input[type="range"] { width: 64px; }
+  & .context-more-panel .context-range { grid-template-columns: 76px minmax(0, 1fr) 38px !important; gap: 10px !important; }
+  & .context-more-panel .context-range input[type="range"] { width: 100% !important; }
+  & .context-more-panel .context-range output { text-align: right; }
+  & .studio-project-title > span { display: block; }
+  & .spatial-document-tabs { height: 36px; min-height: 36px; padding-inline: 6px; }
+  & .spatial-document-tabs > div { height: 36px; min-width: 130px; padding-inline: 12px 5px; }
+  & .spatial-document-tabs button { font-size: 12px; }
+  & .spatial-document-tabs button:first-child span { font-size: 12px; }
+  & .spatial-canvas-stage { padding: clamp(14px, 2vw, 28px); }
+  & .dock-tabbar { min-height: 40px; height: 40px; flex-basis: 40px; }
+  & .dock-tabs button[role="tab"] { min-height: 39px; padding-inline: 12px; }
+  & .dock-tabs button[role="tab"] strong { font-size: 12px; font-weight: 550; }
+  & :is(.dock-collapse, .dock-group-menu-trigger) { height: 39px; }
+  & .dock-tab-close { opacity: .55; }
+  & .dock-panel-body .glass-card > header { min-height: 40px; padding: 10px 14px; }
+  & :is(.spatial-inspector, .dock-floating-panel) :is(select, input[type="number"], input[type="text"], textarea) { min-height: 30px; border-radius: 6px; padding: 5px 8px; font-size: 12px; }
+  & .tone-controls { gap: 12px; padding: 14px; }
+  & .tone-controls label { grid-template-columns: 76px minmax(0, 1fr) 42px; gap: 8px; min-height: 26px; }
+  & .desktop-properties-body { padding: 14px; gap: 12px; }
+  & .desktop-property-target { min-height: 48px; padding-bottom: 12px; }
+  & :is(.desktop-property-range, .desktop-property-row, .desktop-property-switch) { min-height: 34px; }
+  & .desktop-quick-controls > summary { min-height: 34px; }
+  & .desktop-space-hint :is(strong, small) { font-size: 12px; }
+  & .type-studio { padding: 14px; gap: 14px; }
+  & .type-studio-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding-bottom: 5px; border-color: var(--ui-border); }
+  & .type-studio-tabs button { white-space: nowrap; min-height: 32px; padding: 5px 7px; font-size: 12px; }
+  & .layer-stack-footer { height: 38px; min-height: 38px; padding: 5px 10px; }
+  & .desktop-statusbar { min-height: 28px; height: 28px; padding-inline: 12px; font-size: 12px; }
+  & .desktop-statusbar :is(button, span, strong) { font-size: 12px; }
+  & .desktop-statusbar kbd { font-size: 10px; background: var(--ui-field); color: var(--ui-muted); border-color: var(--ui-border); }
+  & .tool-palette-scrim { align-items: center; justify-content: center; padding: 24px; }
+  & .tool-palette { width: min(760px, calc(100vw - 48px)); }
+  & .tool-family-scrim { left: 56px; }
+  & .tool-family-menu { left: 68px; top: 116px; width: 280px; }
+  & .tool-family-menu button { min-height: 38px; }
+}
+
+@media (max-width: 1270px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+    & .creatingco-brand-lockup { display: none; }
+    & .studio-titlebar.spatial-topbar { gap: 12px; padding-inline: 12px; }
+    & .studio-open-button { padding-inline: 7px; }
+  }
+}
+@media (max-width: 1050px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+    & .studio-titlebar.spatial-topbar { gap: 8px; padding-inline: 10px; }
+    & .creatingco-space-switcher > button { min-width: 50px; padding-inline: 8px; }
+    & .studio-open-button span { display: none; }
+    & .studio-open-button { width: 32px; padding: 0; }
+    & .studio-project-title { flex-basis: 80px; }
+    & .studio-context-controls > .context-range { grid-template-columns: auto 48px 36px !important; gap: 6px !important; }
+    & .studio-context-controls > .context-range input[type="range"] { width: 48px; }
+    & .studio-context-controls { gap: 8px; }
+    & .spatial-share-actions { gap: 2px; }
+    & .spatial-export { padding-inline: 10px; }
+  }
+}
+@media (max-width: 800px) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="desktop"]:not([data-form-factor="phone"]) {
+    padding: 0;
+    & > .spatial-window { border: 0; border-radius: 0; }
+    & .studio-brand-area { display: none; }
+    & .creatingco-history-button { display: none; }
+    & .context-view-panel { inset-inline-end: 16px; }
+    & .studio-save-button span { display: none; }
+    & .studio-save-button { width: 32px; padding: 0; }
+    & .studio-project-title { min-width: 40px; }
+    & .studio-project-title span { font-size: 11px; }
+  }
+}
+
+/* Touch form controls retain their sizing and native select affordances. */
+html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"][data-interface="tablet"] {
+  & .tool-palette-search { margin-inline: 12px; }
+  & .tool-palette-filters { padding-inline: 12px; }
+  & .tool-palette-groups { padding-inline: 12px; }
+  & .tool-palette-filters button { min-height: 44px; }
+  & .tool-palette-results-status { padding-inline: 12px; }
+  & .tool-palette-group button small { white-space: normal; }
+  & .history-heading { padding: 16px 16px 12px; }
+  & .history-heading > button { width: 44px; height: 44px; }
+  & .history-intro { padding-inline: 16px; }
+  & .history-mix-controls { margin-inline: 16px; }
+  & :is(.history-restore, .history-mix, .history-mix-controls select) { min-height: 44px; }
+  & .history-row { padding-left: calc(2px + var(--history-depth, 0) * 4px); }
+  & .history-restore { gap: 5px; grid-template-columns: 14px minmax(0, 1fr); }
+  & .history-restore small { grid-column: 2; font-size: 12px; }
+  & .context-more-panel { inset: 176px auto auto 16px; max-height: calc(100dvh - 192px); }
+  & .context-more-panel :is(button, select) { min-height: 44px; }
+  & .context-more-panel .context-range { grid-template-columns: 76px minmax(0, 1fr) 38px !important; }
+  & .context-more-panel.context-view-panel { inset-inline-start: 12px; inset-inline-end: 12px; width: auto; max-width: 360px; }
+
+}
+@media (prefers-reduced-motion: no-preference) {
+  html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-design="creatingco"] :is(.creatingco-space-switcher > button, .primary-tool-categories > button, .studio-icon-button, .studio-header-button) {
+    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
 }

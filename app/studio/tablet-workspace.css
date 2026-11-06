@@ -47,12 +47,12 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface
     position: absolute; right: 8px; top: 8px; bottom: 8px; z-index: 80;
     width: min(360px, calc(100% - 76px)); display: flex; flex-direction: column;
     background: var(--ui-panel); border: 1px solid var(--ui-border); border-radius: 10px;
-    box-shadow: 0 12px 36px #0006; overflow: hidden; color: var(--ui-text);
+    box-shadow: 0 12px 36px #0003; overflow: hidden; color: var(--ui-text);
   }
-  & .tablet-panel > header { display: flex; align-items: center; gap: 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); }
+  & .tablet-panel > header { display: flex; align-items: center; flex: 0 0 auto; gap: 8px; padding: 8px; border-bottom: 1px solid var(--ui-border); background: var(--ui-panel); }
   & .tablet-panel > header select { flex: 1; min-width: 0; }
   & .tablet-panel > header button { min-width: 44px; font-size: 24px; }
-  & .tablet-panel .dock-panel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; }
+  & .tablet-panel .dock-panel-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px; scroll-padding-block: 12px; }
   & .tablet-panel :is(button, select, input:not([type="checkbox"]):not([type="radio"])) { min-height: 44px; }
   & .tablet-panel :is(input, select, textarea) { font-size: 16px; }
   & .tablet-panel :is(select, input, button) { color: var(--ui-text); background-color: var(--ui-field); }
@@ -94,8 +94,8 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface
   & .tablet-panel .desktop-property-target > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
   & .tablet-panel .desktop-property-target :is(strong, small) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   & .tablet-panel :is(.mask-card label, .mask-card label > span) { font-size: 12px !important; }
-  & .studio-export-popover { background: #202328; }
-  & .studio-export-popover :is(header, footer, article) { background: #202328; }
+  & .studio-export-popover { background: var(--ui-panel); color: var(--ui-text); }
+  & .studio-export-popover :is(header, footer, article) { background: var(--ui-panel); border-color: var(--ui-border); }
   & .tablet-panel .desktop-space-hint :is(kbd, small) { display: none; }
   & .studio-app-menu > div button { min-height: 44px; }
   & .dynamic-canvas-cursor { pointer-events: none; }
@@ -105,7 +105,7 @@ html:root body .spatial-studio[data-app-shell][data-ui="atelier"][data-interface
      color swatches/ranges native; these rules are for text entry and pickers. */
   & :is(select, textarea, input:not([type="range"]):not([type="color"]):not([type="checkbox"]):not([type="radio"])) {
     background: var(--ui-field) !important; color: var(--ui-text) !important;
-    border-color: var(--ui-border) !important; color-scheme: dark;
+    border-color: var(--ui-border) !important; color-scheme: inherit;
   }
   & input::placeholder, & textarea::placeholder { color: var(--ui-muted); opacity: 1; }
   & select {
